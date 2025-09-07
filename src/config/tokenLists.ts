@@ -5,18 +5,28 @@
 
 // 已下架代币黑名单 - 完全过滤
 export const DELISTED_TOKENS = [
-  'ALPACA', 'BNX', 'OCEAN', 'DGB', 
-  'AGIX'  // 
+  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AKRO', 'SXP', 
+  'TRB', 'KNC', 'CRV', 'STORJ', 'ANT', 'COMP',
+  'MKR', 'YFI', 'SUSHI', 'UMA', 'BNT', 'REN',
+  'LRC', 'BAL', 'ZRX', 'KAVA', 'IOTX', 'RVN',
+  'CHZ', 'HOT', 'VET', 'TFUEL', 'HBAR', 'ICX',
+  'QTUM', 'ONT', 'ZIL', 'IOST', 'WAVES', 'SC',
+  'AGIX'  // AGIX已下架
 ];
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 'FTT'
+  'LUNA', 'LUNC', 'USTC', 'FTT', 'SRM', 'RAY',
+  'COPE', 'STEP', 'MEDIA', 'ROPE', 'TULIP', 'SLIM',
+  'SNY', 'PORT', 'MNGO', 'FIDA', 'KIN', 'MAPS'
 ];
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'YALA', 
+  'SHIB', 'DOGE', 'PEPE', 'FLOKI', 'BABYDOGE', 'SAFEMOON',
+  'ICP', 'JASMY', 'LOOM', 'CELR', 'CKB', 'ANKR',
+  'DENT', 'WIN', 'BTT', 'TRX', 'JST', 'SUN',
+  'NFP', 'AI', 'WLD', 'ORDI', '1000SATS', 'RATS'
 ];
 
 
@@ -24,7 +34,7 @@ export const YELLOWLIST_TOKENS = [
  * 检查代币是否在指定列表中
  */
 export function isTokenInList(symbol: string, tokenList: string[]): boolean {
-  const cleanSymbol = symbol.replace(/USDT|BUSD|BTC|ETH$/i, '').toUpperCase();
+  const cleanSymbol = symbol.replace(/(USDT|BUSD)$/i, '').toUpperCase();
   return tokenList.includes(cleanSymbol);
 }
 

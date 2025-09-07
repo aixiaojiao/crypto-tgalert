@@ -336,16 +336,24 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     // 负费率排行榜
     this.bot.command('funding', async (ctx) => {
       try {
+        console.log('🚀 Starting funding rates query...');
         await ctx.reply('⚡ 正在查询资金费率排行榜...');
 
+        console.log('📡 Calling getAllFundingRates...');
         const fundingRates = await this.binanceClient.getAllFundingRates();
-        console.log('Raw funding rates count:', fundingRates.length);
-        console.log('Sample funding rates:', fundingRates.slice(0, 5));
+        console.log('✅ Raw funding rates received:', fundingRates.length);
+        console.log('📊 Sample funding rates:', JSON.stringify(fundingRates.slice(0, 3), null, 2));
         
         // 过滤交易对并去重
-        const validSymbols = filterTradingPairs(fundingRates.map(r => r.symbol));
-        console.log('Valid symbols count:', validSymbols.length);
+        console.log('🔍 Filtering trading pairs...');
+        const allSymbols = fundingRates.map(r => r.symbol);
+        console.log('📋 All symbols count:', allSymbols.length);
         
+        const validSymbols = filterTradingPairs(allSymbols);
+        console.log('✅ Valid symbols count:', validSymbols.length);
+        console.log('📝 Sample valid symbols:', validSymbols.slice(0, 10));
+        
+        console.log('🔄 Deduplicating rates...');
         const filteredRates = fundingRates
           .filter(rate => validSymbols.includes(rate.symbol))
           .reduce((acc, rate) => {
@@ -354,21 +362,27 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             if (!acc.has(key)) {
               acc.set(key, rate);
             } else {
-              console.log(`Duplicate symbol found: ${key}`);
+              console.log(`⚠️ Duplicate symbol found: ${key}`);
             }
             return acc;
           }, new Map());
 
-        console.log('Filtered rates map size:', filteredRates.size);
+        console.log('✅ Filtered rates map size:', filteredRates.size);
         
         // 只显示负费率并排序
-        const sortedRates = Array.from(filteredRates.values())
-          .filter(rate => parseFloat(rate.fundingRate) < 0)
+        console.log('📊 Filtering negative rates and sorting...');
+        const allRates = Array.from(filteredRates.values());
+        const negativeRates = allRates.filter(rate => parseFloat(rate.fundingRate) < 0);
+        console.log('🔴 Negative rates count:', negativeRates.length);
+        
+        const sortedRates = negativeRates
           .sort((a, b) => parseFloat(a.fundingRate) - parseFloat(b.fundingRate))
           .slice(0, 15);
 
-        console.log('Filtered and sorted rates:', sortedRates.length);
+        console.log('✅ Final sorted rates count:', sortedRates.length);
+        console.log('📈 Top 5 negative rates:', sortedRates.slice(0, 5).map(r => `${r.symbol}: ${r.fundingRate}`));
         
+        console.log('📝 Building message...');
         let message = `⚡ *负费率排行榜*\n\n`;
         
         sortedRates.forEach((rate, index) => {
@@ -381,9 +395,16 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         message += `\n💡 负费率(红色)表示空头支付多头\n`;
         message += `⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
 
+        console.log('📤 Sending response message...');
         await ctx.replyWithMarkdown(message);
+        console.log('✅ Funding rates command completed successfully');
       } catch (error) {
-        console.error('Funding rates query error:', error);
+        console.error('❌ Funding rates query error:', error);
+        console.error('❌ Error details:', {
+          message: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined,
+          name: error instanceof Error ? error.name : 'Unknown'
+        });
         await ctx.reply('❌ 查询资金费率排行榜失败');
       }
     });
@@ -412,10 +433,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             });
             
             if (oiStats.length >= 12) { // 至少需要12小时的数据
-              const current = parseFloat(oiStats[0].sumOpenInterestValue);
-              // 使用最后一个可用数据点，而不是固定索引
-              const previousIndex = Math.min(23, oiStats.length - 1);
-              const previous = parseFloat(oiStats[previousIndex].sumOpenInterestValue);
+              // 正确的时间顺序：oiStats[0] = 24小时前, oiStats[length-1] = 最新
+              const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+              const previous = parseFloat(oiStats[0].sumOpenInterestValue);
               
               if (current > 0 && previous > 0) {
                 const change = ((current - previous) / previous) * 100;
@@ -474,8 +494,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             const oiStats = await this.binanceClient.getOpenInterestStats(symbol, '1h', 4);
             
             if (oiStats.length >= 4) {
-              const current = parseFloat(oiStats[0].sumOpenInterestValue);
-              const previous = parseFloat(oiStats[3].sumOpenInterestValue);
+              // 正确的时间顺序：oiStats[0] = 4小时前, oiStats[length-1] = 最新
+              const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+              const previous = parseFloat(oiStats[0].sumOpenInterestValue);
               
               if (current > 0 && previous > 0) {
                 const change = ((current - previous) / previous) * 100;
@@ -527,23 +548,24 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           ['BTC', 'ETH', 'BNB', 'ADA', 'SOL', 'DOT', 'AVAX', 'MATIC', 'LINK', 'UNI', 'LTC', 'BCH', 'XRP', 'DOGE', 'ATOM'].some(major => s.startsWith(major))
         ).slice(0, 20);
 
-        // For 1-hour data, we need to get multiple data points within the hour
+        // For 1-hour data, use consistent API: 15min intervals for 4 data points = 1 hour
         const oiPromises = majorSymbols.map(async symbol => {
           try {
-            // Get current open interest
-            const currentOI = await this.binanceClient.getOpenInterest(symbol);
-            // Get 1-hour historical data (if available)
             const oiStats = await this.binanceClient.getOpenInterestStats(symbol, '15m', 4);
             
-            if (oiStats.length >= 2) {
-              const current = parseFloat(currentOI.openInterest);
-              const previous = parseFloat(oiStats[3].sumOpenInterest);
-              const change = ((current - previous) / previous) * 100;
-              return {
-                symbol: symbol.replace('USDT', ''),
-                change,
-                currentOI: current / 1000000
-              };
+            if (oiStats.length >= 4) {
+              // 正确的时间顺序：oiStats[0] = 1小时前, oiStats[length-1] = 最新
+              const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+              const previous = parseFloat(oiStats[0].sumOpenInterestValue);
+              
+              if (current > 0 && previous > 0) {
+                const change = ((current - previous) / previous) * 100;
+                return {
+                  symbol: symbol.replace('USDT', ''),
+                  change,
+                  currentOI: current / 1000000000 // Convert to billions for readability
+                };
+              }
             }
             return null;
           } catch (error) {
