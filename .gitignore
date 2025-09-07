@@ -54,3 +54,16 @@ build/
 *.tmp
 *.temp
 .tmp/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Config files with sensitive information
+config.json
+config.*.json
+
+# Test credentials
+test-credentials.js
