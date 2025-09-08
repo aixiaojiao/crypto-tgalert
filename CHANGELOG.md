@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2025-01-08
+
+### 🛠️ Critical Bug Fixes
+- **Fixed**: Funding rates command showing incomplete data (only 4 symbols instead of all)
+  - Switched from `/fapi/v1/fundingRate` (historical data) to `/fapi/v1/premiumIndex` (current rates)
+  - Now displays complete funding rates for all active symbols
+- **Fixed**: OI1h command displaying incorrect values (1000x smaller due to unit conversion error)
+  - Corrected division from 1,000,000,000 to 1,000,000 (millions instead of billions)
+- **Enhanced**: Funding rates now normalized to 8-hour equivalent for fair comparison
+  - Automatically fetches funding interval data from `/fapi/v1/fundingInfo`
+  - Applies formula: `rate_8h = rate_current × (8 / current_interval)`
+  - Ensures consistent ranking across symbols with different funding intervals
+- **Enhanced**: Risk icons now display in `/price` command for yellowlist tokens
+- **Enhanced**: All commands now display risk icons (🚫⛔⚠️) consistently across:
+  - `/gainers`, `/losers`, `/funding`, `/oi24h`, `/oi4h`, `/oi1h`, `/price`
+
+---
+
 ## [2.0.0] - 2025-01-09
 
 ### 🎯 Major Features

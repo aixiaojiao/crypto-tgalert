@@ -188,9 +188,10 @@ export class TelegramBot {
         const changePercent = parseFloat(stats.priceChangePercent);
         const changeIcon = changePercent >= 0 ? '📈' : '📉';
         const changeColor = changePercent >= 0 ? '+' : '';
+        const riskIcon = getRiskIcon(riskLevel);
 
         let priceMessage = `
-💰 *${symbol} ${isContract ? '合约' : '现货'}价格*
+💰 *${riskIcon}${symbol} ${isContract ? '合约' : '现货'}价格*
 
 💵 当前价格: $${price.toLocaleString()}
 ${changeIcon} 24小时涨跌: ${changeColor}${changePercent.toFixed(2)}%
@@ -389,7 +390,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           const symbol = rate.symbol.replace('USDT', '');
           const fundingPercent = (parseFloat(rate.fundingRate) * 100).toFixed(4);
           const icon = parseFloat(rate.fundingRate) < 0 ? '🔴' : '🟢';
-          message += `${index + 1}. ${icon} **${symbol}** ${fundingPercent}%\n`;
+          const riskLevel = getTokenRiskLevel(rate.symbol);
+          const riskIcon = getRiskIcon(riskLevel);
+          message += `${index + 1}. ${riskIcon}${icon} **${symbol}** ${fundingPercent}%\n`;
         });
 
         message += `\n💡 负费率(红色)表示空头支付多头\n`;
@@ -466,7 +469,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         
         oiResults.forEach((result: any, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
-          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+          const riskLevel = getTokenRiskLevel(result.symbol + 'USDT');
+          const riskIcon = getRiskIcon(riskLevel);
+          message += `${index + 1}. ${riskIcon}${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -525,7 +530,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         
         oiResults.forEach((result: any, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
-          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+          const riskLevel = getTokenRiskLevel(result.symbol + 'USDT');
+          const riskIcon = getRiskIcon(riskLevel);
+          message += `${index + 1}. ${riskIcon}${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -563,7 +570,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
                 return {
                   symbol: symbol.replace('USDT', ''),
                   change,
-                  currentOI: current / 1000000000 // Convert to billions for readability
+                  currentOI: current / 1000000 // Convert to millions for readability
                 };
               }
             }
@@ -582,7 +589,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         
         oiResults.forEach((result: any, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
-          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+          const riskLevel = getTokenRiskLevel(result.symbol + 'USDT');
+          const riskIcon = getRiskIcon(riskLevel);
+          message += `${index + 1}. ${riskIcon}${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;

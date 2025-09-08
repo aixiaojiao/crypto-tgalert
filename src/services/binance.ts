@@ -645,10 +645,36 @@ export class BinanceClient {
    */
   async getAllFundingRates(): Promise<FundingRate[]> {
     try {
-      const response = await this.futuresClient.get('/fapi/v1/fundingRate');
+      // Get premium index data and funding info in parallel
+      const [premiumResponse, fundingInfoResponse] = await Promise.all([
+        this.futuresClient.get('/fapi/v1/premiumIndex'),
+        this.futuresClient.get('/fapi/v1/fundingInfo')
+      ]);
+      
       log.debug(`Fetched funding rates for all symbols`);
-
-      return response.data;
+      
+      // Create a map of funding intervals
+      const fundingIntervalMap = new Map<string, number>();
+      if (fundingInfoResponse.data) {
+        fundingInfoResponse.data.forEach((info: any) => {
+          fundingIntervalMap.set(info.symbol, info.fundingIntervalHours || 8);
+        });
+      }
+      
+      // Convert premium index data to funding rate format with 8h normalization
+      return premiumResponse.data.map((item: any) => {
+        const currentInterval = fundingIntervalMap.get(item.symbol) || 8;
+        const currentRate = parseFloat(item.lastFundingRate);
+        
+        // Normalize to 8-hour rate: rate_8h = rate_current * (8 / current_interval)
+        const normalizedRate = currentRate * (8 / currentInterval);
+        
+        return {
+          symbol: item.symbol,
+          fundingRate: normalizedRate.toFixed(8),
+          fundingTime: item.nextFundingTime
+        };
+      });
     } catch (error) {
       log.error('Failed to get all funding rates', error);
       throw error;

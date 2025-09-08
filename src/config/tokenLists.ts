@@ -5,28 +5,17 @@
 
 // 已下架代币黑名单 - 完全过滤
 export const DELISTED_TOKENS = [
-  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AKRO', 'SXP', 
-  'TRB', 'KNC', 'CRV', 'STORJ', 'ANT', 'COMP',
-  'MKR', 'YFI', 'SUSHI', 'UMA', 'BNT', 'REN',
-  'LRC', 'BAL', 'ZRX', 'KAVA', 'IOTX', 'RVN',
-  'CHZ', 'HOT', 'VET', 'TFUEL', 'HBAR', 'ICX',
-  'QTUM', 'ONT', 'ZIL', 'IOST', 'WAVES', 'SC',
-  'AGIX'  // AGIX已下架
+  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AGIX'
 ];
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 'FTT', 'SRM', 'RAY',
-  'COPE', 'STEP', 'MEDIA', 'ROPE', 'TULIP', 'SLIM',
-  'SNY', 'PORT', 'MNGO', 'FIDA', 'KIN', 'MAPS'
+  'LUNA', 'LUNC', 'USTC', 
 ];
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'SHIB', 'DOGE', 'PEPE', 'FLOKI', 'BABYDOGE', 'SAFEMOON',
-  'ICP', 'JASMY', 'LOOM', 'CELR', 'CKB', 'ANKR',
-  'DENT', 'WIN', 'BTT', 'TRX', 'JST', 'SUN',
-  'NFP', 'AI', 'WLD', 'ORDI', '1000SATS', 'RATS'
+  'YALA', 'TA' , 'GPS' 
 ];
 
 
