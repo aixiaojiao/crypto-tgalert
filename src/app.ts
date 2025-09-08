@@ -4,6 +4,7 @@ import { initDatabase } from './database/connection';
 import { BinanceClient } from './services/binance';
 import { PriceMonitorService } from './services/priceMonitor';
 import { SocialMonitorService } from './services/socialMonitor';
+import { triggerAlertService } from './services/triggerAlerts';
 import { binanceRateLimit, twitterRateLimit } from './utils/ratelimit';
 
 /**
@@ -33,20 +34,24 @@ export class CryptoTgAlertApp {
       console.log('📊 Initializing database...');
       await initDatabase();
       
-      // 2. 测试Binance连接
+      // 2. 初始化触发提醒服务
+      console.log('⚡ Initializing trigger alerts...');
+      await triggerAlertService.initialize();
+      
+      // 3. 测试Binance连接
       console.log('💰 Testing Binance connection...');
       const btcPrice = await this.binanceClient.getPrice('BTCUSDT');
       console.log(`✅ Binance connected - BTC: $${btcPrice}`);
       
-      // 3. 启动Telegram机器人
+      // 4. 启动Telegram机器人
       console.log('🤖 Starting Telegram bot...');
       await this.telegramBot.start();
       
-      // 4. 启动价格监控
+      // 5. 启动价格监控
       console.log('⚡ Starting price monitoring...');
       await this.priceMonitor.startMonitoring();
       
-      // 5. 启动社交监控
+      // 6. 启动社交监控
       console.log('🐦 Starting social monitoring...');
       await this.socialMonitor.startMonitoring();
       
@@ -74,6 +79,8 @@ export class CryptoTgAlertApp {
         `📊 可用功能:\n` +
         `• /price btc - 查询价格\n` +
         `• /alert btc > 120000 - 设置价格提醒\n` +
+        `• /start_gainers_push - 启动涨幅榜推送\n` +
+        `• /start_funding_push - 启动负费率榜推送\n` +
         `• /follow elonmusk - 关注Twitter账户\n` +
         `• /help - 查看完整帮助`;
 
@@ -94,6 +101,7 @@ export class CryptoTgAlertApp {
     database: boolean;
     priceMonitor: any;
     socialMonitor: any;
+    triggerAlerts: any;
   }> {
     try {
       // 测试各个组件
@@ -104,7 +112,8 @@ export class CryptoTgAlertApp {
         binance: btcPrice > 0,
         database: true, // 如果到这里说明数据库正常
         priceMonitor: await this.priceMonitor.getStats(),
-        socialMonitor: { status: 'running', monitoredAccounts: 0 }
+        socialMonitor: { status: 'running', monitoredAccounts: 0 },
+        triggerAlerts: triggerAlertService.getStats()
       };
     } catch (error) {
       throw error;
@@ -119,6 +128,7 @@ export class CryptoTgAlertApp {
     
     await this.priceMonitor.stopMonitoring();
     await this.socialMonitor.stopMonitoring();
+    triggerAlertService.stopAllMonitoring();
     await this.telegramBot.stop();
     
     // 清理速率限制器

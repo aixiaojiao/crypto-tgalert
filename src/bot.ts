@@ -5,6 +5,8 @@ import { BotContext, BotStatus } from './types';
 import { BinanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
 import { PriceAlertModel } from './models/PriceAlert';
+import { triggerAlertService } from './services/triggerAlerts';
+import { TriggerAlertModel } from './models/TriggerAlert';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -24,6 +26,9 @@ export class TelegramBot {
     this.setupMiddleware();
     this.setupCommands();
     this.setupErrorHandling();
+    
+    // Set telegram bot instance for trigger alerts
+    triggerAlertService.setTelegramBot(this);
   }
 
   /**
@@ -95,6 +100,13 @@ export class TelegramBot {
 /alert eth &lt; 3000 - ETH低于3000时提醒
 /alerts - 查看所有提醒
 /remove_alert 1 - 删除提醒#1
+
+📢 <b>推送通知:</b>
+/start_gainers_push - 启动涨幅榜推送
+/stop_gainers_push - 停止涨幅榜推送
+/start_funding_push - 启动负费率榜推送
+/stop_funding_push - 停止负费率榜推送
+/push_status - 查看推送状态
 
 🐦 <b>Twitter监控:</b>
 /follow elonmusk - 关注用户推文
@@ -798,6 +810,142 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
+    // 启动涨幅榜推送
+    this.bot.command('start_gainers_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Enable gainers alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'gainers', true);
+        
+        // Start gainers monitoring if not already running
+        await triggerAlertService.startGainersMonitoring();
+        
+        const message = `✅ *涨幅榜推送已启动*
+
+📈 监控设置:
+• 检查间隔: 1分钟 (测试模式)
+• 推送条件: 新币进入前10或排名显著变化
+• 状态: 已启用
+
+💡 您将在涨幅榜发生重要变化时收到推送通知
+🛑 使用 /stop_gainers_push 停止推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Start gainers push error:', error);
+        await ctx.reply('❌ 启动涨幅榜推送失败，请稍后重试');
+      }
+    });
+
+    // 停止涨幅榜推送
+    this.bot.command('stop_gainers_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Disable gainers alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'gainers', false);
+        
+        const message = `⏹️ *涨幅榜推送已停止*
+
+📈 推送状态: 已关闭
+⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+
+💡 使用 /start_gainers_push 重新启动推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Stop gainers push error:', error);
+        await ctx.reply('❌ 停止涨幅榜推送失败，请稍后重试');
+      }
+    });
+
+    // 启动负费率推送
+    this.bot.command('start_funding_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Enable funding alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'funding', true);
+        
+        // Start funding monitoring if not already running
+        await triggerAlertService.startFundingMonitoring();
+        
+        const message = `✅ *负费率榜推送已启动*
+
+💰 监控设置:
+• 检查间隔: 1分钟 (测试模式)
+• 推送条件: 新币进入前10或排名显著变化
+• 状态: 已启用
+
+💡 您将在负费率榜发生重要变化时收到推送通知
+🛑 使用 /stop_funding_push 停止推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Start funding push error:', error);
+        await ctx.reply('❌ 启动负费率推送失败，请稍后重试');
+      }
+    });
+
+    // 停止负费率推送
+    this.bot.command('stop_funding_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Disable funding alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'funding', false);
+        
+        const message = `⏹️ *负费率榜推送已停止*
+
+💰 推送状态: 已关闭
+⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+
+💡 使用 /start_funding_push 重新启动推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Stop funding push error:', error);
+        await ctx.reply('❌ 停止负费率推送失败，请稍后重试');
+      }
+    });
+
+    // 查看推送状态
+    this.bot.command('push_status', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        const settings = await TriggerAlertModel.getTriggerAlertSettings(userId);
+        const stats = triggerAlertService.getStats();
+        
+        const gainersEnabled = settings.find(s => s.alert_type === 'gainers')?.is_enabled || false;
+        const fundingEnabled = settings.find(s => s.alert_type === 'funding')?.is_enabled || false;
+        
+        let message = `📊 *推送状态总览*\n\n`;
+        
+        message += `📈 *涨幅榜推送:*\n`;
+        message += `• 状态: ${gainersEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
+        message += `• 监控: ${stats.gainersEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
+        message += `• 最后检查: ${stats.gainersLastCheck ? stats.gainersLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        
+        message += `💰 *负费率榜推送:*\n`;
+        message += `• 状态: ${fundingEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
+        message += `• 监控: ${stats.fundingEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
+        message += `• 最后检查: ${stats.fundingLastCheck ? stats.fundingLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        
+        message += `⏰ 查询时间: ${new Date().toLocaleString('zh-CN')}`;
+        
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Push status error:', error);
+        await ctx.reply('❌ 获取推送状态失败，请稍后重试');
+      }
+    });
+
     // 处理未知命令
     this.bot.on('text', async (ctx) => {
       const text = ctx.message?.text;
@@ -830,6 +978,11 @@ ${riskIcon} 币种: ${symbol}
       { command: 'alert', description: '创建价格提醒 (例: /alert btc > 50000)' },
       { command: 'alerts', description: '查看所有活跃提醒' },
       { command: 'remove_alert', description: '删除指定提醒 (例: /remove_alert 5)' },
+      { command: 'start_gainers_push', description: '启动涨幅榜推送通知' },
+      { command: 'stop_gainers_push', description: '停止涨幅榜推送通知' },
+      { command: 'start_funding_push', description: '启动负费率榜推送通知' },
+      { command: 'stop_funding_push', description: '停止负费率榜推送通知' },
+      { command: 'push_status', description: '查看推送通知状态' },
       { command: 'status', description: '查看系统状态' },
       { command: 'help', description: '查看完整帮助文档' }
     ];
@@ -890,7 +1043,8 @@ ${riskIcon} 币种: ${symbol}
       }
       
       console.log('✅ Telegram bot initialized successfully');
-      console.log(`🤖 Bot username: @${this.bot.botInfo?.username}`);
+      const botInfo = await this.bot.telegram.getMe();
+      console.log(`🤖 Bot username: @${botInfo.username}`);
       console.log(`👤 Authorized user: ${config.telegram.userId}`);
       
       // Launch bot (this will start the polling) - don't await to avoid blocking
@@ -928,6 +1082,18 @@ ${riskIcon} 币种: ${symbol}
    */
   getStatus(): BotStatus {
     return { ...this.status };
+  }
+
+  /**
+   * 发送消息给指定用户
+   */
+  async sendMessage(userId: number, message: string, options?: any): Promise<void> {
+    try {
+      await this.bot.telegram.sendMessage(userId, message, options);
+    } catch (error) {
+      console.error(`Failed to send message to user ${userId}:`, error);
+      throw error;
+    }
   }
 
   /**

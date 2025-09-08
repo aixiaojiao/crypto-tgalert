@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2025-09-09
+
+### 🛠️ Critical Bug Fixes
+
+#### Trigger Alert System
+- **Fixed**: False "new symbol" notifications in trigger alert system
+  - Root cause: Multiple application instances running simultaneously causing race conditions
+  - Solution: Added validation layer to prevent false "new" symbol detection
+  - Enhanced debug logging to trace ranking comparison behavior
+  - Implemented double-checking mechanism to verify symbols marked as "new"
+- **Enhanced**: Trigger alert comparison logic now properly handles concurrent execution
+- **Enhanced**: Debug logging for both gainers and funding rates monitoring
+- **Verified**: System no longer sends duplicate notifications for identical rankings
+
+#### System Stability
+- **Fixed**: Race conditions in database queries for ranking comparisons
+- **Enhanced**: Improved error handling for trigger alert monitoring
+- **Enhanced**: Better process isolation to prevent concurrent execution issues
+
+### 🔧 Technical Improvements
+- **Debug Logging**: Comprehensive comparison tracing in `src/services/triggerAlerts.ts`
+- **Validation Layer**: Added symbol existence verification before sending notifications
+- **Resource Management**: Better handling of multiple process instances
+
+---
+
 ## [2.0.2] - 2025-09-08
 
 ### 🛠️ Critical System Fixes
