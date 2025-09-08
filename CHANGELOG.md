@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2025-09-08
+
+### 🛠️ Critical System Fixes
+
+#### Memory Management & Stability
+- **Fixed**: JavaScript heap out of memory crash that was causing the bot to fail
+  - Implemented proper cleanup for WebSocket reconnection state
+  - Added interval validation in PriceMonitorService cleanup
+  - Created RateLimiter.destroy() method for proper lifecycle management
+  - Fixed global rate limiters cleanup in application shutdown
+  - Resolved test suite memory leaks with proper afterAll() cleanup
+- **Enhanced**: Application now runs stably without memory leaks
+- **Verified**: All tests pass without "worker process failed to exit gracefully" warnings
+
+#### Price Alert System Restoration
+- **Fixed**: Price monitoring system not starting (critical bug)
+  - Root cause: `await bot.launch()` was blocking the main thread
+  - Price alerts were created but never monitored due to system not starting
+  - Solution: Made bot.launch() non-blocking to allow all systems to initialize
+- **Restored**: Complete price alert workflow now functional:
+  - ✅ Alert creation via `/alert btc > 50000`
+  - ✅ Automatic price monitoring every 30 seconds  
+  - ✅ Alert triggering when conditions are met
+  - ✅ Telegram notifications sent successfully
+  - ✅ Automatic alert deactivation after triggering
+- **Enhanced**: Full startup sequence now completes properly with all systems online
+
+#### Command Interface Fixes
+- **Fixed**: `/alerts` command Telegram Markdown parsing error
+  - Issue: Special characters in risk icons conflicted with bold Markdown formatting
+  - Solution: Simplified to single asterisk formatting and removed replyWithMarkdown()
+  - Result: Alert list now displays correctly without parsing errors
+
+### 🔧 Technical Improvements
+- **Application Lifecycle**: Complete startup sequence now works as designed
+- **Resource Management**: Comprehensive cleanup mechanisms prevent memory accumulation
+- **Error Handling**: Better error isolation prevents system-wide failures
+- **System Monitoring**: All subsystems (Telegram, Binance, Monitoring, Social) start properly
+
+### 📊 System Status
+- **All Core Functions Operational**: Price queries, alerts, monitoring, and notifications
+- **Memory Stable**: No memory leaks detected in production or testing
+- **Alert System Live**: Successfully detecting and notifying on price conditions
+- **API Integration Healthy**: Binance futures data flowing correctly
+
+---
+
 ## [2.0.1] - 2025-01-08
 
 ### 🛠️ Critical Bug Fixes

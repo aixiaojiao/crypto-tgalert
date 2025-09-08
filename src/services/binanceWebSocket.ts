@@ -104,6 +104,10 @@ export class BinanceWebSocketClient {
       this.ws = null;
     }
 
+    // Clear reconnection attempts and flags
+    this.reconnectAttempts = 0;
+    this.isConnecting = false;
+    
     this.subscriptions.clear();
     log.info('WebSocket disconnected');
   }

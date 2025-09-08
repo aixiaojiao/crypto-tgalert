@@ -4,6 +4,7 @@ import { initDatabase } from './database/connection';
 import { BinanceClient } from './services/binance';
 import { PriceMonitorService } from './services/priceMonitor';
 import { SocialMonitorService } from './services/socialMonitor';
+import { binanceRateLimit, twitterRateLimit } from './utils/ratelimit';
 
 /**
  * 完整的应用程序类 - 集成所有组件
@@ -17,7 +18,7 @@ export class CryptoTgAlertApp {
   constructor() {
     this.telegramBot = new TelegramBot();
     this.binanceClient = new BinanceClient();
-    this.priceMonitor = new PriceMonitorService();
+    this.priceMonitor = new PriceMonitorService(this.binanceClient, undefined, this.telegramBot);
     this.socialMonitor = new SocialMonitorService();
   }
 
@@ -119,6 +120,10 @@ export class CryptoTgAlertApp {
     await this.priceMonitor.stopMonitoring();
     await this.socialMonitor.stopMonitoring();
     await this.telegramBot.stop();
+    
+    // 清理速率限制器
+    binanceRateLimit.destroy();
+    twitterRateLimit.destroy();
     
     console.log('✅ Application stopped');
   }

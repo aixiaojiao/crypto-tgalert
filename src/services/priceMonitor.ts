@@ -2,6 +2,8 @@ import { BinanceClient } from './binance';
 import { PriceAlertModel } from '../models/PriceAlert';
 import { PriceAlert } from '../database/schema';
 import { log } from '../utils/logger';
+import { TelegramBot } from '../bot';
+import { getTokenRiskLevel, getRiskIcon } from '../config/tokenLists';
 
 export interface AlertCheckResult {
   alertId: number;
@@ -22,6 +24,7 @@ export interface MonitoringStats {
 
 export class PriceMonitorService {
   private binance: BinanceClient;
+  private telegramBot: TelegramBot | null = null;
   private intervals: Map<string, NodeJS.Timeout> = new Map();
   private isRunning: boolean = false;
   private checkInterval: number = 30000; // 30 seconds default
@@ -33,14 +36,16 @@ export class PriceMonitorService {
     alertsTriggered: 0
   };
 
-  constructor(binanceClient?: BinanceClient, checkIntervalMs?: number) {
+  constructor(binanceClient?: BinanceClient, checkIntervalMs?: number, telegramBot?: TelegramBot) {
     this.binance = binanceClient || new BinanceClient();
+    this.telegramBot = telegramBot || null;
     if (checkIntervalMs) {
       this.checkInterval = checkIntervalMs;
     }
     
     log.info('PriceMonitorService initialized', {
-      checkInterval: this.checkInterval
+      checkInterval: this.checkInterval,
+      telegramIntegration: !!this.telegramBot
     });
   }
 
@@ -99,10 +104,12 @@ export class PriceMonitorService {
 
     log.info('Stopping price monitoring service');
 
-    // Clear all intervals
+    // Clear all intervals with validation
     for (const [symbol, interval] of this.intervals.entries()) {
-      clearInterval(interval);
-      log.debug(`Stopped monitoring for ${symbol}`);
+      if (interval) {
+        clearInterval(interval);
+        log.debug(`Stopped monitoring for ${symbol}`);
+      }
     }
 
     this.intervals.clear();
@@ -152,6 +159,8 @@ export class PriceMonitorService {
       this.intervals.delete(symbol);
       this.stats.monitoredSymbols = this.intervals.size;
       log.info(`Stopped monitoring ${symbol}`);
+    } else {
+      log.debug(`No active monitoring found for ${symbol}`);
     }
   }
 
@@ -332,28 +341,70 @@ export class PriceMonitorService {
 
   /**
    * Send notification for triggered alert
-   * This is where you'd integrate with Telegram bot or other notification systems
    */
   private async sendAlertNotification(alert: PriceAlert, currentPrice: number): Promise<void> {
     const message = this.formatAlertMessage(alert, currentPrice);
     
-    log.info(`Alert notification: ${message}`, {
+    log.info(`Alert notification being sent`, {
       alertId: alert.id,
-      userId: alert.user_id
+      userId: alert.user_id,
+      symbol: alert.symbol
     });
 
-    // TODO: Integration with Telegram bot
-    // await telegramBot.sendMessage(alert.user_id, message);
+    try {
+      if (this.telegramBot) {
+        await this.telegramBot.sendToAuthorizedUser(message, {
+          parse_mode: 'Markdown'
+        });
+        log.info(`Telegram notification sent successfully`, {
+          alertId: alert.id,
+          userId: alert.user_id
+        });
+      } else {
+        log.warn(`No Telegram bot instance available for notification`, {
+          alertId: alert.id
+        });
+      }
+    } catch (error) {
+      log.error(`Failed to send Telegram notification`, {
+        alertId: alert.id,
+        userId: alert.user_id,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      // Don't throw error - continue monitoring even if notification fails
+    }
   }
 
   /**
-   * Format alert message for notification
+   * Format alert message for notification with rich information
    */
   private formatAlertMessage(alert: PriceAlert, currentPrice: number): string {
+    const symbol = alert.symbol.replace('USDT', '');
+    const riskLevel = getTokenRiskLevel(alert.symbol);
+    const riskIcon = getRiskIcon(riskLevel);
     const emoji = alert.condition === 'above' ? '📈' : '📉';
     const conditionText = alert.condition === 'above' ? 'risen above' : 'fallen below';
     
-    return `${emoji} PRICE ALERT: ${alert.symbol} has ${conditionText} $${alert.value}! Current price: $${currentPrice.toFixed(8)}`;
+    // Calculate percentage change
+    const changePercent = ((currentPrice - alert.value) / alert.value * 100);
+    const changeText = changePercent >= 0 ? `+${changePercent.toFixed(2)}%` : `${changePercent.toFixed(2)}%`;
+    
+    return `🚨 *PRICE ALERT TRIGGERED*\n\n` +
+      `${riskIcon}${emoji} **${symbol}** has ${conditionText} your target!\n\n` +
+      `🎯 *Target Price*: $${alert.value.toLocaleString()}\n` +
+      `💰 *Current Price*: $${currentPrice.toLocaleString()}\n` +
+      `📊 *Change*: ${changeText}\n` +
+      `🔔 *Alert ID*: #${alert.id}\n` +
+      `⏰ *Time*: ${new Date().toLocaleString('zh-CN')}\n\n` +
+      `_This alert has been automatically deactivated._`;
+  }
+
+  /**
+   * Set or update the TelegramBot instance for notifications
+   */
+  setTelegramBot(telegramBot: TelegramBot): void {
+    this.telegramBot = telegramBot;
+    log.info('TelegramBot instance updated in PriceMonitorService');
   }
 
   /**
@@ -403,5 +454,5 @@ export class PriceMonitorService {
   }
 }
 
-// Export singleton instance
+// Export singleton instance (without TelegramBot integration - use for standalone monitoring only)
 export const priceMonitor = new PriceMonitorService();

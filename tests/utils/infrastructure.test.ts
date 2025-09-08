@@ -1,9 +1,15 @@
 import { log } from '../../src/utils/logger';
 import { ValidationError, retry } from '../../src/utils/errors';
-import { RateLimiter } from '../../src/utils/ratelimit';
+import { RateLimiter, binanceRateLimit, twitterRateLimit } from '../../src/utils/ratelimit';
 import { validateTradingPair, validatePrice } from '../../src/utils/validation';
 
 describe('Infrastructure Tests', () => {
+  afterAll(() => {
+    // Clean up global rate limiters to prevent memory leaks in tests
+    binanceRateLimit.destroy();
+    twitterRateLimit.destroy();
+  });
+
   test('logger should work', () => {
     expect(() => {
       log.info('Test message');
@@ -26,6 +32,9 @@ describe('Infrastructure Tests', () => {
     expect(limiter.isLimited('test')).toBe(false);
     expect(limiter.isLimited('test')).toBe(false);
     expect(limiter.isLimited('test')).toBe(true);
+
+    // Clean up the interval to prevent memory leak
+    limiter.destroy();
   });
 
   test('validation should work', () => {

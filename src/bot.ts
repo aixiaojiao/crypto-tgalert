@@ -4,6 +4,7 @@ import { authMiddleware } from './middleware/auth';
 import { BotContext, BotStatus } from './types';
 import { BinanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
+import { PriceAlertModel } from './models/PriceAlert';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -188,10 +189,9 @@ export class TelegramBot {
         const changePercent = parseFloat(stats.priceChangePercent);
         const changeIcon = changePercent >= 0 ? '📈' : '📉';
         const changeColor = changePercent >= 0 ? '+' : '';
-        const riskIcon = getRiskIcon(riskLevel);
 
         let priceMessage = `
-💰 *${riskIcon}${symbol} ${isContract ? '合约' : '现货'}价格*
+💰 *${symbol} ${isContract ? '合约' : '现货'}价格*
 
 💵 当前价格: $${price.toLocaleString()}
 ${changeIcon} 24小时涨跌: ${changeColor}${changePercent.toFixed(2)}%
@@ -390,9 +390,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           const symbol = rate.symbol.replace('USDT', '');
           const fundingPercent = (parseFloat(rate.fundingRate) * 100).toFixed(4);
           const icon = parseFloat(rate.fundingRate) < 0 ? '🔴' : '🟢';
-          const riskLevel = getTokenRiskLevel(rate.symbol);
-          const riskIcon = getRiskIcon(riskLevel);
-          message += `${index + 1}. ${riskIcon}${icon} **${symbol}** ${fundingPercent}%\n`;
+          message += `${index + 1}. ${icon} **${symbol}** ${fundingPercent}%\n`;
         });
 
         message += `\n💡 负费率(红色)表示空头支付多头\n`;
@@ -469,9 +467,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         
         oiResults.forEach((result: any, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
-          const riskLevel = getTokenRiskLevel(result.symbol + 'USDT');
-          const riskIcon = getRiskIcon(riskLevel);
-          message += `${index + 1}. ${riskIcon}${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -530,9 +526,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         
         oiResults.forEach((result: any, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
-          const riskLevel = getTokenRiskLevel(result.symbol + 'USDT');
-          const riskIcon = getRiskIcon(riskLevel);
-          message += `${index + 1}. ${riskIcon}${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -570,7 +564,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
                 return {
                   symbol: symbol.replace('USDT', ''),
                   change,
-                  currentOI: current / 1000000 // Convert to millions for readability
+                  currentOI: current / 1000000000 // Convert to billions for readability
                 };
               }
             }
@@ -589,9 +583,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         
         oiResults.forEach((result: any, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
-          const riskLevel = getTokenRiskLevel(result.symbol + 'USDT');
-          const riskIcon = getRiskIcon(riskLevel);
-          message += `${index + 1}. ${riskIcon}${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -600,6 +592,209 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         console.error('OI 1h query error:', error);
         await ctx.reply('❌ 查询1小时持仓量增长榜失败');
+      }
+    });
+
+    // 创建价格提醒命令
+    this.bot.command('alert', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1);
+        
+        if (!args || args.length < 3) {
+          await ctx.reply('💡 请使用正确的格式:\n/alert btc > 50000\n/alert eth < 3000\n\n支持的操作符: >, <, >=, <=');
+          return;
+        }
+
+        const symbol = args[0].toUpperCase();
+        const operator = args[1];
+        const value = parseFloat(args[2]);
+
+        // 验证操作符
+        if (!['>', '<', '>=', '<='].includes(operator)) {
+          await ctx.reply('❌ 不支持的操作符，请使用: >, <, >=, <=');
+          return;
+        }
+
+        // 验证数值
+        if (isNaN(value) || value <= 0) {
+          await ctx.reply('❌ 请输入有效的价格数值');
+          return;
+        }
+
+        // 检查是否是已下架代币
+        const testSymbol = symbol.includes('USDT') ? symbol : symbol + 'USDT';
+        const riskLevel = getTokenRiskLevel(testSymbol);
+        if (riskLevel === 'delisted' || riskLevel === 'blacklist') {
+          await ctx.reply(`❌ ${symbol} 已被列入${riskLevel === 'delisted' ? '已下架' : '黑名单'}代币，不支持设置提醒`);
+          return;
+        }
+
+        // 获取当前价格验证
+        let currentPrice: number | undefined;
+        let actualSymbol = symbol;
+        const suffixes = ['USDT', 'BUSD', 'BTC', 'ETH'];
+        let found = false;
+
+        for (const suffix of suffixes) {
+          if (symbol.includes(suffix)) {
+            actualSymbol = symbol;
+            break;
+          }
+          
+          actualSymbol = symbol + suffix;
+          
+          try {
+            // 优先尝试合约价格
+            currentPrice = await this.binanceClient.getFuturesPrice(actualSymbol);
+            found = true;
+            break;
+          } catch (futuresError) {
+            try {
+              currentPrice = await this.binanceClient.getPrice(actualSymbol);
+              found = true;
+              break;
+            } catch (spotError) {
+              continue;
+            }
+          }
+        }
+
+        if (!found || !currentPrice) {
+          await ctx.reply(`❌ 无法找到 ${symbol} 的价格数据，请检查币种名称是否正确`);
+          return;
+        }
+
+        // 转换操作符为数据库条件
+        let condition: 'above' | 'below';
+        if (operator === '>' || operator === '>=') {
+          condition = 'above';
+        } else {
+          condition = 'below';
+        }
+
+        // 创建提醒
+        const userId = ctx.from?.id.toString()!;
+        const alertId = await PriceAlertModel.createAlert(userId, actualSymbol, condition, value);
+
+        const riskIcon = getRiskIcon(riskLevel);
+        const conditionText = operator === '>=' ? '≥' : operator === '<=' ? '≤' : operator;
+        
+        const alertMessage = `
+✅ *价格提醒创建成功*
+
+🔔 提醒ID: #${alertId}
+${riskIcon} 币种: ${symbol}
+📊 条件: 当价格 ${conditionText} $${value.toLocaleString()}
+💰 当前价格: $${currentPrice.toLocaleString()}
+⏰ 创建时间: ${new Date().toLocaleString('zh-CN')}
+
+📱 触发时将通过机器人通知您`;
+
+        await ctx.replyWithMarkdown(alertMessage);
+        
+      } catch (error) {
+        console.error('Alert creation error:', error);
+        await ctx.reply('❌ 创建价格提醒失败，请稍后重试');
+      }
+    });
+
+    // 查看提醒列表命令
+    this.bot.command('alerts', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        const alerts = await PriceAlertModel.getActiveAlerts(userId);
+
+        if (alerts.length === 0) {
+          await ctx.reply('📭 您还没有创建任何价格提醒\n\n💡 使用 /alert btc > 50000 创建提醒');
+          return;
+        }
+
+        let message = `🔔 *您的活跃价格提醒 (${alerts.length}个)*\n\n`;
+
+        // 获取当前价格来显示状态
+        for (let i = 0; i < alerts.length; i++) {
+          const alert = alerts[i];
+          const symbol = alert.symbol.replace('USDT', '');
+          const riskLevel = getTokenRiskLevel(alert.symbol);
+          const riskIcon = getRiskIcon(riskLevel);
+          
+          let currentPrice: number | undefined;
+          try {
+            currentPrice = await this.binanceClient.getFuturesPrice(alert.symbol);
+          } catch {
+            try {
+              currentPrice = await this.binanceClient.getPrice(alert.symbol);
+            } catch {
+              // 无法获取价格
+            }
+          }
+
+          const conditionText = alert.condition === 'above' ? '>' : '<';
+          const targetPrice = alert.value.toLocaleString();
+          const currentPriceText = currentPrice ? `$${currentPrice.toLocaleString()}` : '获取失败';
+          
+          message += `${i + 1}. ${riskIcon}*${symbol}* (#${alert.id})\n`;
+          message += `   条件: 价格 ${conditionText} $${targetPrice}\n`;
+          message += `   当前: ${currentPriceText}\n`;
+          message += `   创建: ${new Date(alert.created_at).toLocaleString('zh-CN')}\n\n`;
+        }
+
+        message += `💡 使用 /remove_alert <ID> 删除指定提醒\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+
+        await ctx.reply(message);
+        
+      } catch (error) {
+        console.error('Alerts list error:', error);
+        await ctx.reply('❌ 获取提醒列表失败，请稍后重试');
+      }
+    });
+
+    // 删除提醒命令
+    this.bot.command('remove_alert', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1);
+        
+        if (!args || args.length === 0) {
+          await ctx.reply('💡 请指定要删除的提醒ID，例如: /remove_alert 5');
+          return;
+        }
+
+        const alertId = parseInt(args[0]);
+        
+        if (isNaN(alertId) || alertId <= 0) {
+          await ctx.reply('❌ 请输入有效的提醒ID数字');
+          return;
+        }
+
+        // 验证提醒是否存在且属于当前用户
+        const userId = ctx.from?.id.toString()!;
+        const userAlerts = await PriceAlertModel.getActiveAlerts(userId);
+        const alertToRemove = userAlerts.find(alert => alert.id === alertId);
+
+        if (!alertToRemove) {
+          await ctx.reply('❌ 未找到指定的提醒，请检查提醒ID是否正确');
+          return;
+        }
+
+        // 删除提醒
+        await PriceAlertModel.deactivateAlert(alertId);
+
+        const symbol = alertToRemove.symbol.replace('USDT', '');
+        const conditionText = alertToRemove.condition === 'above' ? '>' : '<';
+        
+        const confirmMessage = `
+✅ *价格提醒删除成功*
+
+🗑️ 已删除提醒: #${alertId}
+💰 币种: ${symbol}
+📊 条件: 价格 ${conditionText} $${alertToRemove.value.toLocaleString()}
+⏰ 删除时间: ${new Date().toLocaleString('zh-CN')}`;
+
+        await ctx.replyWithMarkdown(confirmMessage);
+        
+      } catch (error) {
+        console.error('Remove alert error:', error);
+        await ctx.reply('❌ 删除价格提醒失败，请稍后重试');
       }
     });
 
@@ -632,6 +827,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       { command: 'oi24h', description: '24小时持仓量增长榜' },
       { command: 'oi4h', description: '4小时持仓量增长榜' },
       { command: 'oi1h', description: '1小时持仓量增长榜' },
+      { command: 'alert', description: '创建价格提醒 (例: /alert btc > 50000)' },
+      { command: 'alerts', description: '查看所有活跃提醒' },
+      { command: 'remove_alert', description: '删除指定提醒 (例: /remove_alert 5)' },
       { command: 'status', description: '查看系统状态' },
       { command: 'help', description: '查看完整帮助文档' }
     ];
@@ -695,8 +893,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       console.log(`🤖 Bot username: @${this.bot.botInfo?.username}`);
       console.log(`👤 Authorized user: ${config.telegram.userId}`);
       
-      // Launch bot (this will start the polling)
-      await this.bot.launch();
+      // Launch bot (this will start the polling) - don't await to avoid blocking
+      this.bot.launch();
       console.log('🎯 Telegram bot launched and polling started');
       
     } catch (error) {

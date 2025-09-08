@@ -65,10 +65,12 @@ export class SocialMonitorService {
 
     logger.info('Stopping social monitoring service...');
     
-    // Clear all intervals
+    // Clear all intervals with validation
     this.monitoringIntervals.forEach((interval, username) => {
-      clearInterval(interval);
-      logger.debug(`Stopped monitoring interval for @${username}`);
+      if (interval) {
+        clearInterval(interval);
+        logger.debug(`Stopped monitoring interval for @${username}`);
+      }
     });
     
     this.monitoringIntervals.clear();
@@ -108,7 +110,7 @@ export class SocialMonitorService {
       const success = await TwitterFollowModel.removeFollow(userId, username);
       
       if (success) {
-        // Stop monitoring this user
+        // Stop monitoring this user with validation
         const interval = this.monitoringIntervals.get(username);
         if (interval) {
           clearInterval(interval);

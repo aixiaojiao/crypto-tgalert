@@ -13,12 +13,13 @@ interface RequestRecord {
 export class RateLimiter {
   private records = new Map<string, RequestRecord>();
   private config: RateLimitConfig;
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config: RateLimitConfig) {
     this.config = config;
 
     // 定期清理过期记录
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       this.cleanup();
     }, this.config.windowMs);
   }
@@ -84,6 +85,16 @@ export class RateLimiter {
     if (cleanedCount > 0) {
       log.debug(`清理了 ${cleanedCount} 个过期的速率限制记录`);
     }
+  }
+
+  // 销毁速率限制器
+  public destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    this.records.clear();
+    log.debug('RateLimiter destroyed');
   }
 }
 
