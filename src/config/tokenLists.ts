@@ -5,7 +5,7 @@
 
 // 已下架代币黑名单 - 完全过滤
 export const DELISTED_TOKENS = [
-  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AGIX'
+  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AGIX', 'LINA'
 ];
 
 // 坚决不买黑名单 - 风险极高

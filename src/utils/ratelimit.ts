@@ -101,7 +101,7 @@ export class RateLimiter {
 // 预定义的速率限制器
 export const binanceRateLimit = new RateLimiter({
   windowMs: 60000, // 1分钟
-  maxRequests: 1200 // Binance限制
+  maxRequests: 2000 // Binance限制2400/min，设为2000保守一些
 });
 
 export const twitterRateLimit = new RateLimiter({

@@ -8,6 +8,12 @@ import { PriceAlertModel } from './models/PriceAlert';
 import { triggerAlertService } from './services/triggerAlerts';
 import { TriggerAlertModel } from './models/TriggerAlert';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
+
+// 统一时间格式化函数 - UTC+8时区
+function formatTimeToUTC8(date: Date | number): string {
+  const dateObj = date instanceof Date ? date : new Date(date);
+  return dateObj.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+}
 import { tieredDataManager } from './services/tieredDataManager';
 import { volumeClassifier } from './utils/volumeClassifier';
 import { rankingAnalyzer } from './services/rankingAnalyzer';
@@ -237,12 +243,12 @@ ${changeIcon} 24小时涨跌: ${changeColor}${formattedChangePercent}%
 ⚡ *合约数据:*
 ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
 📈 持仓量: ${openInterestValue}M USDT
-⏰ 下次费率时间: ${new Date(fundingRate.fundingTime).toLocaleString('zh-CN')}`;
+⏰ 下次费率时间: ${formatTimeToUTC8(fundingRate.fundingTime)}`;
         }
 
         priceMessage += `
 
-⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(priceMessage);
         
@@ -269,7 +275,7 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
 ⏱️ 运行时间: ${uptimeHours}h ${uptimeMinutes}m
 📈 处理命令数: ${this.status.commandsProcessed}
 ❌ 错误次数: ${this.status.errors}
-🕐 启动时间: ${this.status.startTime.toLocaleString('zh-CN')}
+🕐 启动时间: ${formatTimeToUTC8(this.status.startTime)}
 
 💰 *API状态:*
 Binance: ✅ 连接正常 (BTC: $${btcPrice.toLocaleString()})
@@ -317,7 +323,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 • 中频更新: ${refreshStats.medium.updated}/${refreshStats.medium.requested} (跳过:${refreshStats.medium.skipped})
 • 低频更新: ${refreshStats.low.updated}/${refreshStats.low.requested} (跳过:${refreshStats.low.skipped})
 
-⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 更新时间: ${formatTimeToUTC8(new Date())}
         `;
         
         await ctx.replyWithMarkdown(statusMessage);
@@ -367,7 +373,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           message += entry;
         });
 
-        message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
@@ -416,7 +422,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           message += entry;
         });
 
-        message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
@@ -506,7 +512,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         });
 
         message += `\n💡 负费率(红色)表示空头支付多头\n`;
-        message += `⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
         console.log('📤 Sending response message...');
         await ctx.replyWithMarkdown(message);
@@ -538,8 +544,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           validSymbols, 
           '1h', 
           24, // 24 data points for 24 hours
-          50, // batch size
-          1000 // delay between batches
+          30, // batch size (reduced)
+          3000 // delay between batches (increased)
         );
 
         const oiResults = [];
@@ -575,7 +581,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
-        message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
         message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
         await ctx.replyWithMarkdown(message);
@@ -598,8 +604,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           validSymbols, 
           '1h', 
           4, // 4 data points for 4 hours (1h intervals)
-          50, // batch size
-          1000 // delay between batches
+          30, // batch size (reduced)
+          3000 // delay between batches (increased)
         );
 
         const oiResults = [];
@@ -634,7 +640,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
-        message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
         message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
         await ctx.replyWithMarkdown(message);
@@ -657,8 +663,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           validSymbols, 
           '15m', 
           4, // 4 data points for 1 hour (15min intervals)
-          50, // batch size
-          1000 // delay between batches
+          30, // batch size (reduced)
+          3000 // delay between batches (increased)
         );
 
         const oiResults = [];
@@ -690,7 +696,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
-        message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
         message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
         await ctx.replyWithMarkdown(message);
@@ -791,7 +797,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 ${riskIcon} 币种: ${symbol}
 📊 条件: 当价格 ${conditionText} $${value.toLocaleString()}
 💰 当前价格: $${currentPrice.toLocaleString()}
-⏰ 创建时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 创建时间: ${formatTimeToUTC8(new Date())}
 
 📱 触发时将通过机器人通知您`;
 
@@ -841,10 +847,10 @@ ${riskIcon} 币种: ${symbol}
           message += `${i + 1}. ${riskIcon}*${symbol}* (#${alert.id})\n`;
           message += `   条件: 价格 ${conditionText} $${targetPrice}\n`;
           message += `   当前: ${currentPriceText}\n`;
-          message += `   创建: ${new Date(alert.created_at).toLocaleString('zh-CN')}\n\n`;
+          message += `   创建: ${formatTimeToUTC8(new Date(alert.created_at))}\n\n`;
         }
 
-        message += `💡 使用 /remove_alert <ID> 删除指定提醒\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `💡 使用 /remove_alert <ID> 删除指定提醒\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.reply(message);
         
@@ -968,7 +974,7 @@ ${riskIcon} 币种: ${symbol}
           message += `⚠️ *风险提示: 该代币波动性较高，请谨慎交易*\n\n`;
         }
 
-        message += `⏰ 查询时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(message);
 
@@ -1017,7 +1023,7 @@ ${riskIcon} 币种: ${symbol}
 🗑️ 已删除提醒: #${alertId}
 💰 币种: ${symbol}
 📊 条件: 价格 ${conditionText} $${alertToRemove.value.toLocaleString()}
-⏰ 删除时间: ${new Date().toLocaleString('zh-CN')}`;
+⏰ 删除时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(confirmMessage);
         
@@ -1067,7 +1073,7 @@ ${riskIcon} 币种: ${symbol}
         const message = `⏹️ *涨幅榜推送已停止*
 
 📈 推送状态: 已关闭
-⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 停止时间: ${formatTimeToUTC8(new Date())}
 
 💡 使用 /start_gainers_push 重新启动推送`;
 
@@ -1119,7 +1125,7 @@ ${riskIcon} 币种: ${symbol}
         const message = `⏹️ *负费率榜推送已停止*
 
 💰 推送状态: 已关闭
-⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 停止时间: ${formatTimeToUTC8(new Date())}
 
 💡 使用 /start_funding_push 重新启动推送`;
 
@@ -1172,7 +1178,7 @@ ${riskIcon} 币种: ${symbol}
         const message = `⏹️ *OI 1小时推送已停止*
 
 📊 推送状态: 已关闭
-⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 停止时间: ${formatTimeToUTC8(new Date())}
 
 💡 使用 /start_oi1h_push 重新启动推送`;
 
@@ -1225,7 +1231,7 @@ ${riskIcon} 币种: ${symbol}
         const message = `⏹️ *OI 4小时推送已停止*
 
 📊 推送状态: 已关闭
-⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 停止时间: ${formatTimeToUTC8(new Date())}
 
 💡 使用 /start_oi4h_push 重新启动推送`;
 
@@ -1278,7 +1284,7 @@ ${riskIcon} 币种: ${symbol}
         const message = `⏹️ *OI 24小时推送已停止*
 
 📊 推送状态: 已关闭
-⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+⏰ 停止时间: ${formatTimeToUTC8(new Date())}
 
 💡 使用 /start_oi24h_push 重新启动推送`;
 
@@ -1308,29 +1314,29 @@ ${riskIcon} 币种: ${symbol}
         message += `📈 *涨幅榜推送:*\n`;
         message += `• 状态: ${gainersEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
         message += `• 监控: ${stats.gainersEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.gainersLastCheck ? stats.gainersLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        message += `• 最后检查: ${stats.gainersLastCheck ? formatTimeToUTC8(stats.gainersLastCheck) : '从未'}\n\n`;
         
         message += `💰 *负费率榜推送:*\n`;
         message += `• 状态: ${fundingEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
         message += `• 监控: ${stats.fundingEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.fundingLastCheck ? stats.fundingLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        message += `• 最后检查: ${stats.fundingLastCheck ? formatTimeToUTC8(stats.fundingLastCheck) : '从未'}\n\n`;
         
         message += `📊 *OI 1小时推送:*\n`;
         message += `• 状态: ${oi1hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
         message += `• 监控: ${stats.oi1hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.oi1hLastCheck ? stats.oi1hLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        message += `• 最后检查: ${stats.oi1hLastCheck ? formatTimeToUTC8(stats.oi1hLastCheck) : '从未'}\n\n`;
         
         message += `📊 *OI 4小时推送:*\n`;
         message += `• 状态: ${oi4hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
         message += `• 监控: ${stats.oi4hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.oi4hLastCheck ? stats.oi4hLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        message += `• 最后检查: ${stats.oi4hLastCheck ? formatTimeToUTC8(stats.oi4hLastCheck) : '从未'}\n\n`;
         
         message += `📊 *OI 24小时推送:*\n`;
         message += `• 状态: ${oi24hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
         message += `• 监控: ${stats.oi24hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.oi24hLastCheck ? stats.oi24hLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        message += `• 最后检查: ${stats.oi24hLastCheck ? formatTimeToUTC8(stats.oi24hLastCheck) : '从未'}\n\n`;
         
-        message += `⏰ 查询时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
         
         await ctx.replyWithMarkdown(message);
         

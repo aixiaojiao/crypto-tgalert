@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.6] - 2025-09-10
+
+### 🔧 Critical Bug Fixes
+
+#### Binance API Rate Limiting Optimization
+- **Fixed**: Rate limiter updated from 1200/min to 2000/min (within Binance's 2400/min limit)
+- **Optimized**: OI batch processing reduced from 50 to 30 symbols per batch
+- **Enhanced**: Batch delays increased from 1s to 3s to prevent API overload
+- **Result**: Eliminated "Rate limit exceeded. Remaining requests: 0" errors in production
+
+#### Time Zone Standardization  
+- **New**: Unified time formatting function `formatTimeToUTC8()` for all system responses
+- **Fixed**: All timestamps now consistently display in UTC+8 timezone
+- **Updated**: Price queries, push status, alert times, and system logs
+- **Improved**: User experience with accurate local time display
+
+#### Database SQL Syntax Fix
+- **Fixed**: SQLite syntax error "near 'or': syntax error" in OI ranking queries
+- **Cause**: Table alias `or` conflicted with SQL OR keyword
+- **Solution**: Changed alias from `or` to `oir` in getPreviousOIRankings method
+- **Impact**: OI push services now work without SQL errors
+
+#### Token Risk Management Updates
+- **Updated**: BLACKLIST_TOKENS with current high-risk tokens (LUNA, LUNC, USTC, TA, BID)
+- **Enhanced**: Risk filtering system for better user protection
+
+### 📊 System Improvements
+- Enhanced error logging and debugging capabilities
+- Optimized API call patterns for cloud server environments
+- Improved resource management and memory usage
+
 ## [2.0.5] - 2025-09-09
 
 ### 🆕 New Features

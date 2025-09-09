@@ -269,10 +269,10 @@ export class TriggerAlertModel {
         second_latest_timestamp AS (
           SELECT timestamp FROM ranked_timestamps WHERE rn = 2
         )
-        SELECT or.* FROM oi_rankings or
-        JOIN second_latest_timestamp slt ON or.timestamp = slt.timestamp
-        WHERE or.period = ?
-        ORDER BY or.position ASC
+        SELECT oir.* FROM oi_rankings oir
+        JOIN second_latest_timestamp slt ON oir.timestamp = slt.timestamp
+        WHERE oir.period = ?
+        ORDER BY oir.position ASC
         LIMIT 10
       `);
       
