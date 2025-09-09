@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.5] - 2025-09-09
+
+### 🆕 New Features
+
+#### Individual OI Query Command
+- **New**: `/oi <symbol>` command for single token OI analysis
+  - Displays 1h/4h/24h OI percentage changes with trend indicators (📈📉)
+  - Shows current price and total open interest value
+  - Intelligent symbol processing (supports `BTC`, `ETHUSDT`, etc.)
+  - Risk level integration with warning icons (⛔⚠️)
+  - Smart data validation with "数据不足" fallback for insufficient historical data
+
+#### Enhanced Push Status Display
+- **Fixed**: OI push services now visible in `/push_status` command
+  - Added OI 1h/4h/24h push status tracking
+  - Complete visibility into all running push services
+  - Unified status display for gainers/funding/OI push services
+
+### 🔧 Bug Fixes
+- **Fixed**: Symbol processing logic for BTC/ETH in `/oi` command
+- **Fixed**: String literal syntax error in tokenLists.ts
+- **Fixed**: Function signature for formatPriceWithSeparators
+
+### 📊 Command Updates
+- Updated bot commands menu to include new `/oi` functionality
+- Enhanced error handling for invalid symbols and API failures
+
 ## [2.0.4] - 2025-09-09
 
 ### 🎯 Major Features

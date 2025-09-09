@@ -854,6 +854,130 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
+    // OI 持仓量查询命令
+    this.bot.command('oi', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1);
+        
+        if (!args || args.length === 0) {
+          await ctx.reply('💡 请指定代币符号，例如: /oi BTC 或 /oi ETHUSDT');
+          return;
+        }
+
+        let symbol = args[0].toUpperCase();
+        
+        // 处理各种符号格式 - 为所有不完整的符号添加USDT后缀
+        if (!symbol.includes('USDT') && !symbol.includes('BUSD')) {
+          // 特殊处理：BTC和ETH需要添加USDT后缀
+          if (symbol === 'BTC' || symbol === 'ETH') {
+            symbol = `${symbol}USDT`;
+          } else if (!symbol.endsWith('BTC') && !symbol.endsWith('ETH')) {
+            // 对于其他不以BTC或ETH结尾的符号，添加USDT
+            symbol = `${symbol}USDT`;
+          }
+        }
+
+        // 检查代币风险级别
+        const riskLevel = getTokenRiskLevel(symbol);
+        if (riskLevel === 'blacklist') {
+          await ctx.reply(`🚫 ${symbol} 已被列入黑名单，不支持查询`);
+          return;
+        }
+
+        const riskIcon = getRiskIcon(riskLevel);
+        
+        // 获取当前价格
+        let currentPrice: number | undefined;
+        try {
+          currentPrice = await this.binanceClient.getFuturesPrice(symbol);
+        } catch {
+          try {
+            currentPrice = await this.binanceClient.getPrice(symbol);
+          } catch {
+            await ctx.reply(`❌ 无法获取 ${symbol} 的价格数据，请检查符号是否正确`);
+            return;
+          }
+        }
+
+        // 获取不同时间周期的OI数据
+        const [oi1h, oi4h, oi24h] = await Promise.all([
+          this.binanceClient.getOpenInterestStats(symbol, '15m', 4),  // 1小时
+          this.binanceClient.getOpenInterestStats(symbol, '1h', 4),   // 4小时
+          this.binanceClient.getOpenInterestStats(symbol, '1h', 24)   // 24小时
+        ]);
+
+        // 计算变化百分比
+        const calculate1hChange = () => {
+          if (oi1h.length < 2) return null;
+          const current = parseFloat(oi1h[oi1h.length - 1].sumOpenInterestValue);
+          const previous = parseFloat(oi1h[0].sumOpenInterestValue);
+          return ((current - previous) / previous) * 100;
+        };
+
+        const calculate4hChange = () => {
+          if (oi4h.length < 2) return null;
+          const current = parseFloat(oi4h[oi4h.length - 1].sumOpenInterestValue);
+          const previous = parseFloat(oi4h[0].sumOpenInterestValue);
+          return ((current - previous) / previous) * 100;
+        };
+
+        const calculate24hChange = () => {
+          if (oi24h.length < 2) return null;
+          const current = parseFloat(oi24h[oi24h.length - 1].sumOpenInterestValue);
+          const previous = parseFloat(oi24h[0].sumOpenInterestValue);
+          return ((current - previous) / previous) * 100;
+        };
+
+        const change1h = calculate1hChange();
+        const change4h = calculate4hChange();
+        const change24h = calculate24hChange();
+
+        // 获取当前OI值
+        const currentOI = oi24h.length > 0 ? parseFloat(oi24h[oi24h.length - 1].sumOpenInterestValue) : 0;
+        const formattedPrice = await formatPriceWithSeparators(currentPrice!, symbol);
+
+        // 构建回复消息
+        let message = `📊 *${symbol.replace('USDT', '')} OI持仓数据* ${riskIcon}\n\n`;
+        message += `💰 当前价格: $${formattedPrice}\n`;
+        message += `📊 当前持仓量: ${(currentOI / 1000000).toFixed(2)}M USDT\n\n`;
+
+        message += `📈 *持仓变化趋势:*\n`;
+        if (change1h !== null) {
+          const icon1h = change1h >= 0 ? '📈' : '📉';
+          message += `${icon1h} 1小时: ${change1h >= 0 ? '+' : ''}${change1h.toFixed(2)}%\n`;
+        } else {
+          message += `⚠️ 1小时: 数据不足\n`;
+        }
+
+        if (change4h !== null) {
+          const icon4h = change4h >= 0 ? '📈' : '📉';
+          message += `${icon4h} 4小时: ${change4h >= 0 ? '+' : ''}${change4h.toFixed(2)}%\n`;
+        } else {
+          message += `⚠️ 4小时: 数据不足\n`;
+        }
+
+        if (change24h !== null) {
+          const icon24h = change24h >= 0 ? '📈' : '📉';
+          message += `${icon24h} 24小时: ${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%\n\n`;
+        } else {
+          message += `⚠️ 24小时: 数据不足\n\n`;
+        }
+
+        // 添加风险提示
+        if (riskLevel === 'yellowlist') {
+          message += `⚠️ *风险提示: 该代币波动性较高，请谨慎交易*\n\n`;
+        }
+
+        message += `⏰ 查询时间: ${new Date().toLocaleString('zh-CN')}`;
+
+        await ctx.replyWithMarkdown(message);
+
+      } catch (error) {
+        console.error('OI query error:', error);
+        await ctx.reply('❌ 获取OI数据失败，请稍后重试或检查代币符号是否正确');
+      }
+    });
+
     // 删除提醒命令
     this.bot.command('remove_alert', async (ctx) => {
       try {
@@ -1175,6 +1299,9 @@ ${riskIcon} 币种: ${symbol}
         
         const gainersEnabled = settings.find(s => s.alert_type === 'gainers')?.is_enabled || false;
         const fundingEnabled = settings.find(s => s.alert_type === 'funding')?.is_enabled || false;
+        const oi1hEnabled = settings.find(s => s.alert_type === 'oi1h')?.is_enabled || false;
+        const oi4hEnabled = settings.find(s => s.alert_type === 'oi4h')?.is_enabled || false;
+        const oi24hEnabled = settings.find(s => s.alert_type === 'oi24h')?.is_enabled || false;
         
         let message = `📊 *推送状态总览*\n\n`;
         
@@ -1187,6 +1314,21 @@ ${riskIcon} 币种: ${symbol}
         message += `• 状态: ${fundingEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
         message += `• 监控: ${stats.fundingEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
         message += `• 最后检查: ${stats.fundingLastCheck ? stats.fundingLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        
+        message += `📊 *OI 1小时推送:*\n`;
+        message += `• 状态: ${oi1hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
+        message += `• 监控: ${stats.oi1hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
+        message += `• 最后检查: ${stats.oi1hLastCheck ? stats.oi1hLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        
+        message += `📊 *OI 4小时推送:*\n`;
+        message += `• 状态: ${oi4hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
+        message += `• 监控: ${stats.oi4hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
+        message += `• 最后检查: ${stats.oi4hLastCheck ? stats.oi4hLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
+        
+        message += `📊 *OI 24小时推送:*\n`;
+        message += `• 状态: ${oi24hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
+        message += `• 监控: ${stats.oi24hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
+        message += `• 最后检查: ${stats.oi24hLastCheck ? stats.oi24hLastCheck.toLocaleString('zh-CN') : '从未'}\n\n`;
         
         message += `⏰ 查询时间: ${new Date().toLocaleString('zh-CN')}`;
         
