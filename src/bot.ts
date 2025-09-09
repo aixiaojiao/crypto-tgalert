@@ -7,6 +7,7 @@ import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tok
 import { PriceAlertModel } from './models/PriceAlert';
 import { triggerAlertService } from './services/triggerAlerts';
 import { TriggerAlertModel } from './models/TriggerAlert';
+import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -202,14 +203,20 @@ export class TelegramBot {
         const changeIcon = changePercent >= 0 ? '📈' : '📉';
         const changeColor = changePercent >= 0 ? '+' : '';
 
+        // Format prices with proper precision
+        const formattedPrice = await formatPriceWithSeparators(price, actualSymbol);
+        const formattedHighPrice = await formatPriceWithSeparators(stats.highPrice, actualSymbol);
+        const formattedLowPrice = await formatPriceWithSeparators(stats.lowPrice, actualSymbol);
+        const formattedChangePercent = formatPriceChange(changePercent);
+
         let priceMessage = `
 💰 *${symbol} ${isContract ? '合约' : '现货'}价格*
 
-💵 当前价格: $${price.toLocaleString()}
-${changeIcon} 24小时涨跌: ${changeColor}${changePercent.toFixed(2)}%
+💵 当前价格: $${formattedPrice}
+${changeIcon} 24小时涨跌: ${changeColor}${formattedChangePercent}%
 📊 24小时交易量: ${(parseFloat(stats.volume) / 1000000).toFixed(2)}M USDT
-🔺 24小时最高: $${parseFloat(stats.highPrice).toLocaleString()}
-🔻 24小时最低: $${parseFloat(stats.lowPrice).toLocaleString()}`;
+🔺 24小时最高: $${formattedHighPrice}
+🔻 24小时最低: $${formattedLowPrice}`;
 
         if (isContract && fundingRate && openInterest) {
           const fundingRatePercent = (parseFloat(fundingRate.fundingRate) * 100).toFixed(4);
@@ -290,13 +297,18 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
         let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
         
-        gainers.forEach((stat, index) => {
+        const priceFormatPromises = gainers.map(async (stat, index) => {
           const symbol = stat.symbol.replace('USDT', '');
-          const change = parseFloat(stat.priceChangePercent).toFixed(2);
-          const price = parseFloat(stat.lastPrice).toLocaleString();
+          const change = formatPriceChange(parseFloat(stat.priceChangePercent));
+          const formattedPrice = await formatPriceWithSeparators(stat.lastPrice, stat.symbol);
           const riskLevel = getTokenRiskLevel(stat.symbol);
           const riskIcon = getRiskIcon(riskLevel);
-          message += `${index + 1}. ${riskIcon}**${symbol}** +${change}% ($${price})\n`;
+          return `${index + 1}. ${riskIcon}**${symbol}** +${change}% ($${formattedPrice})\n`;
+        });
+
+        const formattedEntries = await Promise.all(priceFormatPromises);
+        formattedEntries.forEach(entry => {
+          message += entry;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -328,13 +340,18 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
         let message = `📉 *24小时跌幅榜 TOP10*\n\n`;
         
-        losers.forEach((stat, index) => {
+        const priceFormatPromisesLosers = losers.map(async (stat, index) => {
           const symbol = stat.symbol.replace('USDT', '');
-          const change = parseFloat(stat.priceChangePercent).toFixed(2);
-          const price = parseFloat(stat.lastPrice).toLocaleString();
+          const change = formatPriceChange(parseFloat(stat.priceChangePercent));
+          const formattedPrice = await formatPriceWithSeparators(stat.lastPrice, stat.symbol);
           const riskLevel = getTokenRiskLevel(stat.symbol);
           const riskIcon = getRiskIcon(riskLevel);
-          message += `${index + 1}. ${riskIcon}**${symbol}** ${change}% ($${price})\n`;
+          return `${index + 1}. ${riskIcon}**${symbol}** ${change}% ($${formattedPrice})\n`;
+        });
+
+        const formattedEntriesLosers = await Promise.all(priceFormatPromisesLosers);
+        formattedEntriesLosers.forEach(entry => {
+          message += entry;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -395,14 +412,32 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         console.log('✅ Final sorted rates count:', sortedRates.length);
         console.log('📈 Top 5 negative rates:', sortedRates.slice(0, 5).map(r => `${r.symbol}: ${r.fundingRate}`));
         
-        console.log('📝 Building message...');
+        console.log('📝 Building message with prices...');
         let message = `⚡ *负费率排行榜*\n\n`;
         
-        sortedRates.forEach((rate, index) => {
+        // Get prices for all symbols
+        const pricePromises = sortedRates.map(async (rate, index) => {
           const symbol = rate.symbol.replace('USDT', '');
           const fundingPercent = (parseFloat(rate.fundingRate) * 100).toFixed(4);
           const icon = parseFloat(rate.fundingRate) < 0 ? '🔴' : '🟢';
-          message += `${index + 1}. ${icon} **${symbol}** ${fundingPercent}%\n`;
+          
+          // Get current price
+          let priceText = '';
+          try {
+            const currentPrice = await this.binanceClient.getFuturesPrice(rate.symbol);
+            const formattedPrice = await formatPriceWithSeparators(currentPrice, rate.symbol);
+            priceText = ` ($${formattedPrice})`;
+          } catch (error) {
+            console.log(`❌ Failed to get price for ${rate.symbol}:`, error instanceof Error ? error.message : 'Unknown error');
+            priceText = '';
+          }
+          
+          return `${index + 1}. ${icon} **${symbol}** ${fundingPercent}%${priceText}\n`;
+        });
+
+        const formattedEntries = await Promise.all(pricePromises);
+        formattedEntries.forEach(entry => {
+          message += entry;
         });
 
         message += `\n💡 负费率(红色)表示空头支付多头\n`;
@@ -430,59 +465,53 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         // 获取活跃合约列表
         const symbols = await this.binanceClient.getFuturesTradingSymbols();
         
-        // 过滤有效交易对，优先选择主要币种
+        // 过滤有效交易对，使用tokenLists.ts中的黑白名单
         const validSymbols = filterTradingPairs(symbols);
-        const majorSymbols = validSymbols
-          .filter(s => ['BTC', 'ETH', 'BNB', 'ADA', 'SOL', 'DOT', 'AVAX', 'MATIC', 'LINK', 'UNI', 'LTC', 'BCH', 'XRP', 'DOGE', 'ATOM'].some(major => s.startsWith(major)))
-          .slice(0, 20);
 
-        const oiPromises = majorSymbols.map(async symbol => {
-          try {
-            const oiStats = await this.binanceClient.getOpenInterestStats(symbol, '1h', 24);
-            console.log(`OI Stats for ${symbol}:`, {
-              length: oiStats.length,
-              first: oiStats[0],
-              last: oiStats[oiStats.length - 1]
-            });
+        // Use batch processing for better performance
+        const oiData = await this.binanceClient.getBatchOpenInterestStats(
+          validSymbols, 
+          '1h', 
+          24, // 24 data points for 24 hours
+          50, // batch size
+          1000 // delay between batches
+        );
+
+        const oiResults = [];
+        for (const [symbol, oiStats] of oiData.entries()) {
+          if (oiStats && oiStats.length >= 12) { // 至少需要12小时的数据
+            // 正确的时间顺序：oiStats[0] = 24小时前, oiStats[length-1] = 最新
+            const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+            const previous = parseFloat(oiStats[0].sumOpenInterestValue);
             
-            if (oiStats.length >= 12) { // 至少需要12小时的数据
-              // 正确的时间顺序：oiStats[0] = 24小时前, oiStats[length-1] = 最新
-              const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
-              const previous = parseFloat(oiStats[0].sumOpenInterestValue);
-              
-              if (current > 0 && previous > 0) {
-                const change = ((current - previous) / previous) * 100;
-                // 过滤异常数据
-                if (Math.abs(change) < 500) {
-                  return {
-                    symbol: symbol.replace('USDT', ''),
-                    change,
-                    currentOI: current / 1000000,
-                    dataPoints: oiStats.length
-                  };
-                }
+            if (current > 0 && previous > 0) {
+              const change = ((current - previous) / previous) * 100;
+              // 过滤异常数据
+              if (Math.abs(change) < 500) {
+                oiResults.push({
+                  symbol: symbol.replace('USDT', ''),
+                  change,
+                  currentOI: current / 1000000,
+                  dataPoints: oiStats.length
+                });
               }
             }
-            return null;
-          } catch (error) {
-            console.log(`OI Error for ${symbol}:`, error instanceof Error ? error.message : 'Unknown error');
-            return null;
           }
-        });
+        }
 
-        const oiResults = (await Promise.all(oiPromises))
-          .filter(result => result !== null)
-          .sort((a, b) => (b as any).change - (a as any).change)
+        const sortedResults = oiResults
+          .sort((a, b) => b.change - a.change)
           .slice(0, 10);
 
         let message = `📈 *24小时持仓量增长榜*\n\n`;
         
-        oiResults.forEach((result: any, index) => {
+        sortedResults.forEach((result, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
@@ -497,51 +526,51 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         await ctx.reply('📈 正在查询4小时持仓量增长榜...');
 
         const symbols = await this.binanceClient.getFuturesTradingSymbols();
-        const filteredSymbols = filterTradingPairs(symbols);
-        const majorSymbols = filteredSymbols.filter(s => 
-          ['BTC', 'ETH', 'BNB', 'ADA', 'SOL', 'DOT', 'AVAX', 'MATIC', 'LINK', 'UNI', 'LTC', 'BCH', 'XRP', 'DOGE', 'ATOM'].some(major => s.startsWith(major))
-        ).slice(0, 20);
+        const validSymbols = filterTradingPairs(symbols);
 
-        const oiPromises = majorSymbols.map(async symbol => {
-          try {
-            const oiStats = await this.binanceClient.getOpenInterestStats(symbol, '1h', 4);
+        // Use batch processing for better performance
+        const oiData = await this.binanceClient.getBatchOpenInterestStats(
+          validSymbols, 
+          '1h', 
+          4, // 4 data points for 4 hours (1h intervals)
+          50, // batch size
+          1000 // delay between batches
+        );
+
+        const oiResults = [];
+        for (const [symbol, oiStats] of oiData.entries()) {
+          if (oiStats && oiStats.length >= 4) {
+            // 正确的时间顺序：oiStats[0] = 4小时前, oiStats[length-1] = 最新
+            const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+            const previous = parseFloat(oiStats[0].sumOpenInterestValue);
             
-            if (oiStats.length >= 4) {
-              // 正确的时间顺序：oiStats[0] = 4小时前, oiStats[length-1] = 最新
-              const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
-              const previous = parseFloat(oiStats[0].sumOpenInterestValue);
-              
-              if (current > 0 && previous > 0) {
-                const change = ((current - previous) / previous) * 100;
-                // 过滤异常数据
-                if (Math.abs(change) < 200) {
-                  return {
-                    symbol: symbol.replace('USDT', ''),
-                    change,
-                    currentOI: current / 1000000
-                  };
-                }
+            if (current > 0 && previous > 0) {
+              const change = ((current - previous) / previous) * 100;
+              // 过滤异常数据
+              if (Math.abs(change) < 200) {
+                oiResults.push({
+                  symbol: symbol.replace('USDT', ''),
+                  change,
+                  currentOI: current / 1000000
+                });
               }
             }
-            return null;
-          } catch (error) {
-            return null;
           }
-        });
+        }
 
-        const oiResults = (await Promise.all(oiPromises))
-          .filter(result => result !== null)
-          .sort((a, b) => (b as any).change - (a as any).change)
+        const sortedResults = oiResults
+          .sort((a, b) => b.change - a.change)
           .slice(0, 10);
 
         let message = `📈 *4小时持仓量增长榜*\n\n`;
         
-        oiResults.forEach((result: any, index) => {
+        sortedResults.forEach((result, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
@@ -556,49 +585,48 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         await ctx.reply('📈 正在查询1小时持仓量增长榜...');
 
         const symbols = await this.binanceClient.getFuturesTradingSymbols();
-        const filteredSymbols = filterTradingPairs(symbols);
-        const majorSymbols = filteredSymbols.filter(s => 
-          ['BTC', 'ETH', 'BNB', 'ADA', 'SOL', 'DOT', 'AVAX', 'MATIC', 'LINK', 'UNI', 'LTC', 'BCH', 'XRP', 'DOGE', 'ATOM'].some(major => s.startsWith(major))
-        ).slice(0, 20);
+        const validSymbols = filterTradingPairs(symbols);
 
-        // For 1-hour data, use consistent API: 15min intervals for 4 data points = 1 hour
-        const oiPromises = majorSymbols.map(async symbol => {
-          try {
-            const oiStats = await this.binanceClient.getOpenInterestStats(symbol, '15m', 4);
+        // Use batch processing for better performance
+        const oiData = await this.binanceClient.getBatchOpenInterestStats(
+          validSymbols, 
+          '15m', 
+          4, // 4 data points for 1 hour (15min intervals)
+          50, // batch size
+          1000 // delay between batches
+        );
+
+        const oiResults = [];
+        for (const [symbol, oiStats] of oiData.entries()) {
+          if (oiStats && oiStats.length >= 4) {
+            // 正确的时间顺序：oiStats[0] = 1小时前, oiStats[length-1] = 最新
+            const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+            const previous = parseFloat(oiStats[0].sumOpenInterestValue);
             
-            if (oiStats.length >= 4) {
-              // 正确的时间顺序：oiStats[0] = 1小时前, oiStats[length-1] = 最新
-              const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
-              const previous = parseFloat(oiStats[0].sumOpenInterestValue);
-              
-              if (current > 0 && previous > 0) {
-                const change = ((current - previous) / previous) * 100;
-                return {
-                  symbol: symbol.replace('USDT', ''),
-                  change,
-                  currentOI: current / 1000000000 // Convert to billions for readability
-                };
-              }
+            if (current > 0 && previous > 0) {
+              const change = ((current - previous) / previous) * 100;
+              oiResults.push({
+                symbol: symbol.replace('USDT', ''),
+                change,
+                currentOI: current / 1000000 // Convert to millions for readability
+              });
             }
-            return null;
-          } catch (error) {
-            return null;
           }
-        });
+        }
 
-        const oiResults = (await Promise.all(oiPromises))
-          .filter(result => result !== null)
-          .sort((a, b) => (b as any).change - (a as any).change)
+        const sortedResults = oiResults
+          .sort((a, b) => b.change - a.change)
           .slice(0, 10);
 
         let message = `📈 *1小时持仓量增长榜*\n\n`;
         
-        oiResults.forEach((result: any, index) => {
+        sortedResults.forEach((result, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
 
         message += `\n⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}`;
+        message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {

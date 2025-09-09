@@ -87,22 +87,23 @@ export class TriggerAlertModel {
    * Save gainers rankings
    */
   static async saveGainersRankings(rankings: GainersRanking[]): Promise<void> {
-    try {
-      const db = await getDatabase();
-      const stmt = await db.prepare(`
-        INSERT INTO gainers_rankings (symbol, position, price_change_percent) 
-        VALUES (?, ?, ?)
-      `);
+    const db = await getDatabase();
+    const stmt = await db.prepare(`
+      INSERT INTO gainers_rankings (symbol, position, price_change_percent) 
+      VALUES (?, ?, ?)
+    `);
 
+    try {
       for (const ranking of rankings) {
         await stmt.run(ranking.symbol, ranking.position, ranking.price_change_percent);
       }
-      await stmt.finalize();
       
       log.debug(`Saved ${rankings.length} gainers rankings`);
     } catch (error) {
       log.error('Failed to save gainers rankings', error);
       throw error;
+    } finally {
+      await stmt.finalize();
     }
   }
 
@@ -110,22 +111,23 @@ export class TriggerAlertModel {
    * Save funding rankings
    */
   static async saveFundingRankings(rankings: FundingRanking[]): Promise<void> {
-    try {
-      const db = await getDatabase();
-      const stmt = await db.prepare(`
-        INSERT INTO funding_rankings (symbol, position, funding_rate, funding_rate_8h) 
-        VALUES (?, ?, ?, ?)
-      `);
+    const db = await getDatabase();
+    const stmt = await db.prepare(`
+      INSERT INTO funding_rankings (symbol, position, funding_rate, funding_rate_8h) 
+      VALUES (?, ?, ?, ?)
+    `);
 
+    try {
       for (const ranking of rankings) {
         await stmt.run(ranking.symbol, ranking.position, ranking.funding_rate, ranking.funding_rate_8h);
       }
-      await stmt.finalize();
       
       log.debug(`Saved ${rankings.length} funding rankings`);
     } catch (error) {
       log.error('Failed to save funding rankings', error);
       throw error;
+    } finally {
+      await stmt.finalize();
     }
   }
 
@@ -175,17 +177,41 @@ export class TriggerAlertModel {
   static async getPreviousGainersRankings(): Promise<GainersRanking[]> {
     try {
       const db = await getDatabase();
+      
+      // First check if we have enough data (at least 2 distinct timestamps)
+      const countStmt = await db.prepare(`
+        SELECT COUNT(DISTINCT timestamp) as distinct_timestamps 
+        FROM gainers_rankings
+      `);
+      const countResult = await countStmt.get() as any;
+      await countStmt.finalize();
+      
+      if (countResult.distinct_timestamps < 2) {
+        log.debug('Not enough historical data for gainers comparison');
+        return [];
+      }
+      
+      // Use row-based approach instead of timestamp comparison
       const stmt = await db.prepare(`
-        SELECT * FROM gainers_rankings 
-        WHERE timestamp = (
-          SELECT MAX(timestamp) FROM gainers_rankings 
-          WHERE timestamp < (SELECT MAX(timestamp) FROM gainers_rankings)
+        WITH ranked_timestamps AS (
+          SELECT DISTINCT timestamp,
+                 ROW_NUMBER() OVER (ORDER BY timestamp DESC) as rn
+          FROM gainers_rankings
+        ),
+        second_latest_timestamp AS (
+          SELECT timestamp FROM ranked_timestamps WHERE rn = 2
         )
-        ORDER BY position ASC
+        SELECT gr.* FROM gainers_rankings gr
+        JOIN second_latest_timestamp slt ON gr.timestamp = slt.timestamp
+        ORDER BY gr.position ASC
         LIMIT 10
       `);
       
-      return await stmt.all() as GainersRanking[];
+      const result = await stmt.all() as GainersRanking[];
+      await stmt.finalize();
+      
+      log.debug(`Retrieved ${result.length} previous gainers rankings`);
+      return result;
     } catch (error) {
       log.error('Failed to get previous gainers rankings', error);
       return [];
@@ -198,17 +224,41 @@ export class TriggerAlertModel {
   static async getPreviousFundingRankings(): Promise<FundingRanking[]> {
     try {
       const db = await getDatabase();
+      
+      // First check if we have enough data (at least 2 distinct timestamps)
+      const countStmt = await db.prepare(`
+        SELECT COUNT(DISTINCT timestamp) as distinct_timestamps 
+        FROM funding_rankings
+      `);
+      const countResult = await countStmt.get() as any;
+      await countStmt.finalize();
+      
+      if (countResult.distinct_timestamps < 2) {
+        log.debug('Not enough historical data for funding comparison');
+        return [];
+      }
+      
+      // Use row-based approach instead of timestamp comparison
       const stmt = await db.prepare(`
-        SELECT * FROM funding_rankings 
-        WHERE timestamp = (
-          SELECT MAX(timestamp) FROM funding_rankings 
-          WHERE timestamp < (SELECT MAX(timestamp) FROM funding_rankings)
+        WITH ranked_timestamps AS (
+          SELECT DISTINCT timestamp,
+                 ROW_NUMBER() OVER (ORDER BY timestamp DESC) as rn
+          FROM funding_rankings
+        ),
+        second_latest_timestamp AS (
+          SELECT timestamp FROM ranked_timestamps WHERE rn = 2
         )
-        ORDER BY position ASC
+        SELECT fr.* FROM funding_rankings fr
+        JOIN second_latest_timestamp slt ON fr.timestamp = slt.timestamp
+        ORDER BY fr.position ASC
         LIMIT 10
       `);
       
-      return await stmt.all() as FundingRanking[];
+      const result = await stmt.all() as FundingRanking[];
+      await stmt.finalize();
+      
+      log.debug(`Retrieved ${result.length} previous funding rankings`);
+      return result;
     } catch (error) {
       log.error('Failed to get previous funding rankings', error);
       return [];

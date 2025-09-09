@@ -3,6 +3,7 @@ import { createHmac } from 'crypto';
 import { config } from '../config';
 import { log } from '../utils/logger';
 import { binanceRateLimit } from '../utils/ratelimit';
+import { oiCache, marketDataCache, CacheManager } from '../utils/cache';
 import {
   SymbolPriceTicker,
   Ticker24hr,
@@ -703,6 +704,15 @@ export class BinanceClient {
    * Get open interest statistics
    */
   async getOpenInterestStats(symbol: string, period: '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '6h' | '12h' | '1d' = '1h', limit: number = 30): Promise<OpenInterestStats[]> {
+    const cacheKey = `oi:${symbol.toUpperCase()}:${period}:${limit}`;
+    
+    // Try to get from cache first
+    const cached = await oiCache.get(cacheKey);
+    if (cached) {
+      log.debug(`Open interest stats from cache for ${symbol}`, { period, count: cached.length });
+      return cached;
+    }
+
     try {
       const response = await this.futuresClient.get('/futures/data/openInterestHist', {
         params: { 
@@ -712,9 +722,14 @@ export class BinanceClient {
         }
       });
 
-      log.debug(`Open interest stats fetched for ${symbol}`, { period, count: response.data.length });
+      const data = response.data;
+      
+      // Cache the result with appropriate TTL
+      await oiCache.set(cacheKey, data, CacheManager.TTL.OI_HIST);
+      
+      log.debug(`Open interest stats fetched for ${symbol}`, { period, count: data.length });
 
-      return response.data;
+      return data;
     } catch (error) {
       log.error(`Failed to get open interest stats for ${symbol}`, error);
       throw error;
@@ -725,14 +740,131 @@ export class BinanceClient {
    * Get futures symbols that are actively trading
    */
   async getFuturesTradingSymbols(): Promise<string[]> {
+    const cacheKey = 'futures:trading_symbols';
+    
+    // Try to get from cache first
+    const cached = await marketDataCache.get(cacheKey);
+    if (cached) {
+      log.debug('Futures trading symbols from cache', { count: cached.length });
+      return cached;
+    }
+
     try {
       const exchangeInfo = await this.getFuturesExchangeInfo();
-      return exchangeInfo.symbols
+      const symbols = exchangeInfo.symbols
         .filter(symbol => symbol.status === 'TRADING')
         .map(symbol => symbol.symbol);
+      
+      // Cache with 24-hour TTL since trading symbols change rarely
+      await marketDataCache.set(cacheKey, symbols, CacheManager.TTL.SYMBOLS);
+      
+      log.debug('Futures trading symbols fetched', { count: symbols.length });
+      return symbols;
     } catch (error) {
       log.error('Failed to get futures trading symbols', error);
       throw error;
+    }
+  }
+
+  /**
+   * Batch get open interest stats for multiple symbols with rate limiting
+   */
+  async getBatchOpenInterestStats(
+    symbols: string[], 
+    period: '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '6h' | '12h' | '1d' = '1h', 
+    limit: number = 30,
+    batchSize: number = 50,
+    delayMs: number = 1000
+  ): Promise<Map<string, OpenInterestStats[]>> {
+    const results = new Map<string, OpenInterestStats[]>();
+    const batches = this.chunkArray(symbols, batchSize);
+    
+    log.info(`Processing ${symbols.length} symbols in ${batches.length} batches (${batchSize} symbols per batch)`);
+    
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      log.debug(`Processing batch ${i + 1}/${batches.length} with ${batch.length} symbols`);
+      
+      // Process batch in parallel
+      const batchPromises = batch.map(async (symbol) => {
+        try {
+          const data = await this.getOpenInterestStats(symbol, period, limit);
+          return { symbol, data };
+        } catch (error) {
+          log.warn(`Failed to get OI stats for ${symbol}`, error);
+          return { symbol, data: null };
+        }
+      });
+      
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      // Collect successful results
+      batchResults.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.data) {
+          results.set(result.value.symbol, result.value.data);
+        }
+      });
+      
+      // Add delay between batches to respect rate limits
+      if (i < batches.length - 1) {
+        log.debug(`Waiting ${delayMs}ms before next batch...`);
+        await this.sleep(delayMs);
+      }
+    }
+    
+    log.info(`Batch processing complete. Successfully fetched OI data for ${results.size}/${symbols.length} symbols`);
+    return results;
+  }
+
+  /**
+   * Get symbol precision info for both spot and futures
+   */
+  async getSymbolPrecision(symbol: string): Promise<{ pricePrecision: number; quantityPrecision: number; source: 'spot' | 'futures' } | null> {
+    const cacheKey = `precision:${symbol.toUpperCase()}`;
+    
+    // Try cache first
+    const cached = await marketDataCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      // Try futures first as it's more commonly used
+      const futuresInfo = await this.getFuturesExchangeInfo();
+      const futuresSymbol = futuresInfo.symbols.find(s => s.symbol === symbol.toUpperCase());
+      
+      if (futuresSymbol && futuresSymbol.status === 'TRADING') {
+        const result = {
+          pricePrecision: futuresSymbol.pricePrecision,
+          quantityPrecision: futuresSymbol.quantityPrecision,
+          source: 'futures' as const
+        };
+        
+        // Cache with 24-hour TTL
+        await marketDataCache.set(cacheKey, result, CacheManager.TTL.SYMBOLS);
+        return result;
+      }
+
+      // Fallback to spot
+      const spotInfo = await this.getExchangeInfo([symbol.toUpperCase()]);
+      const spotSymbol = spotInfo.symbols.find(s => s.symbol === symbol.toUpperCase());
+      
+      if (spotSymbol && spotSymbol.status === 'TRADING') {
+        const result = {
+          pricePrecision: spotSymbol.baseAssetPrecision, // Use baseAssetPrecision for spot
+          quantityPrecision: spotSymbol.quotePrecision,
+          source: 'spot' as const
+        };
+        
+        // Cache with 24-hour TTL
+        await marketDataCache.set(cacheKey, result, CacheManager.TTL.SYMBOLS);
+        return result;
+      }
+
+      return null;
+    } catch (error) {
+      log.debug(`Failed to get precision for ${symbol}`, error);
+      return null;
     }
   }
 
@@ -749,6 +881,20 @@ export class BinanceClient {
       log.debug(`Futures symbol validation failed for ${symbol}`, error);
       return false;
     }
+  }
+
+  // Helper methods
+
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
 

@@ -10,12 +10,12 @@ export const DELISTED_TOKENS = [
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 
+  'LUNA', 'LUNC', 'USTC', 'TA' , 
 ];
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'YALA', 'TA' , 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' 
+  'YALA', 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' 
 ];
 
 

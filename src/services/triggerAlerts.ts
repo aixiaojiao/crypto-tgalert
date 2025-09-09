@@ -3,6 +3,7 @@ import { TriggerAlertModel, GainersRanking, FundingRanking, RankingChange } from
 import { TelegramBot } from '../bot';
 import { log } from '../utils/logger';
 import { getTokenRiskLevel, getRiskIcon, filterTradingPairs } from '../config/tokenLists';
+import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
 
 export interface TriggerAlertStats {
   gainersEnabled: boolean;
@@ -23,8 +24,8 @@ export class TriggerAlertService {
   private gainersEnabled: boolean = false;
   private fundingEnabled: boolean = false;
   
-  private readonly GAINERS_CHECK_INTERVAL = 1 * 60 * 1000; // 1 minute (testing)
-  private readonly FUNDING_CHECK_INTERVAL = 1 * 60 * 1000; // 1 minute (testing)
+  private readonly GAINERS_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes (production)
+  private readonly FUNDING_CHECK_INTERVAL = 10 * 60 * 1000; // 10 minutes (production)
   
   private gainersLastCheck: Date | null = null;
   private fundingLastCheck: Date | null = null;
@@ -80,7 +81,7 @@ export class TriggerAlertService {
       await this.checkGainers();
     }, this.GAINERS_CHECK_INTERVAL);
 
-    log.info(`Gainers monitoring started with ${this.GAINERS_CHECK_INTERVAL / 1000}s interval (testing mode)`);
+    log.info(`Gainers monitoring started with ${this.GAINERS_CHECK_INTERVAL / 60000}min interval`);
   }
 
   /**
@@ -123,7 +124,7 @@ export class TriggerAlertService {
       await this.checkFunding();
     }, this.FUNDING_CHECK_INTERVAL);
 
-    log.info(`Funding rates monitoring started with ${this.FUNDING_CHECK_INTERVAL / 1000}s interval (testing mode)`);
+    log.info(`Funding rates monitoring started with ${this.FUNDING_CHECK_INTERVAL / 60000}min interval`);
   }
 
   /**
@@ -198,9 +199,6 @@ export class TriggerAlertService {
         (change.change === 'down' && (change.changeValue || 0) >= 3)
       );
 
-      // Save current rankings
-      await TriggerAlertModel.saveGainersRankings(currentRankings);
-      
       this.gainersLastCheck = new Date();
 
       // Send notifications if there are significant changes
@@ -234,6 +232,9 @@ export class TriggerAlertService {
           log.debug('Gainers changes detected but not significant enough for notification');
         }
       }
+
+      // Save current rankings AFTER notification processing is complete
+      await TriggerAlertModel.saveGainersRankings(currentRankings);
 
       log.debug(`Gainers check completed: ${significantChanges.length} significant changes detected`);
       
@@ -297,9 +298,6 @@ export class TriggerAlertService {
         (change.change === 'down' && (change.changeValue || 0) >= 2)
       );
 
-      // Save current rankings
-      await TriggerAlertModel.saveFundingRankings(currentRankings);
-      
       this.fundingLastCheck = new Date();
 
       // Send notifications if there are significant changes
@@ -334,6 +332,9 @@ export class TriggerAlertService {
         }
       }
 
+      // Save current rankings AFTER notification processing is complete
+      await TriggerAlertModel.saveFundingRankings(currentRankings);
+
       log.debug(`Funding rates check completed: ${significantChanges.length} significant changes detected`);
       
     } catch (error) {
@@ -349,7 +350,7 @@ export class TriggerAlertService {
       const enabledUsers = await TriggerAlertModel.getEnabledUsers('gainers');
       if (enabledUsers.length === 0) return;
 
-      const message = this.formatGainersMessage(rankings, changes);
+      const message = await this.formatGainersMessage(rankings, changes);
       
       for (const userId of enabledUsers) {
         if (this.telegramBot) {
@@ -374,7 +375,7 @@ export class TriggerAlertService {
       const enabledUsers = await TriggerAlertModel.getEnabledUsers('funding');
       if (enabledUsers.length === 0) return;
 
-      const message = this.formatFundingMessage(rankings, changes);
+      const message = await this.formatFundingMessage(rankings, changes);
       
       for (const userId of enabledUsers) {
         if (this.telegramBot) {
@@ -394,7 +395,7 @@ export class TriggerAlertService {
   /**
    * Format gainers message with changes highlighted
    */
-  private formatGainersMessage(rankings: GainersRanking[], changes: RankingChange[]): string {
+  private async formatGainersMessage(rankings: GainersRanking[], changes: RankingChange[]): Promise<string> {
     const changesMap = new Map(changes.map(c => [c.symbol, c]));
     
     let message = '📈 *涨幅榜更新提醒*\n\n';
@@ -404,7 +405,8 @@ export class TriggerAlertService {
       message += `🆕 *新进入前10:* ${newEntries.map(c => c.symbol.replace('USDT', '')).join(', ')}\n\n`;
     }
 
-    rankings.forEach((ranking, index) => {
+    // Get current prices for all symbols
+    const pricePromises = rankings.map(async (ranking, index) => {
       const symbol = ranking.symbol.replace('USDT', '');
       const riskLevel = getTokenRiskLevel(ranking.symbol);
       const riskIcon = getRiskIcon(riskLevel);
@@ -430,7 +432,24 @@ export class TriggerAlertService {
         }
       }
 
-      message += `${index + 1}. ${riskIcon}${symbol} +${ranking.price_change_percent.toFixed(2)}%${changeText} ${changeIcon}\n`;
+      // Get current price
+      let priceText = '';
+      try {
+        const currentPrice = await this.binance.getFuturesPrice(ranking.symbol);
+        const formattedPrice = await formatPriceWithSeparators(currentPrice, ranking.symbol);
+        priceText = ` ($${formattedPrice})`;
+      } catch (error) {
+        log.debug(`Failed to get price for ${ranking.symbol}`, error);
+        priceText = '';
+      }
+
+      const formattedChange = formatPriceChange(ranking.price_change_percent);
+      return `${index + 1}. ${riskIcon}${symbol} +${formattedChange}%${priceText}${changeText} ${changeIcon}\n`;
+    });
+
+    const formattedEntries = await Promise.all(pricePromises);
+    formattedEntries.forEach(entry => {
+      message += entry;
     });
 
     message += `\n⏰ 检查时间: ${new Date().toLocaleString('zh-CN')}`;
@@ -441,7 +460,7 @@ export class TriggerAlertService {
   /**
    * Format funding message with changes highlighted
    */
-  private formatFundingMessage(rankings: FundingRanking[], changes: RankingChange[]): string {
+  private async formatFundingMessage(rankings: FundingRanking[], changes: RankingChange[]): Promise<string> {
     const changesMap = new Map(changes.map(c => [c.symbol, c]));
     
     let message = '💰 *负费率榜更新提醒*\n\n';
@@ -451,7 +470,8 @@ export class TriggerAlertService {
       message += `🆕 *新进入前10:* ${newEntries.map(c => c.symbol.replace('USDT', '')).join(', ')}\n\n`;
     }
 
-    rankings.forEach((ranking, index) => {
+    // Get current prices for all symbols
+    const pricePromises = rankings.map(async (ranking, index) => {
       const symbol = ranking.symbol.replace('USDT', '');
       const riskLevel = getTokenRiskLevel(ranking.symbol);
       const riskIcon = getRiskIcon(riskLevel);
@@ -477,8 +497,24 @@ export class TriggerAlertService {
         }
       }
 
+      // Get current price
+      let priceText = '';
+      try {
+        const currentPrice = await this.binance.getFuturesPrice(ranking.symbol);
+        const formattedPrice = await formatPriceWithSeparators(currentPrice, ranking.symbol);
+        priceText = ` ($${formattedPrice})`;
+      } catch (error) {
+        log.debug(`Failed to get price for ${ranking.symbol}`, error);
+        priceText = '';
+      }
+
       const rate8h = (ranking.funding_rate_8h * 100).toFixed(4);
-      message += `${index + 1}. ${riskIcon}${symbol} ${rate8h}%${changeText} ${changeIcon}\n`;
+      return `${index + 1}. ${riskIcon}${symbol} ${rate8h}%${priceText}${changeText} ${changeIcon}\n`;
+    });
+
+    const formattedEntries = await Promise.all(pricePromises);
+    formattedEntries.forEach(entry => {
+      message += entry;
     });
 
     message += `\n⏰ 检查时间: ${new Date().toLocaleString('zh-CN')}`;
