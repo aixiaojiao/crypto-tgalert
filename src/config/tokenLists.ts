@@ -10,7 +10,7 @@ export const DELISTED_TOKENS = [
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 'TA' , 
+  'LUNA', 'LUNC', 'USTC', 'TA' , 'BID' , 
 ];
 
 // 谨慎购买黄名单 - 高波动性风险

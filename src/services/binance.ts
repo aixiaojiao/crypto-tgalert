@@ -683,6 +683,69 @@ export class BinanceClient {
   }
 
   /**
+   * Get open interest statistics for all symbols
+   */
+  async getAllOpenInterestStats(period: '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '6h' | '12h' | '1d' = '1h'): Promise<OpenInterestStats[]> {
+    try {
+      // Get all futures symbols first
+      const symbolResponse = await this.futuresClient.get('/fapi/v1/exchangeInfo');
+      const symbols = symbolResponse.data.symbols
+        .filter((s: any) => s.status === 'TRADING' && s.contractType === 'PERPETUAL')
+        .map((s: any) => s.symbol);
+      
+      log.debug(`Fetching OI stats for ${symbols.length} symbols with period ${period}`);
+      
+      // Batch API calls to get OI stats for all symbols (Binance doesn't have a single endpoint for all symbols)
+      const batchSize = 50; // Limit concurrent requests
+      const results: OpenInterestStats[] = [];
+      
+      for (let i = 0; i < symbols.length; i += batchSize) {
+        const batch = symbols.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (symbol: string) => {
+          try {
+            const response = await this.futuresClient.get('/futures/data/openInterestHist', {
+              params: {
+                symbol: symbol,
+                period: period,
+                limit: 2 // Only need latest for change calculation
+              }
+            });
+            
+            if (response.data && response.data.length > 0) {
+              const latest = response.data[response.data.length - 1];
+              return {
+                symbol: latest.symbol,
+                sumOpenInterest: latest.sumOpenInterest,
+                sumOpenInterestValue: latest.sumOpenInterestValue,
+                timestamp: latest.timestamp
+              } as OpenInterestStats;
+            }
+            return null;
+          } catch (error) {
+            log.debug(`Failed to get OI stats for ${symbol}`, error);
+            return null;
+          }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults.filter(r => r !== null) as OpenInterestStats[]);
+        
+        // Small delay between batches to avoid rate limiting
+        if (i + batchSize < symbols.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      log.debug(`Fetched OI stats for ${results.length} symbols`);
+      return results;
+      
+    } catch (error) {
+      log.error('Failed to get all open interest stats', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get open interest for a symbol
    */
   async getOpenInterest(symbol: string): Promise<OpenInterest> {

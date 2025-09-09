@@ -18,10 +18,20 @@ export interface FundingRanking {
   timestamp?: string;
 }
 
+export interface OIRanking {
+  id?: number;
+  symbol: string;
+  position: number;
+  oi_change_percent: number;
+  oi_value: number;
+  period: '1h' | '4h' | '1d';
+  timestamp?: string;
+}
+
 export interface TriggerAlertSetting {
   id?: number;
   user_id: string;
-  alert_type: 'gainers' | 'funding';
+  alert_type: 'gainers' | 'funding' | 'oi1h' | 'oi4h' | 'oi24h';
   is_enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -61,6 +71,16 @@ export class TriggerAlertModel {
           timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS oi_rankings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          symbol TEXT NOT NULL,
+          position INTEGER NOT NULL,
+          oi_change_percent REAL NOT NULL,
+          oi_value REAL NOT NULL,
+          period TEXT NOT NULL,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS trigger_alert_settings (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id TEXT NOT NULL,
@@ -73,6 +93,8 @@ export class TriggerAlertModel {
 
         CREATE INDEX IF NOT EXISTS idx_gainers_timestamp ON gainers_rankings(timestamp);
         CREATE INDEX IF NOT EXISTS idx_funding_timestamp ON funding_rankings(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_oi_timestamp ON oi_rankings(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_oi_period ON oi_rankings(period, timestamp);
         CREATE INDEX IF NOT EXISTS idx_trigger_settings_user ON trigger_alert_settings(user_id, alert_type);
       `);
       
@@ -132,6 +154,30 @@ export class TriggerAlertModel {
   }
 
   /**
+   * Save OI rankings
+   */
+  static async saveOIRankings(rankings: OIRanking[]): Promise<void> {
+    const db = await getDatabase();
+    const stmt = await db.prepare(`
+      INSERT INTO oi_rankings (symbol, position, oi_change_percent, oi_value, period) 
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    try {
+      for (const ranking of rankings) {
+        await stmt.run(ranking.symbol, ranking.position, ranking.oi_change_percent, ranking.oi_value, ranking.period);
+      }
+      
+      log.debug(`Saved ${rankings.length} OI rankings for period ${rankings[0]?.period}`);
+    } catch (error) {
+      log.error('Failed to save OI rankings', error);
+      throw error;
+    } finally {
+      await stmt.finalize();
+    }
+  }
+
+  /**
    * Get latest gainers rankings (top 10)
    */
   static async getLatestGainersRankings(): Promise<GainersRanking[]> {
@@ -167,6 +213,76 @@ export class TriggerAlertModel {
       return await stmt.all() as FundingRanking[];
     } catch (error) {
       log.error('Failed to get latest funding rankings', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get latest OI rankings (top 10) for a specific period
+   */
+  static async getLatestOIRankings(period: '1h' | '4h' | '1d'): Promise<OIRanking[]> {
+    try {
+      const db = await getDatabase();
+      const stmt = await db.prepare(`
+        SELECT * FROM oi_rankings 
+        WHERE period = ? AND timestamp = (
+          SELECT MAX(timestamp) FROM oi_rankings WHERE period = ?
+        )
+        ORDER BY position ASC
+        LIMIT 10
+      `);
+      
+      return await stmt.all(period, period) as OIRanking[];
+    } catch (error) {
+      log.error(`Failed to get latest OI rankings for ${period}`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get previous OI rankings for comparison
+   */
+  static async getPreviousOIRankings(period: '1h' | '4h' | '1d'): Promise<OIRanking[]> {
+    try {
+      const db = await getDatabase();
+      
+      // First check if we have enough data (at least 2 distinct timestamps)
+      const countStmt = await db.prepare(`
+        SELECT COUNT(DISTINCT timestamp) as distinct_timestamps 
+        FROM oi_rankings WHERE period = ?
+      `);
+      const countResult = await countStmt.get(period) as any;
+      await countStmt.finalize();
+      
+      if (countResult.distinct_timestamps < 2) {
+        log.debug(`Not enough historical data for OI ${period} comparison`);
+        return [];
+      }
+      
+      // Use row-based approach instead of timestamp comparison
+      const stmt = await db.prepare(`
+        WITH ranked_timestamps AS (
+          SELECT DISTINCT timestamp,
+                 ROW_NUMBER() OVER (ORDER BY timestamp DESC) as rn
+          FROM oi_rankings WHERE period = ?
+        ),
+        second_latest_timestamp AS (
+          SELECT timestamp FROM ranked_timestamps WHERE rn = 2
+        )
+        SELECT or.* FROM oi_rankings or
+        JOIN second_latest_timestamp slt ON or.timestamp = slt.timestamp
+        WHERE or.period = ?
+        ORDER BY or.position ASC
+        LIMIT 10
+      `);
+      
+      const result = await stmt.all(period, period) as OIRanking[];
+      await stmt.finalize();
+      
+      log.debug(`Retrieved ${result.length} previous OI ${period} rankings`);
+      return result;
+    } catch (error) {
+      log.error(`Failed to get previous OI ${period} rankings`, error);
       return [];
     }
   }
@@ -268,7 +384,7 @@ export class TriggerAlertModel {
   /**
    * Enable/disable trigger alert for user
    */
-  static async setTriggerAlert(userId: string, alertType: 'gainers' | 'funding', enabled: boolean): Promise<void> {
+  static async setTriggerAlert(userId: string, alertType: 'gainers' | 'funding' | 'oi1h' | 'oi4h' | 'oi24h', enabled: boolean): Promise<void> {
     try {
       const db = await getDatabase();
       const stmt = await db.prepare(`
@@ -312,7 +428,7 @@ export class TriggerAlertModel {
   /**
    * Get all users with enabled trigger alerts
    */
-  static async getEnabledUsers(alertType: 'gainers' | 'funding'): Promise<string[]> {
+  static async getEnabledUsers(alertType: 'gainers' | 'funding' | 'oi1h' | 'oi4h' | 'oi24h'): Promise<string[]> {
     try {
       const db = await getDatabase();
       const stmt = await db.prepare(`
@@ -344,13 +460,20 @@ export class TriggerAlertModel {
         WHERE timestamp < datetime('now', '-7 days')
       `);
       
+      const stmt3 = await db.prepare(`
+        DELETE FROM oi_rankings 
+        WHERE timestamp < datetime('now', '-7 days')
+      `);
+      
       const deleted1 = await stmt1.run();
       const deleted2 = await stmt2.run();
+      const deleted3 = await stmt3.run();
       
       await stmt1.finalize();
       await stmt2.finalize();
+      await stmt3.finalize();
       
-      log.info(`Cleaned old data: ${deleted1.changes} gainers records, ${deleted2.changes} funding records`);
+      log.info(`Cleaned old data: ${deleted1.changes} gainers records, ${deleted2.changes} funding records, ${deleted3.changes} OI records`);
     } catch (error) {
       log.error('Failed to clean old data', error);
     }

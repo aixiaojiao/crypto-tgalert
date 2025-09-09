@@ -8,6 +8,9 @@ import { PriceAlertModel } from './models/PriceAlert';
 import { triggerAlertService } from './services/triggerAlerts';
 import { TriggerAlertModel } from './models/TriggerAlert';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
+import { tieredDataManager } from './services/tieredDataManager';
+import { volumeClassifier } from './utils/volumeClassifier';
+import { rankingAnalyzer } from './services/rankingAnalyzer';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -107,6 +110,12 @@ export class TelegramBot {
 /stop_gainers_push - 停止涨幅榜推送
 /start_funding_push - 启动负费率榜推送
 /stop_funding_push - 停止负费率榜推送
+/start_oi1h_push - 启动OI 1小时推送
+/stop_oi1h_push - 停止OI 1小时推送
+/start_oi4h_push - 启动OI 4小时推送
+/stop_oi4h_push - 停止OI 4小时推送
+/start_oi24h_push - 启动OI 24小时推送
+/stop_oi24h_push - 停止OI 24小时推送
 /push_status - 查看推送状态
 
 🐦 <b>Twitter监控:</b>
@@ -170,16 +179,16 @@ export class TelegramBot {
           actualSymbol = symbol + suffix;
           
           try {
-            // 首先尝试合约
-            [price, stats, fundingRate, openInterest] = await Promise.all([
-              this.binanceClient.getFuturesPrice(actualSymbol),
-              this.binanceClient.getFutures24hrStats(actualSymbol),
-              this.binanceClient.getFundingRate(actualSymbol),
-              this.binanceClient.getOpenInterest(actualSymbol)
-            ]);
-            isContract = true;
-            found = true;
-            break;
+            // 首先尝试合约 (using tiered data manager for optimization)
+            stats = await tieredDataManager.getTicker24hr(actualSymbol);
+            if (stats) {
+              price = parseFloat(stats.lastPrice);
+              fundingRate = await tieredDataManager.getFundingRate(actualSymbol);
+              openInterest = await this.binanceClient.getOpenInterest(actualSymbol);
+              isContract = true;
+              found = true;
+              break;
+            }
           } catch (futuresError) {
             // 如果合约失败，尝试现货
             try {
@@ -277,15 +286,62 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
+    // 缓存优化状态命令
+    this.bot.command('cache_status', async (ctx) => {
+      try {
+        const cacheStatus = tieredDataManager.getCacheStatus();
+        const refreshStats = tieredDataManager.getRefreshStats();
+        const volumeStats = volumeClassifier.getVolumeStats();
+        
+        const statusMessage = `
+📊 *缓存优化系统状态*
+
+🔥 *热榜代币 (强制实时更新):*
+数量: ${cacheStatus.hotRankingSymbols.count}
+代币: ${cacheStatus.hotRankingSymbols.symbols.join(', ')}
+
+📈 *数据缓存状态:*
+• Ticker数据: ${cacheStatus.tickers.total} (高:${cacheStatus.tickers.byTier.high} 中:${cacheStatus.tickers.byTier.medium} 低:${cacheStatus.tickers.byTier.low})
+• 资金费率: ${cacheStatus.funding.total} (高:${cacheStatus.funding.byTier.high} 中:${cacheStatus.funding.byTier.medium} 低:${cacheStatus.funding.byTier.low})
+• 持仓量: ${cacheStatus.openInterest.total} (高:${cacheStatus.openInterest.byTier.high} 中:${cacheStatus.openInterest.byTier.medium} 低:${cacheStatus.openInterest.byTier.low})
+
+💎 *交易量分层统计:*
+• 高交易量 (>50M): ${volumeStats.high.count}个 (30秒更新)
+• 中交易量 (10-50M): ${volumeStats.medium.count}个 (5分钟更新)  
+• 低交易量 (<10M): ${volumeStats.low.count}个 (4小时更新)
+• 总代币数: ${volumeStats.totalSymbols}个
+
+⚡ *API调用优化:*
+• 总API调用: ${refreshStats.totalApiCalls}
+• 高频更新: ${refreshStats.high.updated}/${refreshStats.high.requested} (跳过:${refreshStats.high.skipped})
+• 中频更新: ${refreshStats.medium.updated}/${refreshStats.medium.requested} (跳过:${refreshStats.medium.skipped})
+• 低频更新: ${refreshStats.low.updated}/${refreshStats.low.requested} (跳过:${refreshStats.low.skipped})
+
+⏰ 更新时间: ${new Date().toLocaleString('zh-CN')}
+        `;
+        
+        await ctx.replyWithMarkdown(statusMessage);
+      } catch (error) {
+        console.error('Cache status error:', error);
+        await ctx.reply('❌ 获取缓存状态时发生错误');
+      }
+    });
+
     // 24小时涨幅榜
     this.bot.command('gainers', async (ctx) => {
       try {
         await ctx.reply('📊 正在查询24小时涨幅榜...');
 
-        const allStats = await this.binanceClient.getFutures24hrStatsMultiple();
+        // 🔥 Trigger real-time ranking analysis to capture sudden movers
+        await rankingAnalyzer.analyzeRankings('user-query');
+
+        // Use tiered data manager for optimized data fetching
+        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
+        const validSymbols = filterTradingPairs(allSymbols);
+        const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
+        const allStats = Array.from(allStatsMap.values());
         
         // 过滤交易对并按涨幅排序，取前10
-        const validSymbols = filterTradingPairs(allStats.map(s => s.symbol));
         const gainers = allStats
           .filter(stat => {
             return parseFloat(stat.priceChangePercent) > 0 && 
@@ -325,10 +381,16 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       try {
         await ctx.reply('📉 正在查询24小时跌幅榜...');
 
-        const allStats = await this.binanceClient.getFutures24hrStatsMultiple();
+        // 🔥 Trigger real-time ranking analysis to capture sudden movers
+        await rankingAnalyzer.analyzeRankings('user-query');
+
+        // Use tiered data manager for optimized data fetching
+        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
+        const validSymbols = filterTradingPairs(allSymbols);
+        const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
+        const allStats = Array.from(allStatsMap.values());
         
         // 过滤交易对并按跌幅排序，取前10
-        const validSymbols = filterTradingPairs(allStats.map(s => s.symbol));
         const losers = allStats
           .filter(stat => {
             return parseFloat(stat.priceChangePercent) < 0 && 
@@ -368,6 +430,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       try {
         console.log('🚀 Starting funding rates query...');
         await ctx.reply('⚡ 正在查询资金费率排行榜...');
+
+        // 🔥 Trigger real-time ranking analysis to capture sudden movers
+        await rankingAnalyzer.analyzeRankings('user-query');
 
         console.log('📡 Calling getAllFundingRates...');
         const fundingRates = await this.binanceClient.getAllFundingRates();
@@ -942,6 +1007,165 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
+    // 启动OI 1h推送
+    this.bot.command('start_oi1h_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Enable OI 1h alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'oi1h', true);
+        
+        // Start OI 1h monitoring if not already running
+        await triggerAlertService.startOI1hMonitoring();
+        
+        const message = `✅ *OI 1小时推送已启动*
+
+📊 监控设置:
+• 检查间隔: 3分钟
+• 推送条件: 新币进入前10或持仓量显著变化 (>5%)
+• 状态: 已启用
+
+💡 您将在OI 1小时榜发生重要变化时收到推送通知
+
+🛑 使用 /stop_oi1h_push 停止推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Start OI 1h push error:', error);
+        await ctx.reply('❌ 启动OI 1小时推送失败，请稍后重试');
+      }
+    });
+
+    // 停止OI 1h推送
+    this.bot.command('stop_oi1h_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Disable OI 1h alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'oi1h', false);
+        
+        const message = `⏹️ *OI 1小时推送已停止*
+
+📊 推送状态: 已关闭
+⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+
+💡 使用 /start_oi1h_push 重新启动推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Stop OI 1h push error:', error);
+        await ctx.reply('❌ 停止OI 1小时推送失败，请稍后重试');
+      }
+    });
+
+    // 启动OI 4h推送
+    this.bot.command('start_oi4h_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Enable OI 4h alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'oi4h', true);
+        
+        // Start OI 4h monitoring if not already running
+        await triggerAlertService.startOI4hMonitoring();
+        
+        const message = `✅ *OI 4小时推送已启动*
+
+📊 监控设置:
+• 检查间隔: 15分钟
+• 推送条件: 新币进入前10或持仓量显著变化 (>5%)
+• 状态: 已启用
+
+💡 您将在OI 4小时榜发生重要变化时收到推送通知
+
+🛑 使用 /stop_oi4h_push 停止推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Start OI 4h push error:', error);
+        await ctx.reply('❌ 启动OI 4小时推送失败，请稍后重试');
+      }
+    });
+
+    // 停止OI 4h推送
+    this.bot.command('stop_oi4h_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Disable OI 4h alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'oi4h', false);
+        
+        const message = `⏹️ *OI 4小时推送已停止*
+
+📊 推送状态: 已关闭
+⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+
+💡 使用 /start_oi4h_push 重新启动推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Stop OI 4h push error:', error);
+        await ctx.reply('❌ 停止OI 4小时推送失败，请稍后重试');
+      }
+    });
+
+    // 启动OI 24h推送
+    this.bot.command('start_oi24h_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Enable OI 24h alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'oi24h', true);
+        
+        // Start OI 24h monitoring if not already running
+        await triggerAlertService.startOI24hMonitoring();
+        
+        const message = `✅ *OI 24小时推送已启动*
+
+📊 监控设置:
+• 检查间隔: 30分钟
+• 推送条件: 新币进入前10或持仓量显著变化 (>5%)
+• 状态: 已启用
+
+💡 您将在OI 24小时榜发生重要变化时收到推送通知
+
+🛑 使用 /stop_oi24h_push 停止推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Start OI 24h push error:', error);
+        await ctx.reply('❌ 启动OI 24小时推送失败，请稍后重试');
+      }
+    });
+
+    // 停止OI 24h推送
+    this.bot.command('stop_oi24h_push', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        
+        // Disable OI 24h alerts for user
+        await TriggerAlertModel.setTriggerAlert(userId, 'oi24h', false);
+        
+        const message = `⏹️ *OI 24小时推送已停止*
+
+📊 推送状态: 已关闭
+⏰ 停止时间: ${new Date().toLocaleString('zh-CN')}
+
+💡 使用 /start_oi24h_push 重新启动推送`;
+
+        await ctx.replyWithMarkdown(message);
+        
+      } catch (error) {
+        console.error('Stop OI 24h push error:', error);
+        await ctx.reply('❌ 停止OI 24小时推送失败，请稍后重试');
+      }
+    });
+
     // 查看推送状态
     this.bot.command('push_status', async (ctx) => {
       try {
@@ -1010,6 +1234,12 @@ ${riskIcon} 币种: ${symbol}
       { command: 'stop_gainers_push', description: '停止涨幅榜推送通知' },
       { command: 'start_funding_push', description: '启动负费率榜推送通知' },
       { command: 'stop_funding_push', description: '停止负费率榜推送通知' },
+      { command: 'start_oi1h_push', description: '启动OI 1小时推送通知' },
+      { command: 'stop_oi1h_push', description: '停止OI 1小时推送通知' },
+      { command: 'start_oi4h_push', description: '启动OI 4小时推送通知' },
+      { command: 'stop_oi4h_push', description: '停止OI 4小时推送通知' },
+      { command: 'start_oi24h_push', description: '启动OI 24小时推送通知' },
+      { command: 'stop_oi24h_push', description: '停止OI 24小时推送通知' },
       { command: 'push_status', description: '查看推送通知状态' },
       { command: 'status', description: '查看系统状态' },
       { command: 'help', description: '查看完整帮助文档' }
