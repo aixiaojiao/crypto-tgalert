@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  crypto-tgalert:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: crypto-tgalert
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    volumes:
+      # Persist SQLite database and logs
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - crypto-tgalert-network
+    # Optional: expose port for monitoring/health checks
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Resource limits to prevent memory leaks
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+networks:
+  crypto-tgalert-network:
+    driver: bridge
+
+volumes:
+  data:
+  logs:
