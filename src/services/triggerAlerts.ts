@@ -2,7 +2,7 @@ import { BinanceClient } from './binance';
 import { TriggerAlertModel, GainersRanking, FundingRanking, OIRanking, RankingChange } from '../models/TriggerAlert';
 import { TelegramBot } from '../bot';
 import { log } from '../utils/logger';
-import { getTokenRiskLevel, getRiskIcon, filterTradingPairs } from '../config/tokenLists';
+import { getTokenRiskLevel, getRiskIcon, filterTradingPairs, isRiskyToken } from '../config/tokenLists';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
 
 export interface TriggerAlertStats {
@@ -39,6 +39,13 @@ export class TriggerAlertService {
   private oi4hEnabled: boolean = false;
   private oi24hEnabled: boolean = false;
   
+  // Concurrency control flags to prevent race conditions
+  private gainersCheckInProgress: boolean = false;
+  private fundingCheckInProgress: boolean = false;
+  private oi1hCheckInProgress: boolean = false;
+  private oi4hCheckInProgress: boolean = false;
+  private oi24hCheckInProgress: boolean = false;
+  
   private readonly GAINERS_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
   private readonly FUNDING_CHECK_INTERVAL = 10 * 60 * 1000; // 10 minutes
   private readonly OI1H_CHECK_INTERVAL = 3 * 60 * 1000; // 3 minutes
@@ -50,6 +57,36 @@ export class TriggerAlertService {
   private oi1hLastCheck: Date | null = null;
   private oi4hLastCheck: Date | null = null;
   private oi24hLastCheck: Date | null = null;
+
+  /**
+   * 检查推送是否应该被触发（排除风险代币引起的推送）
+   * @param significantChanges 重要变化列表
+   * @param majorMoveThreshold 主要变动阈值
+   * @returns 是否应该触发推送
+   */
+  private shouldTriggerPush(significantChanges: RankingChange[], majorMoveThreshold: number): boolean {
+    // 找出所有触发推送的变化（新进入 + 主要变动）
+    const triggeringChanges = significantChanges.filter(change => 
+      change.change === 'new' || 
+      (change.changeValue && Math.abs(change.changeValue) >= majorMoveThreshold)
+    );
+    
+    if (triggeringChanges.length === 0) return false;
+    
+    // 检查触发变化中有多少来自风险代币
+    const riskyTriggers = triggeringChanges.filter(change => isRiskyToken(change.symbol));
+    
+    // 如果所有触发都来自风险代币，则不推送
+    if (riskyTriggers.length === triggeringChanges.length) {
+      log.debug(`Push blocked: all ${triggeringChanges.length} triggers are from risky tokens: ${riskyTriggers.map(c => c.symbol).join(', ')}`);
+      return false;
+    }
+    
+    // 有非风险代币触发，正常推送
+    const safeTriggers = triggeringChanges.filter(change => !isRiskyToken(change.symbol));
+    log.debug(`Push allowed: ${safeTriggers.length} safe triggers, ${riskyTriggers.length} risky triggers`);
+    return true;
+  }
 
   constructor(binanceClient?: BinanceClient, telegramBot?: TelegramBot) {
     this.binance = binanceClient || new BinanceClient();
@@ -315,6 +352,14 @@ export class TriggerAlertService {
    * Check gainers and send notifications if needed
    */
   private async checkGainers(): Promise<void> {
+    // Prevent concurrent execution to avoid race conditions
+    if (this.gainersCheckInProgress) {
+      log.debug('Gainers check already in progress, skipping...');
+      return;
+    }
+    
+    this.gainersCheckInProgress = true;
+    
     try {
       log.debug('Checking gainers for changes...');
       
@@ -381,11 +426,19 @@ export class TriggerAlertService {
         
         const hasActualNewSymbols = validNewSymbols.some(change => change.change === 'new');
         
-        if (hasActualNewSymbols || hasMajorMoves) {
+        // 检查是否应该触发推送（排除风险代币触发的推送）
+        const shouldPush = (hasActualNewSymbols || hasMajorMoves) && 
+                          this.shouldTriggerPush(validNewSymbols, 5); // 主要变动阈值为5
+        
+        if (shouldPush) {
           await this.sendGainersNotification(currentRankings, validNewSymbols);
           log.info(`Gainers notification sent: ${hasActualNewSymbols ? 'new symbols' : ''} ${hasMajorMoves ? 'major moves' : ''}`);
         } else {
-          log.debug('Gainers changes detected but not significant enough for notification');
+          if (hasActualNewSymbols || hasMajorMoves) {
+            log.info('Gainers push blocked: all triggers from risky tokens');
+          } else {
+            log.debug('Gainers changes detected but not significant enough for notification');
+          }
         }
       }
 
@@ -396,6 +449,8 @@ export class TriggerAlertService {
       
     } catch (error) {
       log.error('Failed to check gainers', error);
+    } finally {
+      this.gainersCheckInProgress = false;
     }
   }
 
@@ -403,6 +458,17 @@ export class TriggerAlertService {
    * Check OI and send notifications if needed
    */
   private async checkOI(period: '1h' | '4h' | '1d'): Promise<void> {
+    // Prevent concurrent execution to avoid race conditions
+    const checkInProgressFlag = period === '1h' ? 'oi1hCheckInProgress' :
+                                period === '4h' ? 'oi4hCheckInProgress' : 'oi24hCheckInProgress';
+    
+    if (this[checkInProgressFlag]) {
+      log.debug(`OI ${period} check already in progress, skipping...`);
+      return;
+    }
+    
+    this[checkInProgressFlag] = true;
+    
     try {
       log.debug(`Checking OI ${period} for changes...`);
       
@@ -448,14 +514,19 @@ export class TriggerAlertService {
         }
       }
       
-      // Filter and sort by significant changes
+      // Sort by absolute change percentage to get top movers (for display)
+      const allOIChanges = oiWithChanges
+        .sort((a, b) => Math.abs(b.oiChangePercent) - Math.abs(a.oiChangePercent))
+        .slice(0, 10);
+
+      // Also keep track of significant changes (for push decision)
       const significantOIChanges = oiWithChanges
         .filter(stat => Math.abs(stat.oiChangePercent) > 5) // Only significant changes
         .sort((a, b) => Math.abs(b.oiChangePercent) - Math.abs(a.oiChangePercent))
         .slice(0, 10);
 
-      // Convert to rankings format
-      const currentRankings: OIRanking[] = significantOIChanges.map((stat, index) => ({
+      // Convert to rankings format using ALL top 10, not just significant changes
+      const currentRankings: OIRanking[] = allOIChanges.map((stat, index) => ({
         symbol: stat.symbol,
         position: index + 1,
         oi_change_percent: stat.oiChangePercent,
@@ -474,21 +545,25 @@ export class TriggerAlertService {
       log.debug(`Current symbols: ${currentRankings.map(r => r.symbol).join(',')}`);
       log.debug(`Previous symbols: ${previousRankings.map(r => r.symbol).join(',')}`);
       log.debug(`Changes: ${changes.map(c => `${c.symbol}:${c.change}`).join(', ')}`);
+      log.debug(`Significant OI movements (>5%): ${significantOIChanges.length} symbols`);
       
-      // Check if there are significant changes
+      // Check if there are significant changes (ranking changes OR significant OI movements)
       const significantChanges = changes.filter(change => 
         change.change === 'new' || 
         (change.change === 'up' && (change.changeValue || 0) >= 2) ||
         (change.change === 'down' && (change.changeValue || 0) >= 2)
       );
+      
+      // Additional check: ensure we have symbols with significant OI changes (>5%)
+      const hasSignificantOIMovements = significantOIChanges.length > 0;
 
       // Update last check time
       if (period === '1h') this.oi1hLastCheck = new Date();
       else if (period === '4h') this.oi4hLastCheck = new Date();
       else if (period === '1d') this.oi24hLastCheck = new Date();
 
-      // Send notifications if there are significant changes
-      if (significantChanges.length > 0 && previousRankings.length > 0) {
+      // Send notifications if there are significant changes AND significant OI movements
+      if (significantChanges.length > 0 && previousRankings.length > 0 && hasSignificantOIMovements) {
         // Additional filter: only send if there are truly new symbols or major ranking changes
         const hasMajorMoves = significantChanges.some(change => 
           (change.change === 'up' && (change.changeValue || 0) >= 3) ||
@@ -511,11 +586,19 @@ export class TriggerAlertService {
         
         const hasActualNewSymbols = validNewSymbols.some(change => change.change === 'new');
         
-        if (hasActualNewSymbols || hasMajorMoves) {
+        // 检查是否应该触发推送（排除风险代币触发的推送）
+        const shouldPush = (hasActualNewSymbols || hasMajorMoves) && 
+                          this.shouldTriggerPush(validNewSymbols, 3); // 主要变动阈值为3
+        
+        if (shouldPush) {
           await this.sendOINotification(currentRankings, validNewSymbols, period);
           log.info(`OI ${period} notification sent: ${hasActualNewSymbols ? 'new symbols' : ''} ${hasMajorMoves ? 'major moves' : ''}`);
         } else {
-          log.debug(`OI ${period} changes detected but not significant enough for notification`);
+          if (hasActualNewSymbols || hasMajorMoves) {
+            log.info(`OI ${period} push blocked: all triggers from risky tokens`);
+          } else {
+            log.debug(`OI ${period} changes detected but not significant enough for notification`);
+          }
         }
       }
 
@@ -526,6 +609,8 @@ export class TriggerAlertService {
       
     } catch (error) {
       log.error(`Failed to check OI ${period}`, error);
+    } finally {
+      this[checkInProgressFlag] = false;
     }
   }
 
@@ -533,6 +618,14 @@ export class TriggerAlertService {
    * Check funding rates and send notifications if needed
    */
   private async checkFunding(): Promise<void> {
+    // Prevent concurrent execution to avoid race conditions
+    if (this.fundingCheckInProgress) {
+      log.debug('Funding check already in progress, skipping...');
+      return;
+    }
+    
+    this.fundingCheckInProgress = true;
+    
     try {
       log.debug('Checking funding rates for changes...');
       
@@ -610,11 +703,19 @@ export class TriggerAlertService {
         
         const hasActualNewSymbols = validNewSymbols.some(change => change.change === 'new');
         
-        if (hasActualNewSymbols || hasMajorMoves) {
+        // 检查是否应该触发推送（排除风险代币触发的推送）
+        const shouldPush = (hasActualNewSymbols || hasMajorMoves) && 
+                          this.shouldTriggerPush(validNewSymbols, 4); // 主要变动阈值为4
+        
+        if (shouldPush) {
           await this.sendFundingNotification(currentRankings, validNewSymbols);
           log.info(`Funding notification sent: ${hasActualNewSymbols ? 'new symbols' : ''} ${hasMajorMoves ? 'major moves' : ''}`);
         } else {
-          log.debug('Funding changes detected but not significant enough for notification');
+          if (hasActualNewSymbols || hasMajorMoves) {
+            log.info('Funding push blocked: all triggers from risky tokens');
+          } else {
+            log.debug('Funding changes detected but not significant enough for notification');
+          }
         }
       }
 
@@ -625,6 +726,8 @@ export class TriggerAlertService {
       
     } catch (error) {
       log.error('Failed to check funding rates', error);
+    } finally {
+      this.fundingCheckInProgress = false;
     }
   }
 

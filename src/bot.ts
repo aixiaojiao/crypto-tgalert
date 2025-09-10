@@ -489,6 +489,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         // Get prices for all symbols
         const pricePromises = sortedRates.map(async (rate, index) => {
           const symbol = rate.symbol.replace('USDT', '');
+          const riskLevel = getTokenRiskLevel(rate.symbol);
+          const riskIcon = getRiskIcon(riskLevel);
           const fundingPercent = (parseFloat(rate.fundingRate) * 100).toFixed(4);
           const icon = parseFloat(rate.fundingRate) < 0 ? '🔴' : '🟢';
           
@@ -503,7 +505,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             priceText = '';
           }
           
-          return `${index + 1}. ${icon} **${symbol}** ${fundingPercent}%${priceText}\n`;
+          return `${index + 1}. ${icon} ${riskIcon}**${symbol}** ${fundingPercent}%${priceText}\n`;
         });
 
         const formattedEntries = await Promise.all(pricePromises);

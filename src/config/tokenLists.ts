@@ -10,12 +10,12 @@ export const DELISTED_TOKENS = [
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 'TA' , 'BID' , 
+  'LUNA', 'LUNC', 'USTC', 'TA' , 'BID' , 'HIFI' , 'BSW' , 
 ];
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'YALA', 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' , 'AIO'
+  'YALA', 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' , 'AIO', 'AVNT', 'SAPIEN'
 ];
 
 
@@ -69,4 +69,13 @@ export function filterTradingPairs(symbols: string[]): string[] {
     
     return true;
   });
+}
+
+/**
+ * 检查代币是否为风险代币（黑名单或黄名单）
+ * 用于推送触发过滤逻辑
+ */
+export function isRiskyToken(symbol: string): boolean {
+  const riskLevel = getTokenRiskLevel(symbol);
+  return riskLevel === 'blacklist' || riskLevel === 'yellowlist';
 }

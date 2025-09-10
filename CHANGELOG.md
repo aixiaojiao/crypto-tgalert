@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.7] - 2025-09-11
+
+### 🛠️ Critical Bug Fixes
+
+#### Trigger Alert System Race Condition
+- **Fixed**: Consecutive gainers pushes incorrectly marking existing tokens as "NEW"
+  - Root cause: Race conditions between concurrent check methods (gainers, funding, OI)
+  - Solution: Added concurrency control flags (`checkInProgress` booleans) in `triggerAlerts.ts:43-47`
+  - Impact: Eliminated false NEW tag notifications and improved push accuracy
+
+#### Risk Icon Missing in Funding Rankings
+- **Fixed**: Funding rate rankings not displaying risk level indicators
+  - Missing: Risk icons for blacklist/yellowlist tokens in `/funding` command
+  - Solution: Added `getTokenRiskLevel()` and `getRiskIcon()` calls in `bot.ts:492-493,508`
+  - Impact: Funding rankings now correctly show ⚠️ and ⛔ risk indicators
+
+#### Incomplete Startup Message
+- **Fixed**: Startup notification missing comprehensive functionality overview
+  - Issue: New users couldn't discover all available bot features
+  - Solution: Updated startup message in `app.ts:74-88` with complete feature list
+  - Impact: Better user onboarding with clear feature visibility
+
+#### OI Rankings Display Issue
+- **Fixed**: OI push notifications only showing new entries instead of full TOP10 rankings
+  - Problem: Only displaying tokens with >5% change rather than complete top 10 list
+  - Solution: Separated display logic from trigger logic in `triggerAlerts.ts:517-529`
+  - Impact: OI pushes now show complete rankings while maintaining trigger precision
+
+### ✨ Enhanced Features
+
+#### Precision Push Filtering System
+- **New**: Advanced filtering that blocks pushes only when ALL triggers come from risky tokens
+  - Implementation: `shouldTriggerPush()` method in `triggerAlerts.ts:67-89`
+  - Logic: Allows pushes if ANY trigger comes from safe tokens, still displays yellowlist tokens in rankings
+  - Benefit: Reduces spam while maintaining market visibility for important moves
+
+### 🔧 Technical Improvements
+
+#### Concurrency Control
+- **Enhanced**: Proper async operation management with try-finally cleanup
+- **Enhanced**: Race condition prevention across all trigger alert services
+- **Enhanced**: Thread-safe push notification system
+
+#### Error Handling
+- **Enhanced**: Better Markdown parsing error prevention in startup notifications
+- **Enhanced**: Improved error logging for trigger alert comparison logic
+- **Enhanced**: Graceful degradation when individual services fail
+
+### 📊 System Stability
+- **Verified**: All push services (gainers, funding, OI) working without false notifications
+- **Verified**: Risk management system properly integrated across all commands
+- **Verified**: Startup sequence completes successfully with all features enabled
+- **Performance**: Maintained existing API efficiency while fixing critical bugs
+
+### 🎯 User Experience
+- **Improved**: More accurate push notifications with fewer false alerts
+- **Improved**: Complete feature visibility from bot startup
+- **Improved**: Consistent risk level display across all trading data
+- **Improved**: Full OI ranking visibility in push notifications
+
+---
+
 ## [2.0.6] - 2025-09-10
 
 ### 🔧 Critical Bug Fixes
