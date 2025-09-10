@@ -6,8 +6,10 @@
 set -e  # 遇到错误立即退出
 
 # 配置变量
-CRON_USER="ubuntu"  # 云服务器用户名
-DEPLOY_CHECK_SCRIPT="/home/ubuntu/crypto-tgalert/scripts/check-deployment.sh"
+CRON_USER=$(whoami)  # 当前用户名
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+DEPLOY_CHECK_SCRIPT="$PROJECT_DIR/scripts/check-deployment.sh"
 CRON_TIME="0 20 * * *"  # UTC时间晚上8点 = UTC+8凌晨4点
 
 # 日志函数
@@ -51,7 +53,7 @@ fi
 
 # 添加新的定时任务
 echo "# crypto-tgalert 自动部署检查 - 每天UTC+8凌晨4点执行" >> "$TEMP_CRON_FILE"
-echo "$CRON_TIME $DEPLOY_CHECK_SCRIPT >> /home/ubuntu/crypto-tgalert/logs/cron.log 2>&1" >> "$TEMP_CRON_FILE"
+echo "$CRON_TIME $DEPLOY_CHECK_SCRIPT >> $PROJECT_DIR/logs/cron.log 2>&1" >> "$TEMP_CRON_FILE"
 
 # 应用新的crontab
 crontab "$TEMP_CRON_FILE"
@@ -66,17 +68,17 @@ crontab -l | grep -A1 -B1 "crypto-tgalert"
 log "📋 任务信息:"
 log "   执行时间: 每天UTC+8凌晨4点 (UTC 20:00)"
 log "   检查脚本: $DEPLOY_CHECK_SCRIPT"
-log "   日志文件: /home/ubuntu/crypto-tgalert/logs/cron.log"
+log "   日志文件: $PROJECT_DIR/logs/cron.log"
 
 log "🎉 自动部署系统配置完成!"
 log ""
 log "📖 使用说明:"
 log "1. 要触发部署，请创建形如 'deploy-v2.0.8' 的Git标签并推送到GitHub"
 log "2. 系统将在每天凌晨4点自动检查新标签并部署"
-log "3. 可以查看日志: tail -f /home/ubuntu/crypto-tgalert/logs/deployment.log"
+log "3. 可以查看日志: tail -f $PROJECT_DIR/logs/deployment.log"
 log "4. 手动执行检查: $DEPLOY_CHECK_SCRIPT"
 
 # 创建日志目录
-mkdir -p /home/ubuntu/crypto-tgalert/logs
+mkdir -p "$PROJECT_DIR/logs"
 
 log "✅ 设置完成，系统已准备就绪！"

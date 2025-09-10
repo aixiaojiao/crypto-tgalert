@@ -2,32 +2,28 @@
 
 ## 快速开始
 
-### 云服务器初始化（一次性操作）
+### 云服务器升级（适配已有环境）
 
 ```bash
-# 1. 克隆项目到云服务器
-git clone https://github.com/your-username/crypto-tgalert.git /home/ubuntu/crypto-tgalert
+# 1. 进入现有项目目录并拉取最新代码
 cd /home/ubuntu/crypto-tgalert
+git pull origin master
 
 # 2. 设置Docker部署模式
 touch USE_DOCKER
 
-# 3. 创建环境变量文件
-cat > .env << 'EOF'
-# 必填：Telegram Bot配置
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
+# 3. 检查环境变量（如果已有.env文件则跳过）
+ls -la .env 2>/dev/null || echo "需要创建.env文件，请参考下面的模板"
 
-# 必填：Binance API配置
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_API_SECRET=your_binance_secret_key
-
-# 可选：数据库配置
-DATABASE_PATH=./data/crypto-tgalert.db
-
-# 可选：其他配置
-NODE_ENV=production
-EOF
+# 如果没有.env文件，创建一个（使用你现有的配置值）
+# cat > .env << 'EOF'
+# TELEGRAM_BOT_TOKEN=你现有的token
+# TELEGRAM_CHAT_ID=你现有的chat_id  
+# BINANCE_API_KEY=你现有的api_key
+# BINANCE_API_SECRET=你现有的secret
+# DATABASE_PATH=./data/crypto-tgalert.db
+# NODE_ENV=production
+# EOF
 
 # 4. 设置权限
 chmod +x scripts/*.sh
@@ -36,7 +32,34 @@ mkdir -p logs
 # 5. 安装并启动定时任务
 ./scripts/setup-cron.sh
 
-# 6. 手动测试部署（可选）
+# 6. 立即部署v2.0.7
+./scripts/docker-deploy.sh deploy-v2.0.7
+```
+
+### 全新安装（如果是新服务器）
+
+```bash
+# 1. 克隆项目到云服务器
+git clone https://github.com/aixiaojiao/crypto-tgalert.git /home/ubuntu/crypto-tgalert
+cd /home/ubuntu/crypto-tgalert
+
+# 2. 设置Docker部署模式
+touch USE_DOCKER
+
+# 3. 创建环境变量文件
+cat > .env << 'EOF'
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_CHAT_ID=your_chat_id_here
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_API_SECRET=your_binance_secret_key
+DATABASE_PATH=./data/crypto-tgalert.db
+NODE_ENV=production
+EOF
+
+# 4. 设置权限并部署
+chmod +x scripts/*.sh
+mkdir -p logs
+./scripts/setup-cron.sh
 ./scripts/docker-deploy.sh deploy-v2.0.7
 ```
 
