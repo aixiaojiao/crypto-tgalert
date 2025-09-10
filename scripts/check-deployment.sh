@@ -67,7 +67,14 @@ log "🚀 发现新版本需要部署: $CURRENT_TAG -> $LATEST_DEPLOY_TAG"
 
 # 执行部署
 log "📞 调用部署脚本..."
-if /home/chala/crypto-tgalert/scripts/auto-deploy.sh "$LATEST_DEPLOY_TAG"; then
+# 检查是否使用Docker部署
+if [ -f "/home/ubuntu/crypto-tgalert/USE_DOCKER" ]; then
+    DEPLOY_SCRIPT="/home/ubuntu/crypto-tgalert/scripts/docker-deploy.sh"
+else
+    DEPLOY_SCRIPT="/home/ubuntu/crypto-tgalert/scripts/auto-deploy.sh"
+fi
+
+if $DEPLOY_SCRIPT "$LATEST_DEPLOY_TAG"; then
     # 部署成功，更新当前标签记录
     echo "$LATEST_DEPLOY_TAG" > "$CURRENT_TAG_FILE"
     log "✅ 部署成功: $LATEST_DEPLOY_TAG"
