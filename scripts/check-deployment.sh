@@ -83,3 +83,13 @@ else
 fi
 
 log "🎉 部署检查完成"
+
+# 发送通知（如果有配置）
+if [ -f "$REPO_DIR/scripts/send-notification.sh" ]; then
+    chmod +x "$REPO_DIR/scripts/send-notification.sh"
+    if [ "$CURRENT_TAG" = "$LATEST_DEPLOY_TAG" ]; then
+        "$REPO_DIR/scripts/send-notification.sh" "定时检查完成 - 版本 $LATEST_DEPLOY_TAG 已是最新，无需更新"
+    else
+        "$REPO_DIR/scripts/send-notification.sh" "自动部署成功 - 版本从 $CURRENT_TAG 更新到 $LATEST_DEPLOY_TAG"
+    fi
+fi
