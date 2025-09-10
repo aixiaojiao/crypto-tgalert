@@ -1,230 +1,161 @@
-# 加密货币 Telegram 机器人部署指南
+# 自动化部署指南
 
-## 服务器推荐配置
+## 概述
 
-### 云服务提供商选择
-1. **Digital Ocean** ($5/月) - 推荐新手
-2. **Vultr** ($3.5/月) - 性价比高
-3. **Linode** ($5/月) - 稳定性好
-4. **阿里云/腾讯云** (¥30-50/月) - 国内用户
+本系统提供完全自动化的部署方案，云服务器每天凌晨4点（UTC+8）自动检查GitHub上的部署标签，如有新版本则自动部署并重启服务。
 
-### 最低硬件要求
+## 部署架构
+
+### 核心脚本
+
+1. **check-deployment.sh** - 部署检查脚本
+   - 检查GitHub最新的deploy-*标签
+   - 对比当前部署版本
+   - 发现新版本时调用部署脚本
+
+2. **auto-deploy.sh** - 自动部署脚本
+   - 创建代码备份
+   - 下载最新代码
+   - 安装依赖并构建
+   - 重启服务
+   - 失败时自动回滚
+
+3. **setup-cron.sh** - 定时任务设置脚本
+   - 配置每天凌晨4点的定时检查
+   - 设置日志记录
+
+### 目录结构
+
 ```
-- OS: Ubuntu 20.04/22.04 LTS
-- RAM: 1GB (推荐 2GB)
-- CPU: 1 vCPU
-- 存储: 25GB SSD
-- 网络: 稳定网络连接
+/home/ubuntu/crypto-tgalert/
+├── scripts/
+│   ├── check-deployment.sh      # 部署检查
+│   ├── auto-deploy.sh          # 自动部署
+│   └── setup-cron.sh          # 定时任务设置
+├── logs/
+│   ├── deployment.log          # 部署日志
+│   └── cron.log               # 定时任务日志
+├── .current_deploy_tag         # 当前部署版本记录
+└── /crypto-tgalert-backup      # 备份目录
 ```
 
-## 部署步骤
+## 云服务器初始化
 
-### 1. 服务器初始设置
+### 1. 部署脚本到服务器
+
 ```bash
-# 登录服务器
-ssh root@your-server-ip
+# 上传项目到云服务器
+git clone https://github.com/your-repo/crypto-tgalert.git /home/ubuntu/crypto-tgalert
+cd /home/ubuntu/crypto-tgalert
 
-# 创建新用户（安全考虑）
-adduser ubuntu
-usermod -aG sudo ubuntu
+# 安装依赖
+npm install
 
-# 切换到新用户
-su - ubuntu
-
-# 下载并运行部署脚本
-wget https://raw.githubusercontent.com/your-repo/crypto-tgalert/main/deploy.sh
-chmod +x deploy.sh
-./deploy.sh
+# 设置脚本权限
+chmod +x scripts/*.sh
 ```
 
-### 2. 上传项目文件
-```bash
-# 方法1: 使用git (推荐)
-git clone https://github.com/your-repo/crypto-tgalert.git
-cd crypto-tgalert
+### 2. 设置定时任务
 
-# 方法2: 使用scp上传
-scp -r ./crypto-tgalert ubuntu@your-server-ip:~/
+```bash
+# 运行定时任务设置脚本
+./scripts/setup-cron.sh
 ```
 
-### 3. 配置环境变量
+### 3. 验证设置
+
 ```bash
-# 复制环境配置文件
-cp .env.production .env
+# 查看定时任务
+crontab -l
 
-# 编辑配置文件
-nano .env
-
-# 必需配置项:
-# TELEGRAM_BOT_TOKEN=你的机器人token
-# AUTHORIZED_USER_ID=你的Telegram用户ID
-# BINANCE_API_KEY=币安API密钥
-# BINANCE_SECRET_KEY=币安API秘钥
-```
-
-### 4. 安装依赖并构建
-```bash
-# 安装生产依赖
-npm install --production
-
-# 构建TypeScript
-npm run build
-
-# 验证构建成功
-ls -la dist/
-```
-
-### 5. 使用PM2启动服务
-```bash
-# 启动服务
-npm run pm2:start
-
-# 查看状态
-pm2 status
+# 手动测试部署检查
+./scripts/check-deployment.sh
 
 # 查看日志
-npm run pm2:logs
-
-# 监控面板
-npm run pm2:monitor
+tail -f logs/deployment.log
 ```
 
-### 6. 设置自动启动
+## 发布新版本
+
+### 1. 本地开发完成后
+
 ```bash
-# PM2开机自启
-pm2 startup ubuntu
-pm2 save
+# 提交代码
+git add .
+git commit -m "feat: 新功能实现"
+git push origin master
+
+# 创建部署标签
+git tag deploy-v2.0.8
+git push origin deploy-v2.0.8
 ```
 
-## 运维命令
+### 2. 自动部署流程
 
-### 常用管理命令
+1. **定时检查**：每天凌晨4点，cron执行`check-deployment.sh`
+2. **标签对比**：检查远程最新的`deploy-*`标签
+3. **版本判断**：与当前部署版本对比
+4. **自动部署**：发现新版本时调用`auto-deploy.sh`
+5. **服务重启**：完成后重启PM2服务
+6. **状态验证**：检查服务健康状态
+7. **失败回滚**：部署失败时自动恢复备份
+
+## 监控和维护
+
+### 查看部署状态
+
 ```bash
-# 重启服务
-npm run pm2:restart
+# 查看当前部署版本
+cat /home/ubuntu/crypto-tgalert/.current_deploy_tag
 
-# 停止服务
-npm run pm2:stop
+# 查看服务状态
+pm2 list
 
-# 查看日志
-npm run pm2:logs
+# 查看部署日志
+tail -f /home/ubuntu/crypto-tgalert/logs/deployment.log
 
-# 备份数据
-npm run backup
-
-# 更新应用
-git pull
-npm run build
-npm run pm2:restart
+# 查看定时任务日志
+tail -f /home/ubuntu/crypto-tgalert/logs/cron.log
 ```
 
-### 监控和维护
+### 手动操作
+
 ```bash
-# 系统资源监控
-htop
+# 手动检查部署
+/home/ubuntu/crypto-tgalert/scripts/check-deployment.sh
 
-# 磁盘空间检查
-df -h
+# 手动部署指定版本
+/home/ubuntu/crypto-tgalert/scripts/auto-deploy.sh deploy-v2.0.8
 
-# PM2进程监控
-pm2 monit
-
-# 查看机器人状态
-pm2 logs crypto-tgalert --lines 50
+# 查看可用标签
+cd /home/ubuntu/crypto-tgalert
+git tag -l "deploy-*"
 ```
 
-## 安全配置
+### 故障处理
 
-### 防火墙设置
-```bash
-# 启用防火墙
-sudo ufw enable
+1. **部署失败**：系统自动回滚到上一版本
+2. **服务异常**：检查PM2状态和应用日志
+3. **脚本错误**：查看`/home/ubuntu/crypto-tgalert/logs/deployment.log`
 
-# 允许SSH
-sudo ufw allow ssh
+## 安全考虑
 
-# 允许HTTP/HTTPS (如需要)
-sudo ufw allow 80
-sudo ufw allow 443
+1. **权限控制**：脚本仅ubuntu用户可执行
+2. **备份机制**：每次部署前自动备份
+3. **回滚保护**：失败时自动恢复
+4. **日志记录**：完整的操作记录
+5. **健康检查**：部署后验证服务状态
 
-# 查看状态
-sudo ufw status
-```
+## 标签命名规范
 
-### 定期备份脚本
-```bash
-# 创建备份脚本
-nano ~/backup.sh
+- **格式**：`deploy-v{major}.{minor}.{patch}`
+- **示例**：`deploy-v2.0.8`、`deploy-v2.1.0`
+- **注意**：只有以`deploy-`开头的标签会触发部署
 
-#!/bin/bash
-cd ~/crypto-tgalert
-npm run backup
-# 可选: 上传到云存储
-# rclone copy backups/ remote:crypto-bot-backups/
+## 时间配置
 
-# 设置定时备份
-crontab -e
-# 每天凌晨2点备份
-0 2 * * * /home/ubuntu/backup.sh
-```
+- **检查时间**：每天UTC+8凌晨4点
+- **对应UTC**：每天UTC晚上8点（20:00）
+- **Cron表达式**：`0 20 * * *`
 
-## 故障排除
-
-### 常见问题
-1. **机器人无响应**
-   ```bash
-   pm2 logs crypto-tgalert
-   pm2 restart crypto-tgalert
-   ```
-
-2. **内存不足**
-   ```bash
-   free -h
-   pm2 restart crypto-tgalert
-   ```
-
-3. **API限制**
-   - 检查币安API配置
-   - 确认网络连接正常
-
-4. **数据库问题**
-   ```bash
-   sqlite3 data/crypto-tgalert.db ".tables"
-   # 备份并重建数据库如需要
-   ```
-
-### 日志位置
-- 应用日志: `~/crypto-tgalert/logs/`
-- PM2日志: `~/.pm2/logs/`
-- 系统日志: `/var/log/syslog`
-
-## 性能优化
-
-### 资源监控
-```bash
-# 安装监控工具
-sudo apt install htop iotop nethogs
-
-# 实时监控
-htop              # CPU和内存
-iotop             # 磁盘IO
-nethogs           # 网络流量
-```
-
-### 数据库优化
-```bash
-# 定期清理旧数据
-sqlite3 data/crypto-tgalert.db "DELETE FROM gainers_rankings WHERE timestamp < datetime('now', '-7 days');"
-sqlite3 data/crypto-tgalert.db "VACUUM;"
-```
-
-## 联系支持
-
-如遇到问题，请检查:
-1. 日志文件: `npm run pm2:logs`
-2. 系统资源: `htop`
-3. 网络连接: `ping api.binance.com`
-4. API配置: 检查.env文件
-
----
-**注意**: 请妥善保管你的API密钥和配置文件，不要将敏感信息提交到公共代码仓库。
+这套自动化部署系统确保了代码更新的及时性和可靠性，支持无人值守的持续部署。
