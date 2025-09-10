@@ -13,11 +13,12 @@ if [ $# -ne 1 ]; then
 fi
 
 DEPLOY_TAG="$1"
-REPO_DIR="/home/ubuntu/crypto-tgalert"
-LOG_FILE="/home/ubuntu/crypto-tgalert/logs/deployment.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+LOG_FILE="$REPO_DIR/logs/deployment.log"
 CONTAINER_NAME="crypto-tgalert"
 IMAGE_NAME="crypto-tgalert"
-DATA_DIR="/home/ubuntu/crypto-tgalert-data"  # 持久化数据目录
+DATA_DIR="$(dirname "$REPO_DIR")/crypto-tgalert-data"  # 持久化数据目录
 MAX_WAIT_TIME=60
 
 # 日志函数
@@ -67,8 +68,12 @@ mkdir -p "$DATA_DIR/data"
 mkdir -p "$DATA_DIR/logs"
 mkdir -p "$(dirname "$LOG_FILE")"
 
-# 确保数据目录权限正确
-sudo chown -R 1001:1001 "$DATA_DIR" || log "⚠️  设置数据目录权限时出现警告"
+# 确保数据目录权限正确（如果不是root用户）
+if [ "$(id -u)" != "0" ]; then
+    sudo chown -R 1001:1001 "$DATA_DIR" || log "⚠️  设置数据目录权限时出现警告"
+else
+    chown -R 1001:1001 "$DATA_DIR" 2>/dev/null || log "ℹ️  跳过权限设置（容器会处理）"
+fi
 
 # 5. 启动新容器
 log "🚀 启动新容器..."

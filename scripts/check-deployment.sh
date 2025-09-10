@@ -68,10 +68,10 @@ log "🚀 发现新版本需要部署: $CURRENT_TAG -> $LATEST_DEPLOY_TAG"
 # 执行部署
 log "📞 调用部署脚本..."
 # 检查是否使用Docker部署
-if [ -f "/home/ubuntu/crypto-tgalert/USE_DOCKER" ]; then
-    DEPLOY_SCRIPT="/home/ubuntu/crypto-tgalert/scripts/docker-deploy.sh"
+if [ -f "$REPO_DIR/USE_DOCKER" ]; then
+    DEPLOY_SCRIPT="$REPO_DIR/scripts/docker-deploy.sh"
 else
-    DEPLOY_SCRIPT="/home/ubuntu/crypto-tgalert/scripts/auto-deploy.sh"
+    DEPLOY_SCRIPT="$REPO_DIR/scripts/auto-deploy.sh"
 fi
 
 if $DEPLOY_SCRIPT "$LATEST_DEPLOY_TAG"; then
