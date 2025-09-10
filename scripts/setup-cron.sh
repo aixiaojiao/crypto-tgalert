@@ -28,7 +28,8 @@ fi
 
 # 确保脚本有执行权限
 chmod +x "$DEPLOY_CHECK_SCRIPT"
-chmod +x "/home/ubuntu/crypto-tgalert/scripts/auto-deploy.sh"
+chmod +x "$PROJECT_DIR/scripts/auto-deploy.sh"
+chmod +x "$PROJECT_DIR/scripts/docker-deploy.sh"
 
 log "📝 配置crontab定时任务..."
 
