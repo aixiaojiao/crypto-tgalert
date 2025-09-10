@@ -77,13 +77,23 @@ fi
 
 # 5. 启动新容器
 log "🚀 启动新容器..."
-docker run -d \
-  --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
-  -v "$DATA_DIR/data:/app/data" \
-  -v "$DATA_DIR/logs:/app/logs" \
-  -e NODE_ENV=production \
-  "$IMAGE_NAME:latest" || error_exit "容器启动失败"
+
+# 检查环境变量文件
+ENV_FILE="$REPO_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+    log "📋 使用环境变量文件: $ENV_FILE"
+    docker run -d \
+      --name "$CONTAINER_NAME" \
+      --restart unless-stopped \
+      -v "$DATA_DIR/data:/app/data" \
+      -v "$DATA_DIR/logs:/app/logs" \
+      --env-file "$ENV_FILE" \
+      -e NODE_ENV=production \
+      "$IMAGE_NAME:latest" || error_exit "容器启动失败"
+else
+    log "⚠️  未找到.env文件，请确保已配置环境变量"
+    error_exit "缺少环境变量文件: $ENV_FILE"
+fi
 
 # 6. 等待容器启动并验证
 log "⏳ 等待容器启动..."
