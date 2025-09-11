@@ -1,6 +1,6 @@
 {
   "name": "crypto-tgalert",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "Personal crypto intelligence terminal via Telegram",
   "main": "dist/index.js",
   "scripts": {
@@ -18,7 +18,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts --fix"
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "analyze-debug": "npx ts-node scripts/analyze-debug.ts"
   },
   "keywords": [
     "telegram",

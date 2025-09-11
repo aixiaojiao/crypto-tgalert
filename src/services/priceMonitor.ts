@@ -35,6 +35,11 @@ export class PriceMonitorService {
     checksPerformed: 0,
     alertsTriggered: 0
   };
+  
+  // Cache for alerts grouped by symbol to reduce database queries
+  private alertsCache: Map<string, PriceAlert[]> = new Map();
+  private alertsCacheExpiry: number = 0;
+  private readonly ALERTS_CACHE_TTL = 60000; // 1 minute cache
 
   constructor(binanceClient?: BinanceClient, checkIntervalMs?: number, telegramBot?: TelegramBot) {
     this.binance = binanceClient || new BinanceClient();
@@ -50,6 +55,59 @@ export class PriceMonitorService {
   }
 
   /**
+   * Get alerts for a symbol with caching to reduce database load
+   */
+  private async getAlertsForSymbol(symbol: string): Promise<PriceAlert[]> {
+    const now = Date.now();
+    
+    // Check if cache is valid
+    if (now < this.alertsCacheExpiry && this.alertsCache.has(symbol)) {
+      return this.alertsCache.get(symbol) || [];
+    }
+    
+    // Cache expired or symbol not cached, refresh all alerts
+    if (now >= this.alertsCacheExpiry) {
+      await this.refreshAlertsCache();
+    }
+    
+    return this.alertsCache.get(symbol) || [];
+  }
+
+  /**
+   * Refresh the alerts cache from database
+   */
+  private async refreshAlertsCache(): Promise<void> {
+    try {
+      const allAlerts = await PriceAlertModel.getAllActiveAlerts();
+      
+      // Clear existing cache
+      this.alertsCache.clear();
+      
+      // Group alerts by symbol
+      for (const alert of allAlerts) {
+        const symbolAlerts = this.alertsCache.get(alert.symbol) || [];
+        symbolAlerts.push(alert);
+        this.alertsCache.set(alert.symbol, symbolAlerts);
+      }
+      
+      // Update cache expiry
+      this.alertsCacheExpiry = Date.now() + this.ALERTS_CACHE_TTL;
+      
+      log.debug(`Alerts cache refreshed: ${allAlerts.length} alerts for ${this.alertsCache.size} symbols`);
+    } catch (error) {
+      log.error('Failed to refresh alerts cache:', error);
+    }
+  }
+
+  /**
+   * Invalidate alerts cache (call when alerts are added/removed/modified)
+   */
+  private invalidateAlertsCache(): void {
+    this.alertsCacheExpiry = 0;
+    this.alertsCache.clear();
+  }
+
+  /**
    * Start monitoring all active price alerts
    */
   async startMonitoring(): Promise<void> {
@@ -62,8 +120,9 @@ export class PriceMonitorService {
     this.isRunning = true;
 
     try {
-      // Get all active alerts from database
-      const alerts = await PriceAlertModel.getAllActiveAlerts();
+      // Initialize alerts cache and get all active alerts
+      await this.refreshAlertsCache();
+      const alerts = Array.from(this.alertsCache.values()).flat();
       log.info(`Found ${alerts.length} active alerts to monitor`);
 
       if (alerts.length === 0) {
@@ -113,6 +172,7 @@ export class PriceMonitorService {
     }
 
     this.intervals.clear();
+    this.invalidateAlertsCache();
     this.isRunning = false;
 
     log.info('Price monitoring service stopped');
@@ -237,9 +297,8 @@ export class PriceMonitorService {
       const currentPrice = await this.binance.getPrice(symbol);
       log.debug(`Current price for ${symbol}: ${currentPrice}`);
 
-      // Get all active alerts for this symbol
-      const allAlerts = await PriceAlertModel.getAllActiveAlerts();
-      const symbolAlerts = allAlerts.filter(alert => alert.symbol === symbol);
+      // Get active alerts for this symbol using cache
+      const symbolAlerts = await this.getAlertsForSymbol(symbol);
 
       if (symbolAlerts.length === 0) {
         // No alerts for this symbol, remove from monitoring
@@ -414,7 +473,7 @@ export class PriceMonitorService {
     const results: {alert: PriceAlert, currentPrice: number, distance: number}[] = [];
 
     try {
-      const alerts = await PriceAlertModel.getAllActiveAlerts();
+      const alerts = Array.from(this.alertsCache.values()).flat();
       const symbolPrices: Record<string, number> = {};
 
       // Get current prices for all symbols

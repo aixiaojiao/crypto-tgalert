@@ -17,15 +17,18 @@ function formatTimeToUTC8(date: Date | number): string {
 import { tieredDataManager } from './services/tieredDataManager';
 import { volumeClassifier } from './utils/volumeClassifier';
 import { rankingAnalyzer } from './services/rankingAnalyzer';
+import { DebugService } from './services/debugService';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
   private status: BotStatus;
   private binanceClient: BinanceClient;
+  private debugService: DebugService;
 
   constructor() {
     this.bot = new Telegraf<BotContext>(config.telegram.botToken);
     this.binanceClient = new BinanceClient();
+    this.debugService = new DebugService();
     this.status = {
       isRunning: false,
       startTime: new Date(),
@@ -1348,6 +1351,50 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
+    // Debug命令 - 记录bug和优化建议
+    this.bot.command('debug', async (ctx) => {
+      try {
+        const debugContent = ctx.message.text.replace('/debug', '').trim();
+        
+        if (!debugContent) {
+          await ctx.reply(`🐛 *Debug 使用说明*
+
+使用方法: \`/debug [你的问题描述]\`
+
+例如:
+• \`/debug oi4h推送超时问题，需要增加重试机制\`
+• \`/debug 价格查询速度太慢\`
+• \`/debug 建议添加止损功能\`
+
+你的debug记录会被保存到日志文件中，用于后续分析和改进。`, 
+            { parse_mode: 'Markdown' });
+          return;
+        }
+
+        // 获取上一条消息作为上下文
+        const previousMessage = await this.getPreviousMessage(ctx);
+        
+        // 保存debug记录
+        const debugId = await this.debugService.saveDebugRecord({
+          timestamp: new Date().toISOString(),
+          userId: ctx.from?.id.toString() || 'unknown',
+          previousMessage: previousMessage,
+          debugContent: debugContent
+        });
+
+        await ctx.reply(`🐛 *Debug记录已保存!*
+
+记录ID: \`${debugId}\`
+内容: ${debugContent}
+
+你的反馈将用于改进系统，感谢！`, { parse_mode: 'Markdown' });
+        
+      } catch (error) {
+        console.error('Debug command error:', error);
+        await ctx.reply('❌ 保存debug记录失败，请稍后重试');
+      }
+    });
+
     // 处理未知命令
     this.bot.on('text', async (ctx) => {
       const text = ctx.message?.text;
@@ -1363,6 +1410,46 @@ ${riskIcon} 币种: ${symbol}
       // 未知命令
       await ctx.reply(`❓ 未知命令: ${text}\n使用 /help 查看所有可用命令`);
     });
+  }
+
+  /**
+   * 获取上一条消息作为debug上下文
+   */
+  private async getPreviousMessage(ctx: any): Promise<{ type: 'bot_response' | 'user_message'; content: string; messageId?: number }> {
+    try {
+      // 检查用户是否回复了某条消息
+      if (ctx.message.reply_to_message) {
+        const repliedMessage = ctx.message.reply_to_message;
+        
+        return {
+          type: repliedMessage.from?.is_bot ? 'bot_response' : 'user_message',
+          content: repliedMessage.text || repliedMessage.caption || '(消息内容为空)',
+          messageId: repliedMessage.message_id
+        };
+      }
+      
+      // 如果没有回复消息，尝试推断上一条消息
+      const currentMessageId = ctx.message.message_id;
+      
+      if (currentMessageId > 1) {
+        return {
+          type: 'bot_response',
+          content: '(建议: 回复特定消息来使用 /debug 获取准确上下文)',
+          messageId: currentMessageId - 1
+        };
+      }
+      
+      return {
+        type: 'user_message',
+        content: '(这是第一条消息)'
+      };
+    } catch (error) {
+      console.error('Error getting previous message:', error);
+      return {
+        type: 'user_message',
+        content: '(获取上一条消息失败)'
+      };
+    }
   }
 
   /**
@@ -1392,6 +1479,7 @@ ${riskIcon} 币种: ${symbol}
       { command: 'stop_oi24h_push', description: '停止OI 24小时推送通知' },
       { command: 'push_status', description: '查看推送通知状态' },
       { command: 'status', description: '查看系统状态' },
+      { command: 'debug', description: '记录bug和优化建议' },
       { command: 'help', description: '查看完整帮助文档' }
     ];
 
@@ -1437,6 +1525,10 @@ ${riskIcon} 币种: ${symbol}
       
       this.status.isRunning = true;
       this.status.startTime = new Date();
+      
+      // Initialize debug service
+      await this.debugService.initialize();
+      console.log('🐛 Debug service initialized');
       
       // Set up commands menu before launching
       await this.setupBotMenu();

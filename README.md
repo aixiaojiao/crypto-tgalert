@@ -21,6 +21,13 @@
 - **启动通知**: 机器人重启时自动发送通知
 - **权限控制**: 仅授权用户可使用
 
+### 🐛 远程调试系统
+- **问题记录**: `/debug` 命令远程记录bug和优化建议
+- **上下文捕获**: 回复bot消息使用debug命令，自动记录完整上下文
+- **智能分析**: `npm run analyze-debug` 分析收集的问题并生成修复建议
+- **分类优先级**: 自动对问题分类和优先级排序
+- **结构化存储**: Markdown格式存储，便于人工和机器分析
+
 ## 🚀 快速开始
 
 ### 环境要求
@@ -72,6 +79,13 @@ npm start
 npm run dev
 ```
 
+### Debug分析
+当收集了debug记录后，可以运行分析脚本：
+```bash
+npm run analyze-debug
+```
+这将分析`logs/debug-records.md`中的所有记录，生成智能分析报告和修复建议。
+
 ## 📱 可用命令
 
 | 命令 | 功能 | 示例 |
@@ -84,6 +98,7 @@ npm run dev
 | `/oi4h` | 4小时持仓量增长榜 | |
 | `/oi1h` | 1小时持仓量增长榜 | |
 | `/oi <symbol>` | 单个代币OI持仓数据查询 | 显示1h/4h/24h持仓变化 |
+| `/debug <问题描述>` | 记录bug和优化建议 | `/debug 价格查询太慢` |
 | `/status` | 查看系统运行状态 | |
 | `/help` | 完整帮助文档 | |
 
@@ -110,13 +125,16 @@ src/
 ├── bot.ts              # Telegram机器人主逻辑
 ├── services/
 │   ├── binance.ts      # 币安API客户端
+│   ├── debugService.ts # Debug记录管理服务
 │   └── database.ts     # 数据库服务
 ├── config/
 │   ├── index.ts        # 配置管理
 │   └── tokenLists.ts   # 代币分类配置
 ├── types/              # TypeScript类型定义
 ├── middleware/         # 中间件
-└── utils/              # 工具函数
+├── utils/              # 工具函数
+└── scripts/
+    └── analyze-debug.ts # Debug分析脚本
 ```
 
 ## 🔒 安全注意事项

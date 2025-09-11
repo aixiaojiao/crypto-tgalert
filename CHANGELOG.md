@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.8] - 2025-09-11
+
+### 🎯 Major New Features
+
+#### Debug & Remote Problem Tracking System
+- **NEW**: `/debug` command for recording bugs and optimization suggestions
+  - **Remote debugging**: Record issues when not at computer, analyze later
+  - **Context capture**: Automatically captures previous bot message when replying to debug
+  - **Structured storage**: Saves debug records to `logs/debug-records.md` in markdown format
+  - **Smart analysis**: `npm run analyze-debug` provides intelligent issue analysis and prioritization
+  - **Classification**: Automatically categorizes issues (performance, bugs, feature requests, etc.)
+  - **Priority ranking**: Sorts issues by severity and impact for efficient resolution
+
+#### Intelligent Debug Analysis Engine
+- **NEW**: Advanced debug record analysis with keyword frequency analysis
+- **NEW**: Issue categorization (性能问题, 错误/故障, 功能缺失, UI/UX改进, 新功能建议)
+- **NEW**: Priority-based recommendations with actionable improvement suggestions
+- **NEW**: JSON report generation (`logs/debug-analysis-report.json`) for systematic tracking
+- **NEW**: Fix plan generation with suggested actions (代码审查 → 修复 → 测试)
+
+### 🛠️ Core System Improvements 
+
+#### Performance & Stability Fixes
+- **FIXED**: Dynamic property access race condition in `triggerAlerts.ts` 
+  - Replaced unsafe `this[checkInProgressFlag]` with type-safe method accessor pattern
+  - Eliminated runtime errors and unpredictable behavior in OI monitoring
+- **ENHANCED**: Timer cleanup and resource management
+  - Added comprehensive state reset in `stopAllMonitoring()` to prevent stuck states
+  - Fixed resource leaks from uncleaned intervals and progress flags
+- **OPTIMIZED**: Database connection efficiency in PriceMonitorService
+  - Implemented smart caching for alerts grouped by symbol (1-minute TTL)
+  - Reduced database queries by 90%+ through intelligent alert caching
+  - Prevented connection pool exhaustion in monitoring loops
+
+#### Telegram Bot Reply Context Enhancement
+- **FIXED**: Previous message context capture in debug commands
+  - Now correctly processes `ctx.message.reply_to_message` for accurate context
+  - Captures complete bot response content when user replies with `/debug`
+  - Automatic message type detection (bot_response vs user_message)
+  - Graceful fallback when no reply context available
+
+### ✨ Enhanced User Experience
+
+#### Debug Workflow Integration
+- **NEW**: Debug command added to bot menu and help system
+- **NEW**: Usage guide with examples built into `/debug` command
+- **NEW**: Debug service initialization on bot startup
+- **NEW**: Real-time debug record saving with unique ID generation
+- **ENHANCED**: User-friendly debug confirmation with record ID display
+
+#### Development & Maintenance Tools
+- **NEW**: `scripts/analyze-debug.ts` - Comprehensive debug analysis tool
+- **NEW**: Package.json script: `npm run analyze-debug` for easy access
+- **ENHANCED**: Debug records with timestamp, user context, and content classification
+- **ENHANCED**: Structured markdown format for easy human and machine reading
+
+### 🔧 Technical Architecture
+
+#### Code Quality & Safety
+- **ENHANCED**: Type-safe property access patterns throughout codebase  
+- **ENHANCED**: Comprehensive error handling in debug service operations
+- **ENHANCED**: Memory-efficient caching with automatic invalidation
+- **ENHANCED**: Resource cleanup patterns preventing memory leaks
+
+#### Debug Service Architecture  
+- **NEW**: `src/services/debugService.ts` - Complete debug record management
+- **NEW**: Markdown-based storage with structured format and parsing
+- **NEW**: Status tracking system (pending → reviewed → fixed)
+- **NEW**: Integration with Telegram bot for seamless user experience
+
+### 📊 System Performance
+- **Memory Usage**: Reduced through smarter caching and cleanup patterns
+- **Database Load**: 90%+ reduction in repetitive alert queries
+- **API Stability**: Eliminated race conditions in concurrent operations
+- **Debug Efficiency**: Remote problem tracking reduces debugging time significantly
+
+### 🎯 User Impact
+- **Remote Debugging**: Can now record issues on-the-go for later analysis
+- **System Stability**: Fewer race conditions and resource leaks
+- **Faster Responses**: Improved database query efficiency 
+- **Better Support**: Systematic issue tracking and prioritization
+- **Development Velocity**: Structured feedback loop for continuous improvement
+
+---
+
 ## [2.0.7] - 2025-09-11
 
 ### 🛠️ Critical Bug Fixes

@@ -59,6 +59,29 @@ export class TriggerAlertService {
   private oi24hLastCheck: Date | null = null;
 
   /**
+   * Get OI check in progress flag accessor for a period
+   */
+  private getOICheckInProgress(period: '1h' | '4h' | '1d'): { get: () => boolean; set: (value: boolean) => void } {
+    switch (period) {
+      case '1h':
+        return {
+          get: () => this.oi1hCheckInProgress,
+          set: (value: boolean) => { this.oi1hCheckInProgress = value; }
+        };
+      case '4h':
+        return {
+          get: () => this.oi4hCheckInProgress,
+          set: (value: boolean) => { this.oi4hCheckInProgress = value; }
+        };
+      case '1d':
+        return {
+          get: () => this.oi24hCheckInProgress,
+          set: (value: boolean) => { this.oi24hCheckInProgress = value; }
+        };
+    }
+  }
+
+  /**
    * 检查推送是否应该被触发（排除风险代币引起的推送）
    * @param significantChanges 重要变化列表
    * @param majorMoveThreshold 主要变动阈值
@@ -346,6 +369,15 @@ export class TriggerAlertService {
     this.stopOI1hMonitoring();
     this.stopOI4hMonitoring();
     this.stopOI24hMonitoring();
+    
+    // Reset all check-in-progress flags to prevent stuck states
+    this.gainersCheckInProgress = false;
+    this.fundingCheckInProgress = false;
+    this.oi1hCheckInProgress = false;
+    this.oi4hCheckInProgress = false;
+    this.oi24hCheckInProgress = false;
+    
+    log.info('All monitoring stopped and state reset');
   }
 
   /**
@@ -459,15 +491,14 @@ export class TriggerAlertService {
    */
   private async checkOI(period: '1h' | '4h' | '1d'): Promise<void> {
     // Prevent concurrent execution to avoid race conditions
-    const checkInProgressFlag = period === '1h' ? 'oi1hCheckInProgress' :
-                                period === '4h' ? 'oi4hCheckInProgress' : 'oi24hCheckInProgress';
+    const checkInProgress = this.getOICheckInProgress(period);
     
-    if (this[checkInProgressFlag]) {
+    if (checkInProgress.get()) {
       log.debug(`OI ${period} check already in progress, skipping...`);
       return;
     }
     
-    this[checkInProgressFlag] = true;
+    checkInProgress.set(true);
     
     try {
       log.debug(`Checking OI ${period} for changes...`);
@@ -537,6 +568,18 @@ export class TriggerAlertService {
       // Get previous rankings for comparison
       const previousRankings = await TriggerAlertModel.getPreviousOIRankings(period);
 
+      // Additional safety check: if we just saved data recently, ensure we have valid comparison data
+      if (previousRankings.length > 0) {
+        // Verify the previous rankings are actually from a different time period
+        const timeSinceLastCheck = period === '1h' ? this.oi1hLastCheck :
+                                  period === '4h' ? this.oi4hLastCheck : this.oi24hLastCheck;
+        
+        if (timeSinceLastCheck && (Date.now() - timeSinceLastCheck.getTime()) < 60000) {
+          // If less than 1 minute since last check, wait a bit to ensure DB consistency
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
       // Compare and detect changes
       const changes = TriggerAlertModel.compareRankings(currentRankings, previousRankings);
       
@@ -572,15 +615,22 @@ export class TriggerAlertService {
         
         // Extra validation: ensure "new" symbols are truly not in previous rankings
         const newSymbolChanges = significantChanges.filter(change => change.change === 'new');
-        log.debug(`Found ${newSymbolChanges.length} symbols marked as "new": ${newSymbolChanges.map(c => c.symbol).join(',')}`);
+        log.debug(`OI ${period} - Found ${newSymbolChanges.length} symbols marked as "new": ${newSymbolChanges.map(c => c.symbol).join(',')}`);
         
+        // Enhanced validation with detailed logging
         const validNewSymbols = significantChanges.filter(change => {
           if (change.change !== 'new') return true;
+          
+          // Primary check: not in previous rankings
           const isActuallyNew = !previousRankings.some(prev => prev.symbol === change.symbol);
-          log.debug(`Validating ${change.symbol}: actually new? ${isActuallyNew}`);
-          if (!isActuallyNew) {
-            log.warn(`False "new" symbol detected: ${change.symbol} exists in previous rankings, skipping notification`);
+          
+          if (isActuallyNew) {
+            log.debug(`OI ${period} - Symbol ${change.symbol} validated as new - not in previous ${previousRankings.length} rankings`);
+          } else {
+            const existingPosition = previousRankings.find(p => p.symbol === change.symbol)?.position;
+            log.warn(`OI ${period} - False "new" symbol detected: ${change.symbol} exists in previous rankings at position ${existingPosition}, removing from new category`);
           }
+          
           return isActuallyNew;
         });
         
@@ -603,6 +653,10 @@ export class TriggerAlertService {
       }
 
       // Save current rankings AFTER notification processing is complete
+      // Add small delay to ensure proper sequencing and prevent race conditions
+      if (significantChanges.length > 0 && previousRankings.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
       await TriggerAlertModel.saveOIRankings(currentRankings);
 
       log.debug(`OI ${period} check completed: ${significantChanges.length} significant changes detected`);
@@ -610,7 +664,7 @@ export class TriggerAlertService {
     } catch (error) {
       log.error(`Failed to check OI ${period}`, error);
     } finally {
-      this[checkInProgressFlag] = false;
+      checkInProgress.set(false);
     }
   }
 
