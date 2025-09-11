@@ -15,7 +15,7 @@ export const BLACKLIST_TOKENS = [
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'YALA', 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' , 'AIO', 'AVNT', 'SAPIEN', 'NAORIS', 'JELLYJELLY', 'F'
+  'YALA', 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' , 'AIO', 'AVNT', 'SAPIEN', 'NAORIS', 'JELLYJELLY', 'F', 'BB'
 ];
 
 

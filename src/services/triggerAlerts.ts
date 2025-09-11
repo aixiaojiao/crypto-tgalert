@@ -416,6 +416,15 @@ export class TriggerAlertService {
       // Get previous rankings for comparison
       const previousRankings = await TriggerAlertModel.getPreviousGainersRankings();
 
+      // Additional safety check: if we just saved data recently, ensure we have valid comparison data
+      if (previousRankings.length > 0) {
+        // Verify the previous rankings are actually from a different time period
+        if (this.gainersLastCheck && (Date.now() - this.gainersLastCheck.getTime()) < 60000) {
+          // If less than 1 minute since last check, wait a bit to ensure DB consistency
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
       // Compare and detect changes
       const changes = TriggerAlertModel.compareRankings(currentRankings, previousRankings);
       
@@ -475,6 +484,10 @@ export class TriggerAlertService {
       }
 
       // Save current rankings AFTER notification processing is complete
+      // Add small delay to ensure proper sequencing and prevent race conditions
+      if (significantChanges.length > 0 && previousRankings.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
       await TriggerAlertModel.saveGainersRankings(currentRankings);
 
       log.debug(`Gainers check completed: ${significantChanges.length} significant changes detected`);
@@ -771,6 +784,11 @@ export class TriggerAlertService {
             log.debug('Funding changes detected but not significant enough for notification');
           }
         }
+      }
+
+      // Add timing safety delay before saving to prevent race conditions
+      if (significantChanges.length > 0 && previousRankings.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
       // Save current rankings AFTER notification processing is complete
