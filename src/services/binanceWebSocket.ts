@@ -48,7 +48,7 @@ export interface WebSocketSubscription {
 
 export class BinanceWebSocketClient {
   private ws: WebSocket | null = null;
-  private baseUrl = 'wss://stream.binance.com:9443/ws';
+  private baseUrl = 'wss://fstream.binance.com/ws';
   private subscriptions: Map<string, WebSocketSubscription> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
@@ -238,7 +238,7 @@ export class BinanceWebSocketClient {
    * Subscribe to multiple symbols price updates at once
    */
   async subscribeMultipleTickers(
-    symbols: string[], 
+    symbols: string[],
     callback: WebSocketCallback<TickerData>
   ): Promise<string[]> {
     const subscriptionIds: string[] = [];
@@ -254,6 +254,80 @@ export class BinanceWebSocketClient {
 
     log.info(`Subscribed to ${subscriptionIds.length} ticker streams`);
     return subscriptionIds;
+  }
+
+  /**
+   * Subscribe to all market tickers stream (!ticker@arr)
+   * Receives 24hr rolling window ticker statistics for all symbols
+   * Update speed: 1000ms
+   */
+  async subscribeAllMarketTickers(callback: WebSocketCallback<TickerData[]>): Promise<string> {
+    const stream = '!ticker@arr';
+    const subscriptionId = this.generateSubscriptionId(stream);
+
+    const subscription: WebSocketSubscription = {
+      stream,
+      callback: (data: any[]) => {
+        if (!Array.isArray(data)) {
+          log.warn('Invalid data format for all market tickers', { data });
+          return;
+        }
+
+        const tickerDataArray: TickerData[] = data.map((ticker: any) => ({
+          symbol: ticker.s,
+          price: ticker.c,
+          priceChange: ticker.p,
+          priceChangePercent: ticker.P,
+          volume: ticker.v,
+          timestamp: ticker.E
+        }));
+
+        callback(tickerDataArray);
+      },
+      id: subscriptionId
+    };
+
+    await this.addSubscription(subscription);
+    log.info(`Subscribed to all market tickers stream`, { subscriptionId });
+
+    return subscriptionId;
+  }
+
+  /**
+   * Subscribe to all market mini tickers stream (!miniTicker@arr)
+   * Lighter version of ticker data with essential fields only
+   * Update speed: 1000ms
+   */
+  async subscribeAllMarketMiniTickers(callback: WebSocketCallback<Partial<TickerData>[]>): Promise<string> {
+    const stream = '!miniTicker@arr';
+    const subscriptionId = this.generateSubscriptionId(stream);
+
+    const subscription: WebSocketSubscription = {
+      stream,
+      callback: (data: any[]) => {
+        if (!Array.isArray(data)) {
+          log.warn('Invalid data format for all market mini tickers', { data });
+          return;
+        }
+
+        const miniTickerDataArray: Partial<TickerData>[] = data.map((ticker: any) => ({
+          symbol: ticker.s,
+          price: ticker.c,
+          priceChange: ticker.p,
+          priceChangePercent: ticker.P,
+          volume: ticker.v,
+          timestamp: ticker.E
+        }));
+
+        callback(miniTickerDataArray);
+      },
+      id: subscriptionId
+    };
+
+    await this.addSubscription(subscription);
+    log.info(`Subscribed to all market mini tickers stream`, { subscriptionId });
+
+    return subscriptionId;
   }
 
   /**
@@ -360,16 +434,26 @@ export class BinanceWebSocketClient {
   private handleMessage(data: WebSocket.Data): void {
     try {
       const message = JSON.parse(data.toString());
-      
+
       if (message.stream && message.data) {
         // Stream data message
         const subscription = Array.from(this.subscriptions.values())
           .find(sub => sub.stream === message.stream);
-        
+
         if (subscription) {
           subscription.callback(message.data);
         } else {
           log.debug(`No subscription found for stream: ${message.stream}`);
+        }
+      } else if (Array.isArray(message)) {
+        // All market tickers stream - direct array data
+        const subscription = Array.from(this.subscriptions.values())
+          .find(sub => sub.stream === '!ticker@arr' || sub.stream === '!miniTicker@arr');
+
+        if (subscription) {
+          subscription.callback(message);
+        } else {
+          log.debug('Received array data but no matching ticker subscription found');
         }
       } else {
         // Other message types (like subscription confirmations)

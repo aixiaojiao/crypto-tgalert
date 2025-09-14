@@ -4,6 +4,7 @@ import { TelegramBot } from '../bot';
 import { log } from '../utils/logger';
 import { getTokenRiskLevel, getRiskIcon, filterTradingPairs, isRiskyToken } from '../config/tokenLists';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
+import { realtimeMarketCache } from './realtimeMarketCache';
 
 export interface TriggerAlertStats {
   gainersEnabled: boolean;
@@ -389,29 +390,56 @@ export class TriggerAlertService {
       log.debug('Gainers check already in progress, skipping...');
       return;
     }
-    
+
     this.gainersCheckInProgress = true;
-    
+
     try {
       log.debug('Checking gainers for changes...');
-      
-      // Get current 24hr stats
-      const stats = await this.binance.getFutures24hrStatsMultiple();
-      const validSymbols = filterTradingPairs(stats.map(s => s.symbol));
-      const filteredStats = stats.filter(s => validSymbols.includes(s.symbol));
-      
-      // Sort by price change percentage (top gainers)
-      const sortedStats = filteredStats
-        .filter(s => parseFloat(s.priceChangePercent) > 0)
-        .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
-        .slice(0, 10);
 
-      // Convert to rankings format
-      const currentRankings: GainersRanking[] = sortedStats.map((stat, index) => ({
-        symbol: stat.symbol,
-        position: index + 1,
-        price_change_percent: parseFloat(stat.priceChangePercent)
-      }));
+      let currentRankings: GainersRanking[] = [];
+      let dataSource = '';
+
+      // 优先使用实时缓存数据
+      if (realtimeMarketCache.isReady()) {
+        log.debug('Using realtime cache for gainers push check');
+        const realtimeGainers = realtimeMarketCache.getTopGainers(10, 10000);
+
+        if (realtimeGainers.length > 0) {
+          currentRankings = realtimeGainers.map((data, index) => ({
+            symbol: data.symbol,
+            position: index + 1,
+            price_change_percent: data.priceChangePercent
+          }));
+          dataSource = 'realtime';
+          log.debug(`Gainers push check using realtime cache, got ${currentRankings.length} results`);
+        }
+      }
+
+      // Fallback 到 REST API
+      if (currentRankings.length === 0) {
+        log.debug('Using REST API fallback for gainers push check');
+        dataSource = 'api';
+
+        // Get current 24hr stats
+        const stats = await this.binance.getFutures24hrStatsMultiple();
+        const validSymbols = filterTradingPairs(stats.map(s => s.symbol));
+        const filteredStats = stats.filter(s => validSymbols.includes(s.symbol));
+
+        // Sort by price change percentage (top gainers)
+        const sortedStats = filteredStats
+          .filter(s => parseFloat(s.priceChangePercent) > 0)
+          .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
+          .slice(0, 10);
+
+        // Convert to rankings format
+        currentRankings = sortedStats.map((stat, index) => ({
+          symbol: stat.symbol,
+          position: index + 1,
+          price_change_percent: parseFloat(stat.priceChangePercent)
+        }));
+
+        log.debug(`Gainers push check using REST API, got ${currentRankings.length} results`);
+      }
 
       // Get previous rankings for comparison
       const previousRankings = await TriggerAlertModel.getPreviousGainersRankings();
@@ -472,8 +500,8 @@ export class TriggerAlertService {
                           this.shouldTriggerPush(validNewSymbols, 5); // 主要变动阈值为5
         
         if (shouldPush) {
-          await this.sendGainersNotification(currentRankings, validNewSymbols);
-          log.info(`Gainers notification sent: ${hasActualNewSymbols ? 'new symbols' : ''} ${hasMajorMoves ? 'major moves' : ''}`);
+          await this.sendGainersNotification(currentRankings, validNewSymbols, dataSource);
+          log.info(`Gainers notification sent via ${dataSource}: ${hasActualNewSymbols ? 'new symbols' : ''} ${hasMajorMoves ? 'major moves' : ''}`);
         } else {
           if (hasActualNewSymbols || hasMajorMoves) {
             log.info('Gainers push blocked: all triggers from risky tokens');
@@ -806,12 +834,12 @@ export class TriggerAlertService {
   /**
    * Send gainers notification
    */
-  private async sendGainersNotification(rankings: GainersRanking[], changes: RankingChange[]): Promise<void> {
+  private async sendGainersNotification(rankings: GainersRanking[], changes: RankingChange[], dataSource?: string): Promise<void> {
     try {
       const enabledUsers = await TriggerAlertModel.getEnabledUsers('gainers');
       if (enabledUsers.length === 0) return;
 
-      const message = await this.formatGainersMessage(rankings, changes);
+      const message = await this.formatGainersMessage(rankings, changes, dataSource);
       
       for (const userId of enabledUsers) {
         if (this.telegramBot) {
@@ -882,7 +910,7 @@ export class TriggerAlertService {
   /**
    * Format gainers message with changes highlighted
    */
-  private async formatGainersMessage(rankings: GainersRanking[], changes: RankingChange[]): Promise<string> {
+  private async formatGainersMessage(rankings: GainersRanking[], changes: RankingChange[], dataSource?: string): Promise<string> {
     const changesMap = new Map(changes.map(c => [c.symbol, c]));
     
     let message = '📈 *涨幅榜更新提醒*\n\n';
@@ -940,7 +968,13 @@ export class TriggerAlertService {
     });
 
     message += `\n⏰ 检查时间: ${new Date().toLocaleString('zh-CN')}`;
-    
+
+    // 添加数据来源信息
+    if (dataSource) {
+      const sourceText = dataSource === 'realtime' ? '⚡ 实时数据' : '📡 API数据';
+      message += `\n📊 数据来源: ${sourceText}`;
+    }
+
     return message;
   }
 

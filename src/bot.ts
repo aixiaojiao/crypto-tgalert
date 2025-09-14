@@ -18,6 +18,9 @@ import { tieredDataManager } from './services/tieredDataManager';
 import { volumeClassifier } from './utils/volumeClassifier';
 import { rankingAnalyzer } from './services/rankingAnalyzer';
 import { DebugService } from './services/debugService';
+import { realtimeMarketCache } from './services/realtimeMarketCache';
+import { realtimeAlertService } from './services/realtimeAlertService';
+import { log } from './utils/logger';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -39,9 +42,34 @@ export class TelegramBot {
     this.setupMiddleware();
     this.setupCommands();
     this.setupErrorHandling();
-    
+
     // Set telegram bot instance for trigger alerts
     triggerAlertService.setTelegramBot(this);
+
+    // Initialize realtime market cache and alert service
+    this.initializeRealtimeServices();
+  }
+
+  /**
+   * 初始化实时市场数据缓存和推送服务
+   */
+  private async initializeRealtimeServices(): Promise<void> {
+    try {
+      // 初始化实时市场缓存
+      log.info('Initializing realtime market cache...');
+      await realtimeMarketCache.start();
+      log.info('Realtime market cache initialized successfully');
+
+      // 初始化实时推送服务
+      log.info('Initializing realtime alert service...');
+      realtimeAlertService.setTelegramBot(this);
+      await realtimeAlertService.start();
+      log.info('Realtime alert service initialized successfully');
+
+    } catch (error) {
+      log.error('Failed to initialize realtime services', error);
+      log.warn('Bot will continue with REST API fallback');
+    }
   }
 
   /**
@@ -144,6 +172,7 @@ export class TelegramBot {
 
 ⚙️ <b>系统:</b>
 /status - 查看系统状态
+/cache_status - 查看实时数据缓存状态
 /help - 查看帮助
 
 💡 提示: 默认查询合约数据，包含资金费率和持仓量信息`;
@@ -342,29 +371,58 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    // 24小时涨幅榜
+    // 24小时涨幅榜 - 优化版本使用实时缓存
     this.bot.command('gainers', async (ctx) => {
       try {
         await ctx.reply('📊 正在查询24小时涨幅榜...');
 
-        // 🔥 Trigger real-time ranking analysis to capture sudden movers
-        await rankingAnalyzer.analyzeRankings('user-query');
+        let gainers;
+        let dataSource = '';
+        let queryTime = Date.now();
 
-        // Use tiered data manager for optimized data fetching
-        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
-        const validSymbols = filterTradingPairs(allSymbols);
-        const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
-        const allStats = Array.from(allStatsMap.values());
-        
-        // 过滤交易对并按涨幅排序，取前10
-        const gainers = allStats
-          .filter(stat => {
-            return parseFloat(stat.priceChangePercent) > 0 && 
-                   validSymbols.includes(stat.symbol) &&
-                   parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
-          })
-          .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
-          .slice(0, 10);
+        // 优先使用实时缓存数据
+        if (realtimeMarketCache.isReady()) {
+          log.debug('Using realtime cache for gainers query');
+          const realtimeGainers = realtimeMarketCache.getTopGainers(10, 10000);
+
+          if (realtimeGainers.length > 0) {
+            gainers = realtimeGainers.map(data => ({
+              symbol: data.symbol,
+              priceChangePercent: data.priceChangePercent.toString(),
+              lastPrice: data.price.toString(),
+              volume: data.volume.toString()
+            }));
+            dataSource = '⚡ 实时数据';
+            log.info(`Gainers query served from realtime cache in ${Date.now() - queryTime}ms`);
+          }
+        }
+
+        // Fallback 到 REST API
+        if (!gainers || gainers.length === 0) {
+          log.debug('Using REST API fallback for gainers query');
+          dataSource = '📡 API数据';
+
+          // 🔥 Trigger real-time ranking analysis to capture sudden movers
+          await rankingAnalyzer.analyzeRankings('user-query');
+
+          // Use tiered data manager for optimized data fetching
+          const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
+          const validSymbols = filterTradingPairs(allSymbols);
+          const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
+          const allStats = Array.from(allStatsMap.values());
+
+          // 过滤交易对并按涨幅排序，取前10
+          gainers = allStats
+            .filter(stat => {
+              return parseFloat(stat.priceChangePercent) > 0 &&
+                     validSymbols.includes(stat.symbol) &&
+                     parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
+            })
+            .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
+            .slice(0, 10);
+
+          log.info(`Gainers query served from REST API in ${Date.now() - queryTime}ms`);
+        }
 
         let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
         
@@ -383,11 +441,74 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         });
 
         message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
+        message += `\n📊 数据来源: ${dataSource}`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
         console.error('Gainers query error:', error);
         await ctx.reply('❌ 查询涨幅榜失败');
+      }
+    });
+
+    // 实时缓存状态命令
+    this.bot.command('cache_status', async (ctx) => {
+      try {
+        const cacheStats = realtimeMarketCache.getStats();
+
+        let statusMessage = `📊 *实时数据缓存状态*\n\n`;
+        statusMessage += `🔌 连接状态: ${cacheStats.isConnected ? '✅ 已连接' : '❌ 未连接'}\n`;
+        statusMessage += `📈 交易对数量: ${cacheStats.totalSymbols} / ${cacheStats.validSymbols}\n`;
+        statusMessage += `🔄 数据更新次数: ${cacheStats.totalUpdates}\n`;
+        statusMessage += `📦 平均更新大小: ${cacheStats.avgUpdateSize} 币种\n`;
+        statusMessage += `⏰ 运行时间: ${cacheStats.uptimeFormatted}\n`;
+
+        if (cacheStats.lastUpdateTime > 0) {
+          const lastUpdateAgo = Math.round((Date.now() - cacheStats.lastUpdateTime) / 1000);
+          statusMessage += `🕐 最后更新: ${lastUpdateAgo}秒前\n`;
+        }
+
+        statusMessage += `\n💡 实时缓存状态: ${realtimeMarketCache.isReady() ? '✅ 就绪' : '⏳ 准备中'}`;
+
+        await ctx.replyWithMarkdown(statusMessage);
+      } catch (error) {
+        console.error('Cache status error:', error);
+        await ctx.reply('❌ 获取缓存状态时发生错误');
+      }
+    });
+
+    // 实时推送服务状态命令
+    this.bot.command('realtime_status', async (ctx) => {
+      try {
+        const realtimeStatus = realtimeAlertService.getStatus();
+        const cacheStatus = realtimeMarketCache.getStats();
+
+        let statusMessage = `⚡ *实时推送服务状态*\n\n`;
+
+        statusMessage += `🔄 服务状态: ${realtimeStatus.enabled ? '✅ 运行中' : '❌ 已停止'}\n`;
+        statusMessage += `📊 数据源: ${cacheStatus.isConnected ? '✅ WebSocket连接正常' : '❌ WebSocket断开'}\n`;
+        statusMessage += `💾 缓存状态: ${cacheStatus.totalSymbols > 0 ? `✅ ${cacheStatus.totalSymbols}个币种` : '⏳ 初始化中'}\n\n`;
+
+        statusMessage += `🎯 *推送配置:*\n`;
+        statusMessage += `• 新进入阈值: ${realtimeStatus.config.minGainPercent}%\n`;
+        statusMessage += `• 变动阈值: ${realtimeStatus.config.majorMoveThreshold}位\n`;
+        statusMessage += `• 冷却时间: ${realtimeStatus.config.pushCooldownMs / 1000 / 60}分钟\n`;
+        statusMessage += `• 频率限制: ${realtimeStatus.config.maxPushPerSymbol}次/冷却期\n\n`;
+
+        statusMessage += `📈 *推送统计:*\n`;
+        statusMessage += `• 推送记录: ${realtimeStatus.totalPushRecords}个币种\n`;
+        statusMessage += `• 冷却中: ${realtimeStatus.activeCooldowns}个币种\n`;
+
+        if (realtimeStatus.cooldownSymbols.length > 0) {
+          const symbols = realtimeStatus.cooldownSymbols.slice(0, 5).join(', ');
+          statusMessage += `• 冷却币种: ${symbols}${realtimeStatus.cooldownSymbols.length > 5 ? '...' : ''}\n`;
+        }
+
+        statusMessage += `\n💡 实时推送${realtimeStatus.enabled ? '正常运行' : '等待启动'}`;
+
+        await ctx.replyWithMarkdown(statusMessage);
+      } catch (error) {
+        console.error('Realtime status error:', error);
+        await ctx.reply('❌ 获取实时推送状态时发生错误');
       }
     });
 
@@ -440,7 +561,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           '1w': '1周'
         };
 
-        await ctx.reply(`📊 正在查询${periodNames[period]}涨幅榜...`);
+        // 24小时数据提示使用更快的/gainers命令
+        if (period === '1d' || period === '24h') {
+          await ctx.reply(`💡 查询24小时数据建议使用 /gainers 命令，响应更快！\n📊 继续查询${periodNames[period]}涨幅榜...`);
+        } else {
+          await ctx.reply(`📊 正在查询${periodNames[period]}涨幅榜...`);
+        }
+
+        let queryTime = Date.now();
 
         // Get all futures symbols
         const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
@@ -500,6 +628,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
         message += `\n🕐 统计时间: ${timeRange}`;
         message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
+        message += `\n📊 数据来源: 📡 K线数据`;
+        message += `\n⚡ 查询耗时: ${Date.now() - queryTime}ms`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
@@ -508,29 +638,58 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    // 24小时跌幅榜
+    // 24小时跌幅榜 - 优化版本使用实时缓存
     this.bot.command('losers', async (ctx) => {
       try {
         await ctx.reply('📉 正在查询24小时跌幅榜...');
 
-        // 🔥 Trigger real-time ranking analysis to capture sudden movers
-        await rankingAnalyzer.analyzeRankings('user-query');
+        let losers;
+        let dataSource = '';
+        let queryTime = Date.now();
 
-        // Use tiered data manager for optimized data fetching
-        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
-        const validSymbols = filterTradingPairs(allSymbols);
-        const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
-        const allStats = Array.from(allStatsMap.values());
-        
-        // 过滤交易对并按跌幅排序，取前10
-        const losers = allStats
-          .filter(stat => {
-            return parseFloat(stat.priceChangePercent) < 0 && 
-                   validSymbols.includes(stat.symbol) &&
-                   parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
-          })
-          .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
-          .slice(0, 10);
+        // 优先使用实时缓存数据
+        if (realtimeMarketCache.isReady()) {
+          log.debug('Using realtime cache for losers query');
+          const realtimeLosers = realtimeMarketCache.getTopLosers(10, 10000);
+
+          if (realtimeLosers.length > 0) {
+            losers = realtimeLosers.map(data => ({
+              symbol: data.symbol,
+              priceChangePercent: data.priceChangePercent.toString(),
+              lastPrice: data.price.toString(),
+              volume: data.volume.toString()
+            }));
+            dataSource = '⚡ 实时数据';
+            log.info(`Losers query served from realtime cache in ${Date.now() - queryTime}ms`);
+          }
+        }
+
+        // Fallback 到 REST API
+        if (!losers || losers.length === 0) {
+          log.debug('Using REST API fallback for losers query');
+          dataSource = '📡 API数据';
+
+          // 🔥 Trigger real-time ranking analysis to capture sudden movers
+          await rankingAnalyzer.analyzeRankings('user-query');
+
+          // Use tiered data manager for optimized data fetching
+          const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
+          const validSymbols = filterTradingPairs(allSymbols);
+          const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
+          const allStats = Array.from(allStatsMap.values());
+
+          // 过滤交易对并按跌幅排序，取前10
+          losers = allStats
+            .filter(stat => {
+              return parseFloat(stat.priceChangePercent) < 0 &&
+                     validSymbols.includes(stat.symbol) &&
+                     parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
+            })
+            .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
+            .slice(0, 10);
+
+          log.info(`Losers query served from REST API in ${Date.now() - queryTime}ms`);
+        }
 
         let message = `📉 *24小时跌幅榜 TOP10*\n\n`;
         
@@ -549,6 +708,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         });
 
         message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
+        message += `\n📊 数据来源: ${dataSource}`;
 
         await ctx.replyWithMarkdown(message);
       } catch (error) {
@@ -1169,17 +1329,23 @@ ${riskIcon} 币种: ${symbol}
         // Enable gainers alerts for user
         await TriggerAlertModel.setTriggerAlert(userId, 'gainers', true);
         
-        // Start gainers monitoring if not already running
-        await triggerAlertService.startGainersMonitoring();
-        
-        const message = `✅ *涨幅榜推送已启动*
+        // 实时推送服务已在启动时自动启用，这里仅需确认状态
+        const serviceStatus = realtimeAlertService.getStatus();
 
-📈 监控设置:
-• 检查间隔: 1分钟 (测试模式)
-• 推送条件: 新币进入前10或排名显著变化
-• 状态: 已启用
+        const message = `🚀 *实时涨幅榜推送已启动*
 
-💡 您将在涨幅榜发生重要变化时收到推送通知
+📈 推送状态: ${serviceStatus.enabled ? '✅ 已启用' : '⚡ 启动中'}
+⏰ 启动时间: ${formatTimeToUTC8(new Date())}
+
+🎯 *智能推送策略:*
+• 新进入前10且涨幅≥10%
+• 排名变化≥3位
+• 同一币种10分钟内最多推送2次
+
+⚡ *实时响应:* 基于WebSocket数据流
+📊 *数据源:* 币安期货实时数据
+
+💡 您将在涨幅榜发生重要变化时立即收到推送
 🛑 使用 /stop_gainers_push 停止推送`;
 
         await ctx.replyWithMarkdown(message);
@@ -1198,12 +1364,15 @@ ${riskIcon} 币种: ${symbol}
         // Disable gainers alerts for user
         await TriggerAlertModel.setTriggerAlert(userId, 'gainers', false);
         
-        const message = `⏹️ *涨幅榜推送已停止*
+        const message = `⏹️ *实时涨幅榜推送已停止*
 
-📈 推送状态: 已关闭
+📈 推送状态: 已关闭（仅对您关闭）
 ⏰ 停止时间: ${formatTimeToUTC8(new Date())}
 
-💡 使用 /start_gainers_push 重新启动推送`;
+💡 *说明:*
+• 实时推送服务继续运行
+• 您将不再收到涨幅榜推送通知
+• 使用 /start_gainers_push 重新启动推送`;
 
         await ctx.replyWithMarkdown(message);
         
@@ -1603,6 +1772,7 @@ ${riskIcon} 币种: ${symbol}
       { command: 'stop_oi24h_push', description: '停止OI 24小时推送通知' },
       { command: 'push_status', description: '查看推送通知状态' },
       { command: 'status', description: '查看系统状态' },
+      { command: 'cache_status', description: '查看实时数据缓存状态' },
       { command: 'debug', description: '记录bug和优化建议' },
       { command: 'help', description: '查看完整帮助文档' }
     ];
@@ -1729,6 +1899,17 @@ ${riskIcon} 币种: ${symbol}
     } catch (error) {
       console.error('Failed to send message to authorized user:', error);
       throw error;
+    }
+  }
+
+  /**
+   * 获取授权用户ID
+   */
+  getAuthorizedUserId(): number | null {
+    try {
+      return parseInt(config.telegram.userId, 10);
+    } catch {
+      return null;
     }
   }
 }
