@@ -5,17 +5,17 @@
 
 // 已下架代币黑名单 - 完全过滤
 export const DELISTED_TOKENS = [
-  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AGIX', 'LINA'
+  'ALPACA', 'BNX', 'OCEAN', 'DGB', 'AGIX', 'LINA', 'LOKA'
 ];
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 'TA' , 'BID' , 'HIFI' , 'BSW' , 
+  'LUNA', 'LUNC', 'USTC', 'TA', 'BID', 'HIFI', 'BSW', 'EPT', 'OBOL', 'NAORIS'
 ];
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'YALA', 'GPS' , 'ZORA' , 'DAM' , 'PTB' , 'Q' , 'AIO', 'AVNT', 'SAPIEN', 'NAORIS', 'JELLYJELLY', 'F', 'BB'
+  'YALA', 'GPS', 'ZORA', 'DAM', 'PTB', 'Q', 'AIO', 'AVNT', 'SAPIEN', 'JELLYJELLY', 'F', 'BB', 'ACE', 'PUMPBTC', 'UB'
 ];
 
 

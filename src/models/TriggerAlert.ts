@@ -186,7 +186,7 @@ export class TriggerAlertModel {
       const stmt = await db.prepare(`
         SELECT * FROM gainers_rankings 
         WHERE timestamp = (SELECT MAX(timestamp) FROM gainers_rankings)
-        ORDER BY position ASC
+        ORDER BY "position" ASC
         LIMIT 10
       `);
       
@@ -206,7 +206,7 @@ export class TriggerAlertModel {
       const stmt = await db.prepare(`
         SELECT * FROM funding_rankings 
         WHERE timestamp = (SELECT MAX(timestamp) FROM funding_rankings)
-        ORDER BY position ASC
+        ORDER BY "position" ASC
         LIMIT 10
       `);
       
@@ -228,7 +228,7 @@ export class TriggerAlertModel {
         WHERE period = ? AND timestamp = (
           SELECT MAX(timestamp) FROM oi_rankings WHERE period = ?
         )
-        ORDER BY position ASC
+        ORDER BY "position" ASC
         LIMIT 10
       `);
       
@@ -272,7 +272,7 @@ export class TriggerAlertModel {
         SELECT oir.* FROM oi_rankings oir
         JOIN second_latest_timestamp slt ON oir.timestamp = slt.timestamp
         WHERE oir.period = ?
-        ORDER BY oir.position ASC
+        ORDER BY oir."position" ASC
         LIMIT 10
       `);
       
@@ -319,7 +319,7 @@ export class TriggerAlertModel {
         )
         SELECT gr.* FROM gainers_rankings gr
         JOIN second_latest_timestamp slt ON gr.timestamp = slt.timestamp
-        ORDER BY gr.position ASC
+        ORDER BY gr."position" ASC
         LIMIT 10
       `);
       
@@ -366,7 +366,7 @@ export class TriggerAlertModel {
         )
         SELECT fr.* FROM funding_rankings fr
         JOIN second_latest_timestamp slt ON fr.timestamp = slt.timestamp
-        ORDER BY fr.position ASC
+        ORDER BY fr."position" ASC
         LIMIT 10
       `);
       

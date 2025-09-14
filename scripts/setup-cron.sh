@@ -30,6 +30,7 @@ fi
 chmod +x "$DEPLOY_CHECK_SCRIPT"
 chmod +x "$PROJECT_DIR/scripts/auto-deploy.sh"
 chmod +x "$PROJECT_DIR/scripts/docker-deploy.sh"
+chmod +x "$PROJECT_DIR/scripts/send-debug-report.sh"
 
 log "📝 配置crontab定时任务..."
 
@@ -45,16 +46,18 @@ else
 fi
 
 # 检查是否已存在相同的定时任务
-if grep -q "crypto-tgalert.*check-deployment" "$TEMP_CRON_FILE"; then
+if grep -q "crypto-tgalert.*check-deployment\|crypto-tgalert.*send-debug-report" "$TEMP_CRON_FILE"; then
     log "ℹ️  发现已存在的定时任务，将替换..."
     # 删除旧的任务行
-    grep -v "crypto-tgalert.*check-deployment" "$TEMP_CRON_FILE" > "${TEMP_CRON_FILE}.new"
+    grep -v "crypto-tgalert.*check-deployment\|crypto-tgalert.*send-debug-report" "$TEMP_CRON_FILE" > "${TEMP_CRON_FILE}.new"
     mv "${TEMP_CRON_FILE}.new" "$TEMP_CRON_FILE"
 fi
 
 # 添加新的定时任务
 echo "# crypto-tgalert 自动部署检查 - 每天UTC+8凌晨4点执行" >> "$TEMP_CRON_FILE"
 echo "$CRON_TIME $DEPLOY_CHECK_SCRIPT >> $PROJECT_DIR/logs/cron.log 2>&1" >> "$TEMP_CRON_FILE"
+echo "# crypto-tgalert debug报告发送 - 每天UTC+8早上8点执行" >> "$TEMP_CRON_FILE"
+echo "0 0 * * * $PROJECT_DIR/scripts/send-debug-report.sh >> $PROJECT_DIR/logs/cron.log 2>&1" >> "$TEMP_CRON_FILE"
 
 # 应用新的crontab
 crontab "$TEMP_CRON_FILE"
