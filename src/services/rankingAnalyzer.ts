@@ -1,5 +1,4 @@
 import { binanceClient } from './binance';
-import { volumeClassifier } from '../utils/volumeClassifier';
 import { filterTradingPairs } from '../config/tokenLists';
 import { log } from '../utils/logger';
 
@@ -59,10 +58,7 @@ export class RankingAnalyzer {
         this.getTopLosers(), 
         this.getTopNegativeFunding()
       ]);
-      
-      // Update volume classifier with hot ranking symbols
-      volumeClassifier.updateHotRankingSymbols(gainersSymbols, losersSymbols, fundingSymbols);
-      
+
       const analysisTime = Date.now() - startTime;
       log.info('Ranking analysis completed', {
         triggeredBy,
@@ -181,13 +177,11 @@ export class RankingAnalyzer {
   getStatus(): {
     isRunning: boolean;
     refreshInterval: number;
-    hotSymbolsCount: number;
     lastUpdate: number;
   } {
     return {
       isRunning: this.isRunning,
       refreshInterval: this.refreshInterval,
-      hotSymbolsCount: volumeClassifier.getHotRankingSymbols().length,
       lastUpdate: 0 // Would need to track this separately if needed
     };
   }

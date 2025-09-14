@@ -169,7 +169,6 @@ export class TieredDataManager {
     tickers: { total: number; byTier: Record<string, number> };
     funding: { total: number; byTier: Record<string, number> };
     openInterest: { total: number; byTier: Record<string, number> };
-    hotRankingSymbols: { count: number; symbols: string[] };
   } {
     const countByTier = (map: Map<string, TieredDataEntry<any>>) => {
       const counts: Record<string, number> = { high: 0, medium: 0, low: 0 };
@@ -179,7 +178,6 @@ export class TieredDataManager {
       return counts;
     };
     
-    const hotSymbols = volumeClassifier.getHotRankingSymbols();
     
     return {
       tickers: {
@@ -193,10 +191,6 @@ export class TieredDataManager {
       openInterest: {
         total: this.openInterestData.size,
         byTier: countByTier(this.openInterestData)
-      },
-      hotRankingSymbols: {
-        count: hotSymbols.length,
-        symbols: hotSymbols.slice(0, 10) // Show first 10 for brevity
       }
     };
   }

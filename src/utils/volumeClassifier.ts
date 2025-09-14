@@ -32,8 +32,6 @@ export interface VolumeTierConfig {
 export class VolumeClassifier {
   private volumeData = new Map<string, VolumeClassification>();
   private lastClassificationUpdate = 0;
-  private hotRankingSymbols = new Set<string>(); // 热榜代币集合
-  private lastHotRankingUpdate = 0;
   
   // Volume thresholds in USDT (24h volume)
   private readonly config: VolumeTierConfig = {
@@ -157,21 +155,15 @@ export class VolumeClassifier {
   }
 
   /**
-   * Get update interval for a symbol based on its volume tier and hot ranking status
+   * Get update interval for a symbol based on its volume tier
    */
   getUpdateInterval(symbol: string): number {
-    // Hot ranking symbols always use high-frequency updates
-    if (this.hotRankingSymbols.has(symbol.toUpperCase())) {
-      log.debug(`Symbol ${symbol} is in hot rankings, using high-frequency update`);
-      return this.config.high.updateIntervalMs;
-    }
-    
     const classification = this.getSymbolClassification(symbol);
     if (!classification) {
       // Default to low volume interval for unknown symbols
       return this.config.low.updateIntervalMs;
     }
-    
+
     switch (classification.tier) {
       case 'high':
         return this.config.high.updateIntervalMs;
@@ -264,66 +256,6 @@ export class VolumeClassifier {
     log.info('Volume classifier config updated', this.config);
   }
 
-  /**
-   * Update hot ranking symbols that need real-time updates regardless of volume
-   */
-  updateHotRankingSymbols(gainers: string[], losers: string[], fundingSymbols: string[]): void {
-    const previousSize = this.hotRankingSymbols.size;
-    
-    // Clear and rebuild hot rankings set
-    this.hotRankingSymbols.clear();
-    
-    // Add all ranking symbols
-    [...gainers, ...losers, ...fundingSymbols].forEach(symbol => {
-      this.hotRankingSymbols.add(symbol.toUpperCase());
-    });
-    
-    this.lastHotRankingUpdate = Date.now();
-    
-    log.info('Hot ranking symbols updated', {
-      previousCount: previousSize,
-      newCount: this.hotRankingSymbols.size,
-      gainers: gainers.length,
-      losers: losers.length,
-      funding: fundingSymbols.length,
-      hotSymbols: Array.from(this.hotRankingSymbols).slice(0, 10) // Show first 10 for logging
-    });
-  }
-
-  /**
-   * Get current hot ranking symbols
-   */
-  getHotRankingSymbols(): string[] {
-    return Array.from(this.hotRankingSymbols);
-  }
-
-  /**
-   * Check if a symbol is in hot rankings
-   */
-  isHotRankingSymbol(symbol: string): boolean {
-    return this.hotRankingSymbols.has(symbol.toUpperCase());
-  }
-
-  /**
-   * Get effective tier for a symbol (considering hot ranking override)
-   */
-  getEffectiveTier(symbol: string): 'high' | 'medium' | 'low' {
-    // Hot ranking symbols are always treated as high tier
-    if (this.isHotRankingSymbol(symbol)) {
-      return 'high';
-    }
-    
-    const classification = this.getSymbolClassification(symbol);
-    return classification?.tier || 'low';
-  }
-
-  /**
-   * Check if hot ranking symbols need refresh
-   */
-  needsHotRankingRefresh(): boolean {
-    const refreshInterval = 5 * 60 * 1000; // 5 minutes
-    return Date.now() - this.lastHotRankingUpdate > refreshInterval;
-  }
 }
 
 // Export singleton instance

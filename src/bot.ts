@@ -340,10 +340,6 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         const statusMessage = `
 📊 *缓存优化系统状态*
 
-🔥 *热榜代币 (强制实时更新):*
-数量: ${cacheStatus.hotRankingSymbols.count}
-代币: ${cacheStatus.hotRankingSymbols.symbols.join(', ')}
-
 📈 *数据缓存状态:*
 • Ticker数据: ${cacheStatus.tickers.total} (高:${cacheStatus.tickers.byTier.high} 中:${cacheStatus.tickers.byTier.medium} 低:${cacheStatus.tickers.byTier.low})
 • 资金费率: ${cacheStatus.funding.total} (高:${cacheStatus.funding.byTier.high} 中:${cacheStatus.funding.byTier.medium} 低:${cacheStatus.funding.byTier.low})

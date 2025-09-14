@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2025-09-15
+
+### 🔧 **优化与体验改进**
+
+#### 实时推送格式优化
+- **IMPROVED**: 实时推送消息格式与 `/gainers` 命令保持一致
+  - **完整榜单**: 显示完整TOP10涨幅榜，而非仅显示变化币种
+  - **格式统一**: 标准化的编号格式 (1. 🟢**BTC** +15.38% ($67,234.50))
+  - **变化提示**: 在完整榜单下方简洁显示本次变化
+  - **用户体验**: 响应用户反馈，提供更完整的排行信息
+
+#### 代码架构清理
+- **REMOVED**: 清理已废弃的热榜分层更新逻辑
+  - **移除**: `VolumeClassifier` 中的 `hotRankingSymbols` 相关代码
+  - **简化**: 不再需要基于轮询的分层更新策略
+  - **性能**: 减少冗余计算和调试日志噪音
+  - **维护性**: 代码更加简洁，专注于WebSocket实时架构
+
+#### 技术债务清理
+- **FIXED**: 移除未使用的导入和方法调用
+- **OPTIMIZED**: 简化缓存状态显示逻辑
+- **CLEANED**: 删除过时的debug日志输出
+
 ## [2.1.0] - 2025-09-15
 
 ### 🚀 **MAJOR ARCHITECTURAL UPGRADE: 实时WebSocket推送系统**

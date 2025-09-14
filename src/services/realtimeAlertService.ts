@@ -265,46 +265,53 @@ export class RealtimeAlertService {
       // Check if user has gainers alerts enabled (simplified check)
       // Note: For now we'll assume the push is enabled if service is running
       // TODO: Implement proper user preference checking
-      let message = `🚨 *实时涨幅榜变动提醒*\n\n`;
 
-      // 按变化类型分组处理
+      // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
+      let message = `🚀 *24小时涨幅榜 TOP10* (实时推送)\n\n`;
+
+      // 显示完整TOP10榜单
+      const top10 = currentRankings.slice(0, 10);
+      const priceFormatPromises = top10.map(async (ranking, index) => {
+        const symbol = ranking.symbol.replace('USDT', '');
+        const changePercent = formatPriceChange(ranking.priceChangePercent);
+        const formattedPrice = await formatPriceWithSeparators(ranking.price.toString(), ranking.symbol);
+        const riskIcon = getRiskIcon(ranking.symbol);
+        return `${index + 1}. ${riskIcon}**${symbol}** +${changePercent}% ($${formattedPrice})\n`;
+      });
+
+      const formattedEntries = await Promise.all(priceFormatPromises);
+      formattedEntries.forEach(entry => {
+        message += entry;
+      });
+
+      // 添加变化提示
       const newEntries = changes.filter(c => c.changeType === 'new_entry');
       const positionChanges = changes.filter(c => c.changeType === 'position_change');
 
-      // 新进入前10
-      if (newEntries.length > 0) {
-        message += `🆕 *新进入前10:*\n`;
-        for (const change of newEntries.slice(0, 3)) { // 最多显示3个
-          const symbol = change.symbol.replace('USDT', '');
-          const changePercent = formatPriceChange(change.priceChangePercent);
-          const riskIcon = getRiskIcon(change.symbol);
-          const currentData = currentRankings.find(r => r.symbol === change.symbol);
-          const formattedPrice = currentData ?
-            await formatPriceWithSeparators(currentData.price.toString(), change.symbol) :
-            'N/A';
+      if (newEntries.length > 0 || positionChanges.length > 0) {
+        message += `\n🔥 *本次变化:*\n`;
 
-          message += `  ${riskIcon}**${symbol}** #${change.currentPosition} +${changePercent}% ($${formattedPrice})\n`;
+        // 新进入前10
+        if (newEntries.length > 0) {
+          for (const change of newEntries.slice(0, 2)) {
+            const symbol = change.symbol.replace('USDT', '');
+            message += `• 🆕 **${symbol}** 新进入#${change.currentPosition}\n`;
+          }
         }
-        message += `\n`;
+
+        // 排名大幅变化
+        if (positionChanges.length > 0) {
+          for (const change of positionChanges.slice(0, 2)) {
+            const symbol = change.symbol.replace('USDT', '');
+            const moveDirection = change.changeValue > 0 ? '⬆️' : '⬇️';
+            const moveText = change.changeValue > 0 ? '上升' : '下降';
+            message += `• ${moveDirection} **${symbol}** ${moveText}${Math.abs(change.changeValue)}位 (#${change.previousPosition}→#${change.currentPosition})\n`;
+          }
+        }
       }
 
-      // 排名大幅变化
-      if (positionChanges.length > 0) {
-        message += `📊 *排名大幅变动:*\n`;
-        for (const change of positionChanges.slice(0, 3)) { // 最多显示3个
-          const symbol = change.symbol.replace('USDT', '');
-          const changePercent = formatPriceChange(change.priceChangePercent);
-          const riskIcon = getRiskIcon(change.symbol);
-          const moveDirection = change.changeValue > 0 ? '⬆️' : '⬇️';
-          const moveText = change.changeValue > 0 ? '上升' : '下降';
-
-          message += `  ${riskIcon}**${symbol}** ${moveDirection}${moveText}${Math.abs(change.changeValue)}位 (#${change.previousPosition}→#${change.currentPosition}) +${changePercent}%\n`;
-        }
-        message += `\n`;
-      }
-
-      message += `⏰ ${formatTimeToUTC8(new Date())}\n`;
-      message += `⚡ 实时数据 | 智能推送`;
+      message += `\n📊 数据来源: ⚡ 实时数据`;
+      message += `\n⏰ ${formatTimeToUTC8(new Date())}`;
 
       // 发送消息
       const userId = this.telegramBot.getAuthorizedUserId();
