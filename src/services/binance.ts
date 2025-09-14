@@ -620,6 +620,179 @@ export class BinanceClient {
   }
 
   /**
+   * Get futures kline/candlestick data
+   */
+  async getFuturesKlines(params: KlinesParams): Promise<Kline[]> {
+    try {
+      const requestParams = {
+        symbol: params.symbol.toUpperCase(),
+        interval: params.interval,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit || 500
+      };
+
+      const response = await this.futuresClient.get('/fapi/v1/klines', { params: requestParams });
+
+      const klines: Kline[] = response.data.map((kline: any[]) => ({
+        openTime: kline[0],
+        open: kline[1],
+        high: kline[2],
+        low: kline[3],
+        close: kline[4],
+        volume: kline[5],
+        closeTime: kline[6],
+        quoteAssetVolume: kline[7],
+        numberOfTrades: kline[8],
+        takerBuyBaseAssetVolume: kline[9],
+        takerBuyQuoteAssetVolume: kline[10],
+        ignore: kline[11]
+      }));
+
+      log.debug(`Futures klines fetched for ${params.symbol}`, {
+        interval: params.interval,
+        count: klines.length
+      });
+
+      return klines;
+    } catch (error) {
+      log.error(`Failed to get futures klines for ${params.symbol}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get period price change for futures symbols
+   */
+  async getFuturesPeriodStats(symbols: string[], interval: string, periods: number = 1): Promise<Array<{
+    symbol: string;
+    priceChangePercent: number;
+    currentPrice: string;
+    openPrice: string;
+    closePrice: string;
+    high: string;
+    low: string;
+  }>> {
+    try {
+      // Calculate time range based on interval and periods
+      const endTime = Date.now();
+      let intervalMs = 0;
+
+      // Convert interval to milliseconds
+      switch (interval) {
+        case '1m': intervalMs = 60 * 1000; break;
+        case '3m': intervalMs = 3 * 60 * 1000; break;
+        case '5m': intervalMs = 5 * 60 * 1000; break;
+        case '15m': intervalMs = 15 * 60 * 1000; break;
+        case '30m': intervalMs = 30 * 60 * 1000; break;
+        case '1h': intervalMs = 60 * 60 * 1000; break;
+        case '2h': intervalMs = 2 * 60 * 60 * 1000; break;
+        case '4h': intervalMs = 4 * 60 * 60 * 1000; break;
+        case '6h': intervalMs = 6 * 60 * 60 * 1000; break;
+        case '8h': intervalMs = 8 * 60 * 60 * 1000; break;
+        case '12h': intervalMs = 12 * 60 * 60 * 1000; break;
+        case '1d': intervalMs = 24 * 60 * 60 * 1000; break;
+        case '3d': intervalMs = 3 * 24 * 60 * 60 * 1000; break;
+        case '1w': intervalMs = 7 * 24 * 60 * 60 * 1000; break;
+        default:
+          throw new Error(`Unsupported interval: ${interval}`);
+      }
+
+      const startTime = endTime - (intervalMs * periods);
+
+      // Batch request with concurrency limit
+      const batchSize = 10;
+      const results: Array<{
+        symbol: string;
+        priceChangePercent: number;
+        currentPrice: string;
+        openPrice: string;
+        closePrice: string;
+        high: string;
+        low: string;
+      }> = [];
+
+      for (let i = 0; i < symbols.length; i += batchSize) {
+        const batch = symbols.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (symbol) => {
+          try {
+            const klines = await this.getFuturesKlines({
+              symbol: symbol,
+              interval: interval as any,
+              startTime: startTime,
+              endTime: endTime,
+              limit: periods + 1
+            });
+
+            if (klines.length === 0) {
+              return null;
+            }
+
+            let openPrice, closePrice;
+
+            if (klines.length === 1) {
+              // 只有一条K线时，使用该K线的开盘价和当前收盘价计算
+              openPrice = parseFloat(klines[0].open);
+              closePrice = parseFloat(klines[0].close);
+            } else {
+              // 多条K线时，使用第一条的开盘价和最后一条的收盘价
+              const firstKline = klines[0];
+              const lastKline = klines[klines.length - 1];
+              openPrice = parseFloat(firstKline.open);
+              closePrice = parseFloat(lastKline.close);
+            }
+
+            const priceChangePercent = ((closePrice - openPrice) / openPrice) * 100;
+
+            // Get high and low from all klines
+            let high = 0;
+            let low = Infinity;
+            klines.forEach(kline => {
+              const klineHigh = parseFloat(kline.high);
+              const klineLow = parseFloat(kline.low);
+              if (klineHigh > high) high = klineHigh;
+              if (klineLow < low) low = klineLow;
+            });
+
+            return {
+              symbol: symbol,
+              priceChangePercent: priceChangePercent,
+              currentPrice: closePrice.toString(),
+              openPrice: openPrice.toString(),
+              closePrice: closePrice.toString(),
+              high: high.toString(),
+              low: low.toString()
+            };
+          } catch (error) {
+            log.error(`Failed to get period stats for ${symbol}`, error);
+            return null;
+          }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        const validResults = batchResults.filter(result => result !== null) as any[];
+        results.push(...validResults);
+
+        // Small delay between batches to respect rate limits
+        if (i + batchSize < symbols.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+
+      log.debug(`Fetched period stats for ${results.length} symbols`, {
+        interval: interval,
+        periods: periods,
+        timeRange: `${new Date(startTime).toISOString()} - ${new Date(endTime).toISOString()}`
+      });
+
+      return results;
+    } catch (error) {
+      log.error('Failed to get futures period stats', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get funding rate for a symbol
    */
   async getFundingRate(symbol: string): Promise<FundingRate> {

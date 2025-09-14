@@ -102,11 +102,17 @@ export class TelegramBot {
 
 📊 <b>排行榜查询:</b>
 /gainers - 24小时涨幅榜 TOP10
+/gainers_period &lt;时间段&gt; [数量] - 自定义时间段涨幅榜
 /losers - 24小时跌幅榜 TOP10
 /funding - 资金费率排行榜 (负费率优先)
 /oi24h - 24小时持仓量增长榜
 /oi4h - 4小时持仓量增长榜
 /oi1h - 1小时持仓量增长榜
+
+📈 <b>时间段涨幅榜示例:</b>
+/gainers_period 1h - 1小时涨幅榜前10
+/gainers_period 5m 5 - 5分钟涨幅榜前5
+支持: 5m, 15m, 30m, 1h, 4h, 12h, 3d, 1w
 
 ⚡ <b>价格提醒:</b>
 /alert btc &gt; 50000 - BTC超过50000时提醒
@@ -382,6 +388,123 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         console.error('Gainers query error:', error);
         await ctx.reply('❌ 查询涨幅榜失败');
+      }
+    });
+
+    // 时间段涨幅榜
+    this.bot.command('gainers_period', async (ctx) => {
+      try {
+        const messageText = ctx.message?.text || '';
+        const args = messageText.split(' ').slice(1); // Remove command name
+
+        if (args.length === 0) {
+          await ctx.replyWithMarkdown(
+            `📊 *时间段涨幅榜使用说明*\n\n` +
+            `用法: \`/gainers_period <时间段> [数量]\`\n\n` +
+            `支持的时间段：\n` +
+            `• \`5m\` - 5分钟\n` +
+            `• \`15m\` - 15分钟\n` +
+            `• \`30m\` - 30分钟\n` +
+            `• \`1h\` - 1小时\n` +
+            `• \`4h\` - 4小时\n` +
+            `• \`12h\` - 12小时\n` +
+            `• \`3d\` - 3天\n` +
+            `• \`1w\` - 1周\n\n` +
+            `示例：\n` +
+            `\`/gainers_period 1h\` - 1小时涨幅榜前10\n` +
+            `\`/gainers_period 5m 5\` - 5分钟涨幅榜前5\n` +
+            `\`/gainers_period 3d 15\` - 3天涨幅榜前15`
+          );
+          return;
+        }
+
+        const period = args[0]?.toLowerCase();
+        const limit = args[1] ? Math.min(Math.max(parseInt(args[1]), 1), 20) : 10;
+
+        // Validate period
+        const validPeriods = ['5m', '15m', '30m', '1h', '4h', '12h', '3d', '1w'];
+        if (!validPeriods.includes(period)) {
+          await ctx.reply(`❌ 不支持的时间段: ${period}\n支持的时间段: ${validPeriods.join(', ')}`);
+          return;
+        }
+
+        // Get period display name
+        const periodNames: { [key: string]: string } = {
+          '5m': '5分钟',
+          '15m': '15分钟',
+          '30m': '30分钟',
+          '1h': '1小时',
+          '4h': '4小时',
+          '12h': '12小时',
+          '3d': '3天',
+          '1w': '1周'
+        };
+
+        await ctx.reply(`📊 正在查询${periodNames[period]}涨幅榜...`);
+
+        // Get all futures symbols
+        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
+        const validSymbols = filterTradingPairs(allSymbols);
+
+        // Get period stats
+        const periodStats = await this.binanceClient.getFuturesPeriodStats(validSymbols, period);
+
+        if (periodStats.length === 0) {
+          await ctx.reply('❌ 未获取到数据，请稍后重试');
+          return;
+        }
+
+        // Filter and sort by price change percentage (gainers only)
+        const gainers = periodStats
+          .filter(stat => stat.priceChangePercent > 0)
+          .sort((a, b) => b.priceChangePercent - a.priceChangePercent)
+          .slice(0, limit);
+
+        if (gainers.length === 0) {
+          await ctx.reply(`📊 ${periodNames[period]}内暂无上涨的币种`);
+          return;
+        }
+
+        let message = `🚀 *${periodNames[period]}涨幅榜 TOP${gainers.length}*\n\n`;
+
+        const priceFormatPromises = gainers.map(async (stat, index) => {
+          const symbol = stat.symbol.replace('USDT', '');
+          const change = formatPriceChange(stat.priceChangePercent);
+          const formattedPrice = await formatPriceWithSeparators(stat.currentPrice, stat.symbol);
+          const riskLevel = getTokenRiskLevel(stat.symbol);
+          const riskIcon = getRiskIcon(riskLevel);
+          return `${index + 1}. ${riskIcon}**${symbol}** +${change}% ($${formattedPrice})\n`;
+        });
+
+        const formattedEntries = await Promise.all(priceFormatPromises);
+        formattedEntries.forEach(entry => {
+          message += entry;
+        });
+
+        // Calculate time range for display
+        const now = new Date();
+        let intervalMs = 0;
+        switch (period) {
+          case '5m': intervalMs = 5 * 60 * 1000; break;
+          case '15m': intervalMs = 15 * 60 * 1000; break;
+          case '30m': intervalMs = 30 * 60 * 1000; break;
+          case '1h': intervalMs = 60 * 60 * 1000; break;
+          case '4h': intervalMs = 4 * 60 * 60 * 1000; break;
+          case '12h': intervalMs = 12 * 60 * 60 * 1000; break;
+          case '3d': intervalMs = 3 * 24 * 60 * 60 * 1000; break;
+          case '1w': intervalMs = 7 * 24 * 60 * 60 * 1000; break;
+        }
+
+        const startTime = new Date(now.getTime() - intervalMs);
+        const timeRange = `${formatTimeToUTC8(startTime).slice(5)} - ${formatTimeToUTC8(now).slice(5)}`;
+
+        message += `\n🕐 统计时间: ${timeRange}`;
+        message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
+
+        await ctx.replyWithMarkdown(message);
+      } catch (error) {
+        console.error('Period gainers query error:', error);
+        await ctx.reply('❌ 查询时间段涨幅榜失败，请稍后重试');
       }
     });
 
@@ -1459,6 +1582,7 @@ ${riskIcon} 币种: ${symbol}
     const commands = [
       { command: 'price', description: '查询加密货币价格 (例: /price btc)' },
       { command: 'gainers', description: '24小时涨幅榜 TOP10' },
+      { command: 'gainers_period', description: '自定义时间段涨幅榜 (例: /gainers_period 1h)' },
       { command: 'losers', description: '24小时跌幅榜 TOP10' },
       { command: 'funding', description: '资金费率排行榜' },
       { command: 'oi24h', description: '24小时持仓量增长榜' },
