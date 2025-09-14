@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2025-09-15
+
+### 🧹 **系统架构大清理**
+
+#### 移除Twitter/社交监控功能
+- **REMOVED**: 完全删除Twitter监控和社交媒体相关功能
+  - **删除服务**: `socialMonitor.ts`, `twitter.ts`, `twitterMock.ts`, `tweetProcessor.ts`
+  - **删除模型**: `TwitterFollow.ts` 和相关数据库表
+  - **清理配置**: 移除Twitter API配置和环境变量
+  - **简化架构**: 专注核心加密货币监控功能，提升系统稳定性
+  - **代码清理**: 删除所有Twitter相关导入、引用和测试
+
+#### 测试套件修复
+- **FIXED**: 修复Twitter功能移除后的测试导入错误
+  - **数据库测试**: 移除TwitterFollowModel相关测试
+  - **服务测试**: 修复twitterRateLimit导入问题
+  - **基础设施测试**: 清理过期的速率限制器引用
+  - **编译文件**: 清理dist目录中的过期TwitterFollow编译文件
+
+#### 技术债务清理
+- **OPTIMIZED**: 显著简化代码库架构
+- **ENHANCED**: 提高系统可维护性和专注度
+- **CLEANED**: 移除未使用的依赖和配置项
+- **PERFORMANCE**: 减少系统启动时间和内存占用
+
+### 🎯 **架构决策**
+- **专注核心功能**: 系统现在专注于币安期货市场监控
+- **简化维护**: 移除复杂的社交媒体集成减少维护负担
+- **提升稳定性**: 减少外部依赖降低系统故障风险
+- **优化性能**: 更轻量级的架构提供更快响应速度
+
 ## [2.1.1] - 2025-09-15
 
 ### 🔧 **优化与体验改进**

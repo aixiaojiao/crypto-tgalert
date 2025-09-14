@@ -5,12 +5,6 @@ export interface UserConfig {
   updated_at: string;
 }
 
-export interface TwitterFollow {
-  id: number;
-  user_id: string;
-  twitter_username: string;
-  created_at: string;
-}
 
 export interface PriceAlert {
   id: number;
@@ -38,14 +32,6 @@ export const createTables = `
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS twitter_follows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    twitter_username TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(user_id, twitter_username),
-    FOREIGN KEY(user_id) REFERENCES user_config(user_id)
-  );
 
   CREATE TABLE IF NOT EXISTS price_alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +55,5 @@ export const createTables = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts(is_active, symbol);
-  CREATE INDEX IF NOT EXISTS idx_twitter_follows_user ON twitter_follows(user_id);
   CREATE INDEX IF NOT EXISTS idx_alert_history_alert ON alert_history(alert_id);
 `;

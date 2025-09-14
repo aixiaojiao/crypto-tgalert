@@ -103,9 +103,8 @@ export class TelegramBot {
 
 📊 *可用功能:*
 • 实时价格查询
-• 价格提醒设置  
-• Twitter账户监控
-• 链上数据查询
+• 价格提醒设置
+• 实时涨跌幅推送
 
 💡 *基础命令:*
 /help - 查看完整帮助
@@ -161,14 +160,6 @@ export class TelegramBot {
 /stop_oi24h_push - 停止OI 24小时推送
 /push_status - 查看推送状态
 
-🐦 <b>Twitter监控:</b>
-/follow elonmusk - 关注用户推文
-/unfollow elonmusk - 取消关注
-/following - 查看关注列表
-
-🔗 <b>链上查询:</b>
-/tx hash - 查询交易详情
-/address addr - 查询地址信息
 
 ⚙️ <b>系统:</b>
 /status - 查看系统状态

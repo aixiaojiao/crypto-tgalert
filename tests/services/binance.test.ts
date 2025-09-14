@@ -1,6 +1,6 @@
 import { BinanceClient } from '../../src/services/binance';
 import { BinanceApiError } from '../../src/types/binance';
-import { binanceRateLimit, twitterRateLimit } from '../../src/utils/ratelimit';
+import { binanceRateLimit } from '../../src/utils/ratelimit';
 
 describe('BinanceClient', () => {
   let client: BinanceClient;
@@ -16,7 +16,6 @@ describe('BinanceClient', () => {
   afterAll(() => {
     // Clean up global rate limiters to prevent memory leaks in tests
     binanceRateLimit.destroy();
-    twitterRateLimit.destroy();
   });
 
   describe('Connection Tests', () => {

@@ -18,13 +18,6 @@ export interface Config {
     databasePath: string;
     port: number;
   };
-  twitter?: {
-    bearerToken: string;
-    apiKey: string;
-    apiSecret: string;
-    accessToken: string;
-    accessSecret: string;
-  };
 }
 
 // 验证必需的环境变量
@@ -53,16 +46,6 @@ export const config: Config = {
   },
 };
 
-// 可选的Twitter配置
-if (process.env.TWITTER_BEARER_TOKEN) {
-  config.twitter = {
-    bearerToken: process.env.TWITTER_BEARER_TOKEN,
-    apiKey: process.env.TWITTER_API_KEY || '',
-    apiSecret: process.env.TWITTER_API_SECRET || '',
-    accessToken: process.env.TWITTER_ACCESS_TOKEN || '',
-    accessSecret: process.env.TWITTER_ACCESS_SECRET || '',
-  };
-}
 
 console.log('✅ Configuration loaded successfully');
 console.log(`🤖 Bot for user: ${config.telegram.userId}`);

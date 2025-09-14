@@ -104,7 +104,3 @@ export const binanceRateLimit = new RateLimiter({
   maxRequests: 2000 // Binance限制2400/min，设为2000保守一些
 });
 
-export const twitterRateLimit = new RateLimiter({
-  windowMs: 15 * 60000, // 15分钟
-  maxRequests: 300 // Twitter限制
-});

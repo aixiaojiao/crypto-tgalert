@@ -1,7 +1,6 @@
 import { initDatabase, closeDatabase } from '../../src/database/connection';
 import { UserModel } from '../../src/models/User';
 import { PriceAlertModel } from '../../src/models/PriceAlert';
-import { TwitterFollowModel } from '../../src/models/TwitterFollow';
 
 describe('Database Tests', () => {
   beforeAll(async () => {
@@ -91,69 +90,4 @@ describe('Database Tests', () => {
     });
   });
 
-  describe('TwitterFollowModel', () => {
-    beforeEach(async () => {
-      await UserModel.findOrCreateUser('twitteruser');
-    });
-
-    test('should add twitter follow', async () => {
-      const userId = 'twitteruser';
-      const username = 'elonmusk';
-      
-      const followId = await TwitterFollowModel.addFollow(userId, username);
-      expect(followId).toBeGreaterThan(0);
-
-      const follows = await TwitterFollowModel.getUserFollows(userId);
-      expect(follows).toHaveLength(1);
-      expect(follows[0].twitter_username).toBe(username);
-    });
-
-    test('should prevent duplicate follows', async () => {
-      const userId = 'twitteruser2';
-      await UserModel.findOrCreateUser(userId);
-      const username = 'vitalikbuterin';
-
-      await TwitterFollowModel.addFollow(userId, username);
-
-      await expect(
-        TwitterFollowModel.addFollow(userId, username)
-      ).rejects.toThrow('已经关注了');
-    });
-
-    test('should remove twitter follow', async () => {
-      const userId = 'twitteruser3';
-      await UserModel.findOrCreateUser(userId);
-      const username = 'cz_binance';
-
-      await TwitterFollowModel.addFollow(userId, username);
-      const removed = await TwitterFollowModel.removeFollow(userId, username);
-
-      expect(removed).toBe(true);
-
-      const follows = await TwitterFollowModel.getUserFollows(userId);
-      expect(follows).toHaveLength(0);
-    });
-
-    test('should return false when removing non-existent follow', async () => {
-      const userId = 'twitteruser4';
-      await UserModel.findOrCreateUser(userId);
-
-      const removed = await TwitterFollowModel.removeFollow(userId, 'nonexistent');
-      expect(removed).toBe(false);
-    });
-
-    test('should get all follows across users', async () => {
-      const userId1 = 'user1';
-      const userId2 = 'user2';
-      
-      await UserModel.findOrCreateUser(userId1);
-      await UserModel.findOrCreateUser(userId2);
-
-      await TwitterFollowModel.addFollow(userId1, 'user1follow');
-      await TwitterFollowModel.addFollow(userId2, 'user2follow');
-
-      const allFollows = await TwitterFollowModel.getAllFollows();
-      expect(allFollows.length).toBeGreaterThanOrEqual(2);
-    });
-  });
 });

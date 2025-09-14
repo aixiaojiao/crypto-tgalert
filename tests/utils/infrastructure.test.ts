@@ -1,13 +1,12 @@
 import { log } from '../../src/utils/logger';
 import { ValidationError, retry } from '../../src/utils/errors';
-import { RateLimiter, binanceRateLimit, twitterRateLimit } from '../../src/utils/ratelimit';
+import { RateLimiter, binanceRateLimit } from '../../src/utils/ratelimit';
 import { validateTradingPair, validatePrice } from '../../src/utils/validation';
 
 describe('Infrastructure Tests', () => {
   afterAll(() => {
     // Clean up global rate limiters to prevent memory leaks in tests
     binanceRateLimit.destroy();
-    twitterRateLimit.destroy();
   });
 
   test('logger should work', () => {

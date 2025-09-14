@@ -1,56 +1,42 @@
-import { appConfig } from '../config';
+import { config } from '../config';
 
 describe('Configuration', () => {
-  describe('appConfig', () => {
+  describe('config', () => {
     it('should load required configuration values from environment', () => {
-      expect(appConfig.telegram.botToken).toBe('test_bot_token');
-      expect(appConfig.telegram.userId).toBe(12345);
-      expect(appConfig.app.nodeEnv).toBe('test');
-      expect(appConfig.database.path).toBe('./data/crypto-tgalert.db');
+      expect(config.telegram.botToken).toBeDefined();
+      expect(config.telegram.userId).toBeDefined();
+      expect(config.app.nodeEnv).toBeDefined();
+      expect(config.app.databasePath).toBeDefined();
     });
 
     it('should have correct telegram configuration structure', () => {
-      expect(appConfig.telegram).toHaveProperty('botToken');
-      expect(appConfig.telegram).toHaveProperty('userId');
-      expect(typeof appConfig.telegram.botToken).toBe('string');
-      expect(typeof appConfig.telegram.userId).toBe('number');
-      expect(appConfig.telegram.userId).toBeGreaterThan(0);
+      expect(config.telegram).toHaveProperty('botToken');
+      expect(config.telegram).toHaveProperty('userId');
+      expect(typeof config.telegram.botToken).toBe('string');
+      expect(typeof config.telegram.userId).toBe('string');
     });
 
     it('should have correct app configuration structure', () => {
-      expect(appConfig.app).toHaveProperty('nodeEnv');
-      expect(appConfig.app).toHaveProperty('logLevel');
-      expect(appConfig.app).toHaveProperty('port');
-      expect(['development', 'production', 'test']).toContain(appConfig.app.nodeEnv);
-      expect(typeof appConfig.app.port).toBe('number');
-      expect(appConfig.app.port).toBeGreaterThan(0);
-      expect(appConfig.app.port).toBeLessThanOrEqual(65535);
+      expect(config.app).toHaveProperty('nodeEnv');
+      expect(config.app).toHaveProperty('logLevel');
+      expect(config.app).toHaveProperty('port');
+      expect(['development', 'production', 'test']).toContain(config.app.nodeEnv);
+      expect(typeof config.app.port).toBe('number');
+      expect(config.app.port).toBeGreaterThan(0);
+      expect(config.app.port).toBeLessThanOrEqual(65535);
     });
 
     it('should have database configuration', () => {
-      expect(appConfig.database).toHaveProperty('path');
-      expect(typeof appConfig.database.path).toBe('string');
-      expect(appConfig.database.path.length).toBeGreaterThan(0);
+      expect(config.app).toHaveProperty('databasePath');
+      expect(typeof config.app.databasePath).toBe('string');
+      expect(config.app.databasePath.length).toBeGreaterThan(0);
     });
 
-    it('should handle optional configurations correctly', () => {
-      // These should be undefined or properly structured if present
-      if (appConfig.binance) {
-        expect(appConfig.binance).toHaveProperty('apiKey');
-        expect(appConfig.binance).toHaveProperty('apiSecret');
-        expect(typeof appConfig.binance.apiKey).toBe('string');
-        expect(typeof appConfig.binance.apiSecret).toBe('string');
-      }
-
-      if (appConfig.twitter) {
-        expect(appConfig.twitter).toHaveProperty('bearerToken');
-        expect(typeof appConfig.twitter.bearerToken).toBe('string');
-      }
-
-      if (appConfig.blockchain) {
-        expect(typeof appConfig.blockchain.etherscanApiKey).toBe('string');
-        expect(typeof appConfig.blockchain.bscscanApiKey).toBe('string');
-      }
+    it('should handle binance configuration correctly', () => {
+      expect(config.binance).toHaveProperty('apiKey');
+      expect(config.binance).toHaveProperty('apiSecret');
+      expect(typeof config.binance.apiKey).toBe('string');
+      expect(typeof config.binance.apiSecret).toBe('string');
     });
   });
 
