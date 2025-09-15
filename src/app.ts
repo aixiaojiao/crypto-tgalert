@@ -74,7 +74,6 @@ export class CryptoTgAlertApp {
         `📈 *排行榜:* /gainers /losers /funding /oi24h\n` +
         `⚡ *价格提醒:* /alert btc \\> 120000\n` +
         `📢 *推送通知:* /start\\_gainers\\_push /start\\_funding\\_push\n` +
-        `🔄 *OI推送:* /start\\_oi1h\\_push /start\\_oi4h\\_push /start\\_oi24h\\_push\n` +
         `⚙️ *系统状态:* /status /push\\_status\n\n` +
         `💡 发送 /help 查看详细使用说明`;
 

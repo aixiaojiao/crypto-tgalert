@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.3] - 2025-09-15
+
+### 🧹 **架构清理与系统优化**
+
+#### **Removed - OI推送功能完全移除**
+- **推送命令**: 移除 `/start_oi1h_push`, `/start_oi4h_push`, `/start_oi24h_push`
+- **停止命令**: 移除 `/stop_oi1h_push`, `/stop_oi4h_push`, `/stop_oi24h_push`
+- **核心服务**: 删除 `startOI*Monitoring()`, `stopOI*Monitoring()`, `checkOI()` 方法
+- **推送逻辑**: 删除 `sendOINotification()`, `formatOIMessage()` 方法
+- **数据结构**: 清理OI相关的接口属性、类变量、常量
+- **测试脚本**: 删除 `enable_oi4h.mjs`
+
+#### **Retained - OI查询功能保留**
+- **查询命令**: 保留 `/oi24h`, `/oi4h`, `/oi1h` 按需查询功能
+- **API集成**: 保留直接API调用的OI数据查询
+- **用户体验**: 维持OI排行榜查询的完整功能
+
+#### **Fixed - 文件系统清理**
+- **过期文档**: 删除 `LEGACY_ISSUES.md`, `WORK_PROGRESS_20250909.md`, `RESUME_WORK.md`
+- **分析文档**: 删除 `open_interest_analysis.md` (功能已移除)
+- **备份文件**: 删除 `triggerAlerts.ts.backup`
+- **临时文件**: 清理编辑器临时文件和无用文件
+- **测试结构**: 整理和统一测试目录结构
+
+#### **Improved - 代码质量**
+- **导入清理**: 移除未使用的 `OIRanking` 导入
+- **类型安全**: 修复TypeScript编译警告
+- **代码简化**: 删除300+行OI推送相关代码
+- **接口优化**: 精简 `TriggerAlertStats` 接口
+
+#### **Updated - 文档整理**
+- **状态文档**: 更新 `TOMORROW_HANDOVER.md` 为项目状态总览
+- **测试文档**: 统一测试目录结构说明
+- **部署文档**: 保持部署相关文档的完整性
+
+### 📊 **性能优化效果**
+- **内存占用**: 减少定时监控任务的内存消耗
+- **API调用**: 降低不必要的定时OI数据获取
+- **系统负载**: 简化后台任务，提升整体性能
+- **代码维护**: 更清洁的架构，便于后续开发
+
+### 🎯 **系统当前状态**
+- **专注功能**: 价格查询、排行榜查询、价格提醒、涨幅/负费率推送
+- **保留功能**: 所有OI查询命令正常工作
+- **测试覆盖**: 核心功能测试通过
+- **部署就绪**: 本地v2.1.3准备就绪，暂不部署到生产环境
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 

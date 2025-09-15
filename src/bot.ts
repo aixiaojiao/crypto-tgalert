@@ -152,12 +152,6 @@ export class TelegramBot {
 /stop_gainers_push - 停止涨幅榜推送
 /start_funding_push - 启动负费率榜推送
 /stop_funding_push - 停止负费率榜推送
-/start_oi1h_push - 启动OI 1小时推送
-/stop_oi1h_push - 停止OI 1小时推送
-/start_oi4h_push - 启动OI 4小时推送
-/stop_oi4h_push - 停止OI 4小时推送
-/start_oi24h_push - 启动OI 24小时推送
-/stop_oi24h_push - 停止OI 24小时推送
 /push_status - 查看推送状态
 
 
@@ -1421,164 +1415,6 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
-    // 启动OI 1h推送
-    this.bot.command('start_oi1h_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Enable OI 1h alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'oi1h', true);
-        
-        // Start OI 1h monitoring if not already running
-        await triggerAlertService.startOI1hMonitoring();
-        
-        const message = `✅ *OI 1小时推送已启动*
-
-📊 监控设置:
-• 检查间隔: 3分钟
-• 推送条件: 新币进入前10或持仓量显著变化 (>5%)
-• 状态: 已启用
-
-💡 您将在OI 1小时榜发生重要变化时收到推送通知
-
-🛑 使用 /stop_oi1h_push 停止推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Start OI 1h push error:', error);
-        await ctx.reply('❌ 启动OI 1小时推送失败，请稍后重试');
-      }
-    });
-
-    // 停止OI 1h推送
-    this.bot.command('stop_oi1h_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Disable OI 1h alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'oi1h', false);
-        
-        const message = `⏹️ *OI 1小时推送已停止*
-
-📊 推送状态: 已关闭
-⏰ 停止时间: ${formatTimeToUTC8(new Date())}
-
-💡 使用 /start_oi1h_push 重新启动推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Stop OI 1h push error:', error);
-        await ctx.reply('❌ 停止OI 1小时推送失败，请稍后重试');
-      }
-    });
-
-    // 启动OI 4h推送
-    this.bot.command('start_oi4h_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Enable OI 4h alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'oi4h', true);
-        
-        // Start OI 4h monitoring if not already running
-        await triggerAlertService.startOI4hMonitoring();
-        
-        const message = `✅ *OI 4小时推送已启动*
-
-📊 监控设置:
-• 检查间隔: 15分钟
-• 推送条件: 新币进入前10或持仓量显著变化 (>5%)
-• 状态: 已启用
-
-💡 您将在OI 4小时榜发生重要变化时收到推送通知
-
-🛑 使用 /stop_oi4h_push 停止推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Start OI 4h push error:', error);
-        await ctx.reply('❌ 启动OI 4小时推送失败，请稍后重试');
-      }
-    });
-
-    // 停止OI 4h推送
-    this.bot.command('stop_oi4h_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Disable OI 4h alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'oi4h', false);
-        
-        const message = `⏹️ *OI 4小时推送已停止*
-
-📊 推送状态: 已关闭
-⏰ 停止时间: ${formatTimeToUTC8(new Date())}
-
-💡 使用 /start_oi4h_push 重新启动推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Stop OI 4h push error:', error);
-        await ctx.reply('❌ 停止OI 4小时推送失败，请稍后重试');
-      }
-    });
-
-    // 启动OI 24h推送
-    this.bot.command('start_oi24h_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Enable OI 24h alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'oi24h', true);
-        
-        // Start OI 24h monitoring if not already running
-        await triggerAlertService.startOI24hMonitoring();
-        
-        const message = `✅ *OI 24小时推送已启动*
-
-📊 监控设置:
-• 检查间隔: 30分钟
-• 推送条件: 新币进入前10或持仓量显著变化 (>5%)
-• 状态: 已启用
-
-💡 您将在OI 24小时榜发生重要变化时收到推送通知
-
-🛑 使用 /stop_oi24h_push 停止推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Start OI 24h push error:', error);
-        await ctx.reply('❌ 启动OI 24小时推送失败，请稍后重试');
-      }
-    });
-
-    // 停止OI 24h推送
-    this.bot.command('stop_oi24h_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Disable OI 24h alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'oi24h', false);
-        
-        const message = `⏹️ *OI 24小时推送已停止*
-
-📊 推送状态: 已关闭
-⏰ 停止时间: ${formatTimeToUTC8(new Date())}
-
-💡 使用 /start_oi24h_push 重新启动推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Stop OI 24h push error:', error);
-        await ctx.reply('❌ 停止OI 24小时推送失败，请稍后重试');
-      }
-    });
 
     // 查看推送状态
     this.bot.command('push_status', async (ctx) => {
@@ -1589,9 +1425,6 @@ ${riskIcon} 币种: ${symbol}
         
         const gainersEnabled = settings.find(s => s.alert_type === 'gainers')?.is_enabled || false;
         const fundingEnabled = settings.find(s => s.alert_type === 'funding')?.is_enabled || false;
-        const oi1hEnabled = settings.find(s => s.alert_type === 'oi1h')?.is_enabled || false;
-        const oi4hEnabled = settings.find(s => s.alert_type === 'oi4h')?.is_enabled || false;
-        const oi24hEnabled = settings.find(s => s.alert_type === 'oi24h')?.is_enabled || false;
         
         let message = `📊 *推送状态总览*\n\n`;
         
@@ -1605,20 +1438,6 @@ ${riskIcon} 币种: ${symbol}
         message += `• 监控: ${stats.fundingEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
         message += `• 最后检查: ${stats.fundingLastCheck ? formatTimeToUTC8(stats.fundingLastCheck) : '从未'}\n\n`;
         
-        message += `📊 *OI 1小时推送:*\n`;
-        message += `• 状态: ${oi1hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
-        message += `• 监控: ${stats.oi1hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.oi1hLastCheck ? formatTimeToUTC8(stats.oi1hLastCheck) : '从未'}\n\n`;
-        
-        message += `📊 *OI 4小时推送:*\n`;
-        message += `• 状态: ${oi4hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
-        message += `• 监控: ${stats.oi4hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.oi4hLastCheck ? formatTimeToUTC8(stats.oi4hLastCheck) : '从未'}\n\n`;
-        
-        message += `📊 *OI 24小时推送:*\n`;
-        message += `• 状态: ${oi24hEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
-        message += `• 监控: ${stats.oi24hEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.oi24hLastCheck ? formatTimeToUTC8(stats.oi24hLastCheck) : '从未'}\n\n`;
         
         message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
         
@@ -1751,12 +1570,6 @@ ${riskIcon} 币种: ${symbol}
       { command: 'stop_gainers_push', description: '停止涨幅榜推送通知' },
       { command: 'start_funding_push', description: '启动负费率榜推送通知' },
       { command: 'stop_funding_push', description: '停止负费率榜推送通知' },
-      { command: 'start_oi1h_push', description: '启动OI 1小时推送通知' },
-      { command: 'stop_oi1h_push', description: '停止OI 1小时推送通知' },
-      { command: 'start_oi4h_push', description: '启动OI 4小时推送通知' },
-      { command: 'stop_oi4h_push', description: '停止OI 4小时推送通知' },
-      { command: 'start_oi24h_push', description: '启动OI 24小时推送通知' },
-      { command: 'stop_oi24h_push', description: '停止OI 24小时推送通知' },
       { command: 'push_status', description: '查看推送通知状态' },
       { command: 'status', description: '查看系统状态' },
       { command: 'cache_status', description: '查看实时数据缓存状态' },
