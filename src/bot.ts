@@ -5,6 +5,8 @@ import { BotContext, BotStatus } from './types';
 import { BinanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
 import { PriceAlertModel } from './models/PriceAlert';
+import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
+import { priceAlertService } from './services/priceAlertService';
 import { triggerAlertService } from './services/triggerAlerts';
 import { TriggerAlertModel } from './models/TriggerAlert';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
@@ -46,6 +48,12 @@ export class TelegramBot {
     // Set telegram bot instance for trigger alerts
     triggerAlertService.setTelegramBot(this);
 
+    // Set telegram bot instance for price alerts
+    priceAlertService.setTelegramBot(this);
+
+    // Initialize price alert database
+    TimeRangeAlertModel.initDatabase();
+
     // Initialize realtime market cache and alert service
     this.initializeRealtimeServices();
   }
@@ -65,6 +73,11 @@ export class TelegramBot {
       realtimeAlertService.setTelegramBot(this);
       await realtimeAlertService.start();
       log.info('Realtime alert service initialized successfully');
+
+      // 初始化价格报警服务
+      log.info('Initializing price alert service...');
+      await priceAlertService.start();
+      log.info('Price alert service initialized successfully');
 
     } catch (error) {
       log.error('Failed to initialize realtime services', error);
@@ -1493,6 +1506,9 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
+    // 价格报警管理命令
+    this.setupPriceAlertCommands();
+
     // 处理未知命令
     this.bot.on('text', async (ctx) => {
       const text = ctx.message?.text;
@@ -1507,6 +1523,269 @@ ${riskIcon} 币种: ${symbol}
       
       // 未知命令
       await ctx.reply(`❓ 未知命令: ${text}\n使用 /help 查看所有可用命令`);
+    });
+  }
+
+  /**
+   * 设置价格报警管理命令
+   */
+  private setupPriceAlertCommands(): void {
+    // 添加价格报警
+    this.bot.command('add_alert', async (ctx) => {
+      try {
+        const messageText = ctx.message?.text || '';
+        const args = messageText.split(' ').slice(1); // Remove command name
+
+        if (args.length < 3) {
+          await ctx.replyWithMarkdown(
+            `📢 *添加价格报警*\n\n` +
+            `用法: \`/add_alert <时间周期> <类型> <阈值> [代币]\`\n\n` +
+            `*时间周期:*\n` +
+            `• \`1m\` - 1分钟\n` +
+            `• \`5m\` - 5分钟\n` +
+            `• \`15m\` - 15分钟\n` +
+            `• \`30m\` - 30分钟\n` +
+            `• \`1h\` - 1小时\n` +
+            `• \`4h\` - 4小时\n` +
+            `• \`24h\` - 24小时\n` +
+            `• \`3d\` - 3天\n\n` +
+            `*类型:*\n` +
+            `• \`gain\` - 仅涨幅\n` +
+            `• \`loss\` - 仅跌幅\n` +
+            `• \`both\` - 涨跌双向\n\n` +
+            `*示例:*\n` +
+            `\`/add_alert 1m both 5\` - 1分钟内涨跌超过5%\n` +
+            `\`/add_alert 1h gain 10 BTC\` - BTC 1小时内涨幅超过10%\n` +
+            `\`/add_alert 5m loss 3\` - 任意币种5分钟内跌幅超过3%`
+          );
+          return;
+        }
+
+        const timeframe = args[0]?.toLowerCase() as any;
+        const alertType = args[1]?.toLowerCase() as any;
+        const threshold = parseFloat(args[2]);
+        const symbol = args[3]?.toUpperCase();
+
+        // 验证参数
+        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '24h', '3d'];
+        const validTypes = ['gain', 'loss', 'both'];
+
+        if (!validTimeframes.includes(timeframe)) {
+          await ctx.reply('❌ 无效的时间周期，请使用: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d');
+          return;
+        }
+
+        if (!validTypes.includes(alertType)) {
+          await ctx.reply('❌ 无效的报警类型，请使用: gain, loss, both');
+          return;
+        }
+
+        if (isNaN(threshold) || threshold <= 0 || threshold > 100) {
+          await ctx.reply('❌ 无效的阈值，请输入0-100之间的数字');
+          return;
+        }
+
+        const userId = ctx.from?.id.toString()!;
+        const targetSymbol = symbol ? `${symbol}USDT` : null;
+
+        // 添加报警配置
+        const alertId = await TimeRangeAlertModel.addAlert({
+          userId,
+          symbol: targetSymbol,
+          timeframe,
+          alertType,
+          thresholdPercent: threshold,
+          isEnabled: true
+        });
+
+        // 重新加载配置
+        await priceAlertService.reloadConfigs();
+
+        const symbolText = symbol ? `${symbol} ` : '全部代币 ';
+        const typeText = alertType === 'gain' ? '涨幅' :
+                        alertType === 'loss' ? '跌幅' : '涨跌';
+        const timeframeNames: Record<string, string> = {
+          '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+          '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
+        };
+        const timeframeName = timeframeNames[timeframe] || timeframe;
+
+        await ctx.replyWithMarkdown(
+          `✅ *价格报警已添加*\n\n` +
+          `🆔 报警ID: \`${alertId}\`\n` +
+          `📊 监控对象: ${symbolText}\n` +
+          `⏰ 时间周期: ${timeframeName}\n` +
+          `📈 报警类型: ${typeText}\n` +
+          `🎯 触发阈值: ${threshold}%\n` +
+          `🔔 状态: 已启用\n\n` +
+          `💡 使用 \`/my_alerts\` 查看所有报警`
+        );
+
+      } catch (error) {
+        console.error('Add alert error:', error);
+        await ctx.reply('❌ 添加价格报警失败，请稍后重试');
+      }
+    });
+
+    // 查看我的报警
+    this.bot.command('my_alerts', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        const alerts = await TimeRangeAlertModel.getUserAlerts(userId);
+
+        if (alerts.length === 0) {
+          await ctx.replyWithMarkdown(
+            `📢 *我的价格报警*\n\n` +
+            `暂无报警配置\n\n` +
+            `💡 使用 \`/add_alert\` 添加新报警`
+          );
+          return;
+        }
+
+        let message = `📢 *我的价格报警* (${alerts.length}个)\n\n`;
+
+        for (const alert of alerts) {
+          const symbol = alert.symbol ? alert.symbol.replace('USDT', '') : '全部';
+          const status = alert.isEnabled ? '🟢 启用' : '🔴 禁用';
+          const typeText = alert.alertType === 'gain' ? '涨幅' :
+                          alert.alertType === 'loss' ? '跌幅' : '涨跌';
+          const timeframeNames: Record<string, string> = {
+            '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+            '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
+          };
+          const timeframeName = timeframeNames[alert.timeframe] || alert.timeframe;
+
+          message += `🆔 \`${alert.id}\` - ${symbol} ${timeframeName}${typeText} ≥${alert.thresholdPercent}%\n`;
+          message += `   ${status} | 触发${alert.triggerCount}次\n\n`;
+        }
+
+        message += `💡 *管理命令:*\n`;
+        message += `\`/toggle_alert <ID>\` - 启用/禁用\n`;
+        message += `\`/delete_alert <ID>\` - 删除报警\n`;
+        message += `\`/alert_history\` - 查看触发历史`;
+
+        await ctx.replyWithMarkdown(message);
+
+      } catch (error) {
+        console.error('My alerts error:', error);
+        await ctx.reply('❌ 获取报警列表失败，请稍后重试');
+      }
+    });
+
+    // 切换报警状态
+    this.bot.command('toggle_alert', async (ctx) => {
+      try {
+        const messageText = ctx.message?.text || '';
+        const args = messageText.split(' ').slice(1);
+
+        if (args.length !== 1) {
+          await ctx.reply('用法: /toggle_alert <报警ID>');
+          return;
+        }
+
+        const alertId = parseInt(args[0]);
+        if (isNaN(alertId)) {
+          await ctx.reply('❌ 无效的报警ID');
+          return;
+        }
+
+        const userId = ctx.from?.id.toString()!;
+        const alerts = await TimeRangeAlertModel.getUserAlerts(userId);
+        const alert = alerts.find(a => a.id === alertId);
+
+        if (!alert) {
+          await ctx.reply('❌ 未找到该报警配置');
+          return;
+        }
+
+        const newEnabled = !alert.isEnabled;
+        await TimeRangeAlertModel.toggleAlert(alertId, newEnabled);
+        await priceAlertService.reloadConfigs();
+
+        const statusText = newEnabled ? '🟢 已启用' : '🔴 已禁用';
+        await ctx.reply(`✅ 报警 #${alertId} ${statusText}`);
+
+      } catch (error) {
+        console.error('Toggle alert error:', error);
+        await ctx.reply('❌ 切换报警状态失败，请稍后重试');
+      }
+    });
+
+    // 删除报警
+    this.bot.command('delete_alert', async (ctx) => {
+      try {
+        const messageText = ctx.message?.text || '';
+        const args = messageText.split(' ').slice(1);
+
+        if (args.length !== 1) {
+          await ctx.reply('用法: /delete_alert <报警ID>');
+          return;
+        }
+
+        const alertId = parseInt(args[0]);
+        if (isNaN(alertId)) {
+          await ctx.reply('❌ 无效的报警ID');
+          return;
+        }
+
+        const userId = ctx.from?.id.toString()!;
+        const success = await TimeRangeAlertModel.deleteAlert(alertId, userId);
+
+        if (!success) {
+          await ctx.reply('❌ 未找到该报警配置或删除失败');
+          return;
+        }
+
+        await priceAlertService.reloadConfigs();
+        await ctx.reply(`✅ 报警 #${alertId} 已删除`);
+
+      } catch (error) {
+        console.error('Delete alert error:', error);
+        await ctx.reply('❌ 删除报警失败，请稍后重试');
+      }
+    });
+
+    // 报警触发历史
+    this.bot.command('alert_history', async (ctx) => {
+      try {
+        const userId = ctx.from?.id.toString()!;
+        const triggers = await TimeRangeAlertModel.getTriggerHistory(userId, 20);
+
+        if (triggers.length === 0) {
+          await ctx.reply('📊 暂无报警触发历史');
+          return;
+        }
+
+        let message = `📊 *报警触发历史* (最近20条)\n\n`;
+
+        for (const trigger of triggers) {
+          const symbol = trigger.symbol.replace('USDT', '');
+          const changeSign = trigger.changePercent >= 0 ? '+' : '';
+          const changeText = trigger.changePercent >= 0 ? '涨' : '跌';
+          const timeframeNames: Record<string, string> = {
+            '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+            '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
+          };
+          const timeframeName = timeframeNames[trigger.timeframe] || trigger.timeframe;
+
+          const triggerTime = new Date(trigger.triggeredAt + 'Z').toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+
+          message += `🚨 ${symbol} ${timeframeName}内${changeText} ${changeSign}${Math.abs(trigger.changePercent).toFixed(2)}%\n`;
+          message += `   ${triggerTime} | $${trigger.fromPrice.toFixed(6)} → $${trigger.toPrice.toFixed(6)}\n\n`;
+        }
+
+        await ctx.replyWithMarkdown(message);
+
+      } catch (error) {
+        console.error('Alert history error:', error);
+        await ctx.reply('❌ 获取报警历史失败，请稍后重试');
+      }
     });
   }
 

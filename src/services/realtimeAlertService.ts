@@ -2,7 +2,7 @@ import { TelegramBot } from '../bot';
 import { log } from '../utils/logger';
 import { realtimeMarketCache, RankingResult } from './realtimeMarketCache';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
-import { getRiskIcon, isRiskyToken } from '../config/tokenLists';
+import { getRiskIcon, getTokenRiskLevel, isRiskyToken } from '../config/tokenLists';
 // Utility function for UTC+8 time formatting
 function formatTimeToUTC8(date: Date | number): string {
   const targetDate = typeof date === 'number' ? new Date(date) : date;
@@ -267,7 +267,7 @@ export class RealtimeAlertService {
       // TODO: Implement proper user preference checking
 
       // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
-      let message = `🚀 *24小时涨幅榜 TOP10* (实时推送)\n\n`;
+      let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
 
       // 显示完整TOP10榜单
       const top10 = currentRankings.slice(0, 10);
@@ -275,8 +275,11 @@ export class RealtimeAlertService {
         const symbol = ranking.symbol.replace('USDT', '');
         const changePercent = formatPriceChange(ranking.priceChangePercent);
         const formattedPrice = await formatPriceWithSeparators(ranking.price.toString(), ranking.symbol);
-        const riskIcon = getRiskIcon(ranking.symbol);
-        return `${index + 1}. ${riskIcon}**${symbol}** +${changePercent}% ($${formattedPrice})\n`;
+        const riskLevel = getTokenRiskLevel(ranking.symbol);
+        const riskIcon = getRiskIcon(riskLevel);
+        const prefix = riskIcon ? `${riskIcon}` : '';
+        const sign = ranking.priceChangePercent >= 0 ? '+' : '';
+        return `${index + 1}. ${prefix}**${symbol}** ${sign}${changePercent}% ($${formattedPrice})\n`;
       });
 
       const formattedEntries = await Promise.all(priceFormatPromises);
@@ -311,7 +314,7 @@ export class RealtimeAlertService {
       }
 
       message += `\n📊 数据来源: ⚡ 实时数据`;
-      message += `\n⏰ ${formatTimeToUTC8(new Date())}`;
+      message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
       // 发送消息
       const userId = this.telegramBot.getAuthorizedUserId();

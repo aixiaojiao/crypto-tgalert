@@ -3,6 +3,7 @@ import { BinanceClient } from './binance';
 import { log } from '../utils/logger';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from '../config/tokenLists';
 import { EventEmitter } from 'events';
+import { priceAlertService } from './priceAlertService';
 
 export interface MarketTickerData {
   symbol: string;
@@ -161,6 +162,15 @@ export class RealtimeMarketCache extends EventEmitter {
 
       this.marketData.set(ticker.symbol, marketData);
       validUpdates++;
+
+      // 触发价格报警检查
+      priceAlertService.onPriceUpdate(
+        ticker.symbol,
+        marketData.price,
+        marketData.volume
+      ).catch(error => {
+        log.error('Price alert service error', { symbol: ticker.symbol, error });
+      });
     }
 
     // 更新统计信息
