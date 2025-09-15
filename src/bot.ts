@@ -117,12 +117,14 @@ export class TelegramBot {
 📊 *可用功能:*
 • 实时价格查询
 • 价格提醒设置
+• 多时间周期报警 🆕
 • 实时涨跌幅推送
 
 💡 *基础命令:*
 /help - 查看完整帮助
 /status - 查看系统状态
 /price btc - 查看BTC价格
+/add_alert 1h gain 15 - 添加1小时涨幅15%报警 🆕
 
 🤖 机器人已准备就绪！
       `;
@@ -137,7 +139,7 @@ export class TelegramBot {
 
 💰 <b>价格查询 (默认合约):</b>
 /price btc - 查看BTC合约价格+资金费率+持仓量
-/price eth - 查看ETH合约价格  
+/price eth - 查看ETH合约价格
 /price sol - 查看SOL合约价格
 
 📊 <b>排行榜查询:</b>
@@ -159,6 +161,18 @@ export class TelegramBot {
 /alert eth &lt; 3000 - ETH低于3000时提醒
 /alerts - 查看所有提醒
 /remove_alert 1 - 删除提醒#1
+
+🔔 <b>多时间周期报警:</b>
+/add_alert 1h gain 15 - 1小时内涨幅超15%时报警
+/add_alert 5m loss 10 btc - BTC 5分钟内跌幅超10%时报警
+/add_alert 24h both 20 - 任意币种24小时内涨跌幅超20%时报警
+/my_alerts - 查看我的报警配置
+/toggle_alert 1 - 启用/禁用报警#1
+/delete_alert 1 - 删除报警配置#1
+/alert_history - 查看报警触发历史
+
+支持时间周期: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d
+支持报警类型: gain(涨幅), loss(跌幅), both(双向)
 
 📢 <b>推送通知:</b>
 /start_gainers_push - 启动涨幅榜推送
@@ -1845,6 +1859,11 @@ ${riskIcon} 币种: ${symbol}
       { command: 'alert', description: '创建价格提醒 (例: /alert btc > 50000)' },
       { command: 'alerts', description: '查看所有活跃提醒' },
       { command: 'remove_alert', description: '删除指定提醒 (例: /remove_alert 5)' },
+      { command: 'add_alert', description: '添加时间周期报警 (例: /add_alert 1h gain 15 btc)' },
+      { command: 'my_alerts', description: '查看我的时间周期报警配置' },
+      { command: 'toggle_alert', description: '启用/禁用报警 (例: /toggle_alert 1)' },
+      { command: 'delete_alert', description: '删除报警配置 (例: /delete_alert 1)' },
+      { command: 'alert_history', description: '查看报警触发历史' },
       { command: 'start_gainers_push', description: '启动涨幅榜推送通知' },
       { command: 'stop_gainers_push', description: '停止涨幅榜推送通知' },
       { command: 'start_funding_push', description: '启动负费率榜推送通知' },

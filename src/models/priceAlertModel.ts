@@ -186,13 +186,25 @@ export class PriceAlertModel {
   // 删除报警配置
   static async deleteAlert(id: number, userId: string): Promise<boolean> {
     try {
-      const stmt = this.db.prepare(`
-        DELETE FROM price_alert_configs
-        WHERE id = ? AND user_id = ?
-      `);
+      // 开启事务，先删除相关的触发记录，再删除配置
+      const transaction = this.db.transaction((alertId: number, uid: string) => {
+        // 删除相关的触发记录
+        const deleteTriggers = this.db.prepare(`
+          DELETE FROM price_alert_triggers
+          WHERE config_id = ?
+        `);
+        deleteTriggers.run(alertId);
 
-      const result = stmt.run(id, userId);
-      return result.changes > 0;
+        // 删除报警配置
+        const deleteConfig = this.db.prepare(`
+          DELETE FROM price_alert_configs
+          WHERE id = ? AND user_id = ?
+        `);
+        const result = deleteConfig.run(alertId, uid);
+        return result.changes > 0;
+      });
+
+      return transaction(id, userId);
     } catch (error) {
       log.error('Failed to delete alert', error);
       throw error;
