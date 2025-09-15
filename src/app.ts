@@ -73,8 +73,14 @@ export class CryptoTgAlertApp {
         `💰 *价格查询:* /price btc/eth/sol\n` +
         `📈 *排行榜:* /gainers /losers /funding /oi24h\n` +
         `⚡ *价格提醒:* /alert btc \\> 120000\n` +
+        `🔔 *时间周期报警:* /add\\_alert 1h gain 15 🆕\n` +
         `📢 *推送通知:* /start\\_gainers\\_push /start\\_funding\\_push\n` +
         `⚙️ *系统状态:* /status /push\\_status\n\n` +
+        `🆕 *新功能亮点:*\n` +
+        `• 支持1m-3d的8个时间周期报警\n` +
+        `• 涨幅/跌幅/双向报警类型\n` +
+        `• 用户自定义阈值和代币筛选\n` +
+        `• 实时WebSocket数据驱动\n\n` +
         `💡 发送 /help 查看详细使用说明`;
 
       await this.telegramBot.sendToAuthorizedUser(message, { 
