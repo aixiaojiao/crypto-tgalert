@@ -52,6 +52,9 @@ export class PriceAlertService extends EventEmitter {
   // 最近触发记录 (用于检测相似的变动)
   private recentTriggers: Map<string, {changePercent: number, price: number, timestamp: number}> = new Map();
 
+  // 全局触发计数器 (防止短时间内过多触发)
+  private globalTriggerCounts: Map<string, {count: number, windowStart: number}> = new Map();
+
   constructor() {
     super();
     this.initializeTimeframes();
@@ -134,6 +137,7 @@ export class PriceAlertService extends EventEmitter {
     this.alertConfigs.clear();
     this.cooldownMap.clear();
     this.recentTriggers.clear();
+    this.globalTriggerCounts.clear();
 
     // 清空所有时间周期数据
     for (const timeframeData of this.timeframes.values()) {
@@ -287,13 +291,44 @@ export class PriceAlertService extends EventEmitter {
           }
         }
 
-        // 1分钟内的宽松检查
-        if (recentTrigger && now - recentTrigger.timestamp < 60 * 1000) {
+        // 2分钟内的严格检查 (扩大时间窗口)
+        if (recentTrigger && now - recentTrigger.timestamp < 120 * 1000) {
           const changeDiff = Math.abs(changePercent - recentTrigger.changePercent);
-          if (changeDiff < 0.2) { // 变动幅度差异小于0.2%
-            log.info(`🚫 Skipping very similar change for ${symbol}: change diff ${changeDiff.toFixed(2)}%`);
+          if (changeDiff < 0.3) { // 变动幅度差异小于0.3%
+            log.info(`🚫 Skipping very similar change for ${symbol}: change diff ${changeDiff.toFixed(3)}%, time gap ${(now - recentTrigger.timestamp)/1000}s`);
             continue;
           }
+        }
+
+        // 全局相似性检查 - 对于同一symbol+timeframe的组合
+        const globalKey = `${symbol}:${config.timeframe}`;
+        const globalRecent = this.recentTriggers.get(globalKey);
+        if (globalRecent && now - globalRecent.timestamp < 60 * 1000) {
+          const changeDiff = Math.abs(changePercent - globalRecent.changePercent);
+          if (changeDiff < 0.2) { // 全局相似性检测
+            log.info(`🚫 Skipping globally similar trigger for ${symbol} ${config.timeframe}: change diff ${changeDiff.toFixed(3)}%`);
+            continue;
+          }
+        }
+
+        // 全局触发频率限制 - 防止1分钟内同一币种+时间周期触发超过2次
+        const triggerCountKey = globalKey;
+        const triggerCountData = this.globalTriggerCounts.get(triggerCountKey);
+        const windowSize = 60 * 1000; // 1分钟窗口
+        const maxTriggersPerWindow = 2; // 最多2次
+
+        if (triggerCountData) {
+          if (now - triggerCountData.windowStart < windowSize) {
+            if (triggerCountData.count >= maxTriggersPerWindow) {
+              log.warn(`🚫 Rate limit exceeded for ${symbol} ${config.timeframe}: ${triggerCountData.count} triggers in ${Math.floor((now - triggerCountData.windowStart)/1000)}s`);
+              continue;
+            }
+          } else {
+            // 重置窗口
+            this.globalTriggerCounts.set(triggerCountKey, {count: 0, windowStart: now});
+          }
+        } else {
+          this.globalTriggerCounts.set(triggerCountKey, {count: 0, windowStart: now});
         }
 
         await this.triggerAlert(config, symbol, {
@@ -307,11 +342,27 @@ export class PriceAlertService extends EventEmitter {
         // 设置冷却期和记录最近触发
         const triggerTime = Date.now();
         this.cooldownMap.set(cooldownKey, triggerTime);
+
+        // 记录配置级别的触发
         this.recentTriggers.set(recentKey, {
           changePercent,
           price: currentSnapshot.price,
           timestamp: triggerTime
         });
+
+        // 记录全局级别的触发 (用于跨配置防重复)
+        // globalKey已在上面定义，重用即可
+        this.recentTriggers.set(globalKey, {
+          changePercent,
+          price: currentSnapshot.price,
+          timestamp: triggerTime
+        });
+
+        // 更新全局触发计数
+        const countData = this.globalTriggerCounts.get(globalKey);
+        if (countData) {
+          countData.count++;
+        }
 
         log.info(`✅ Alert triggered for ${symbol} (config ${config.id}): ${changePercent.toFixed(2)}% change, cooldown set until ${new Date(triggerTime + this.COOLDOWN_MS).toLocaleString()}`);
       }
