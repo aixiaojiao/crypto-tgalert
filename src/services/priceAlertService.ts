@@ -189,6 +189,25 @@ export class PriceAlertService extends EventEmitter {
    * 检查报警条件
    */
   private async checkAlertConditions(symbol: string, currentSnapshot: PriceSnapshot): Promise<void> {
+    // 对频繁触发的币种检查重复配置
+    const frequentSymbols = ['FUSDT', 'QUSDT', 'UBUSDT', 'ARIAUSDT', 'ZORAUSDT'];
+    if (frequentSymbols.includes(symbol)) {
+      const configsByTimeframe = new Map<string, number>();
+      for (const config of this.alertConfigs.values()) {
+        if (!config.isEnabled) continue;
+        if (config.symbol && config.symbol !== symbol) continue;
+        const count = configsByTimeframe.get(config.timeframe) || 0;
+        configsByTimeframe.set(config.timeframe, count + 1);
+      }
+
+      // 如果某个时间周期有多个配置，记录警告
+      for (const [timeframe, count] of configsByTimeframe.entries()) {
+        if (count > 1) {
+          log.warn(`⚠️ Multiple configs (${count}) found for ${symbol} ${timeframe} timeframe - potential duplicate triggers`);
+        }
+      }
+    }
+
     for (const config of this.alertConfigs.values()) {
       // 跳过已禁用的配置
       if (!config.isEnabled) continue;
@@ -256,14 +275,23 @@ export class PriceAlertService extends EventEmitter {
         // 检查是否为相似的变动(防止微小差异重复触发)
         const recentKey = `${config.id}:${symbol}:${config.timeframe}`;
         const recentTrigger = this.recentTriggers.get(recentKey);
-        const priceChangeThreshold = 0.5; // 价格变动超过0.5%才认为是新的触发
 
-        if (recentTrigger && now - recentTrigger.timestamp < 60 * 1000) { // 1分钟内
+        if (recentTrigger && now - recentTrigger.timestamp < 30 * 1000) { // 30秒内严格检查
           const priceDiff = Math.abs(currentSnapshot.price - recentTrigger.price) / recentTrigger.price * 100;
           const changeDiff = Math.abs(changePercent - recentTrigger.changePercent);
 
-          if (priceDiff < priceChangeThreshold && changeDiff < 1.0) {
-            log.debug(`Skipping similar trigger for ${symbol}: price diff ${priceDiff.toFixed(2)}%, change diff ${changeDiff.toFixed(2)}%`);
+          // 更严格的相似性检测
+          if (priceDiff < 0.1 || changeDiff < 0.5) { // 价格差异<0.1% 或 变动差异<0.5%
+            log.info(`🚫 Skipping similar trigger for ${symbol}: price diff ${priceDiff.toFixed(3)}%, change diff ${changeDiff.toFixed(2)}%, time gap ${(now - recentTrigger.timestamp)/1000}s`);
+            continue;
+          }
+        }
+
+        // 1分钟内的宽松检查
+        if (recentTrigger && now - recentTrigger.timestamp < 60 * 1000) {
+          const changeDiff = Math.abs(changePercent - recentTrigger.changePercent);
+          if (changeDiff < 0.2) { // 变动幅度差异小于0.2%
+            log.info(`🚫 Skipping very similar change for ${symbol}: change diff ${changeDiff.toFixed(2)}%`);
             continue;
           }
         }
@@ -285,7 +313,7 @@ export class PriceAlertService extends EventEmitter {
           timestamp: triggerTime
         });
 
-        log.debug(`Alert triggered for ${symbol} (config ${config.id}), cooldown set until ${new Date(triggerTime + this.COOLDOWN_MS).toLocaleString()}`);
+        log.info(`✅ Alert triggered for ${symbol} (config ${config.id}): ${changePercent.toFixed(2)}% change, cooldown set until ${new Date(triggerTime + this.COOLDOWN_MS).toLocaleString()}`);
       }
     }
   }
