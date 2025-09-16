@@ -4,6 +4,7 @@ import { initDatabase } from './database/connection';
 import { BinanceClient } from './services/binance';
 import { PriceMonitorService } from './services/priceMonitor';
 import { triggerAlertService } from './services/triggerAlerts';
+import { historicalHighCache } from './services/historicalHighCacheV2';
 import { binanceRateLimit } from './utils/ratelimit';
 
 /**
@@ -47,7 +48,11 @@ export class CryptoTgAlertApp {
       // 5. 启动价格监控
       console.log('⚡ Starting price monitoring...');
       await this.priceMonitor.startMonitoring();
-      
+
+      // 6. 初始化历史新高缓存
+      console.log('📈 Initializing historical high cache...');
+      await historicalHighCache.initialize();
+
       console.log('✅ All systems online!');
       
       // 发送启动通知
@@ -73,13 +78,15 @@ export class CryptoTgAlertApp {
         `💰 *价格查询:* /price btc/eth/sol\n` +
         `📈 *排行榜:* /gainers /losers /funding /oi24h\n` +
         `⚡ *价格提醒:* /alert btc \\> 120000\n` +
-        `🔔 *时间周期报警:* /add\\_alert 1h gain 15 🆕\n` +
+        `🔔 *时间周期报警:* /add\\_alert 1h gain 15\n` +
+        `📈 *历史新高查询:* /high btc 1w /nearhigh 1m 🆕\n` +
         `📢 *推送通知:* /start\\_gainers\\_push /start\\_funding\\_push\n` +
         `⚙️ *系统状态:* /status /push\\_status\n\n` +
         `🆕 *新功能亮点:*\n` +
-        `• 支持1m-3d的8个时间周期报警\n` +
-        `• 涨幅/跌幅/双向报警类型\n` +
-        `• 用户自定义阈值和代币筛选\n` +
+        `• 历史新高查询系统 (1w-全时间)\n` +
+        `• 接近新高代币排名功能\n` +
+        `• 自定义时间段最高价查询\n` +
+        `• 多时间周期报警 (1m-3d)\n` +
         `• 实时WebSocket数据驱动\n\n` +
         `💡 发送 /help 查看详细使用说明`;
 

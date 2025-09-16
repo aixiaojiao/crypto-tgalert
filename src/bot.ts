@@ -22,6 +22,7 @@ import { rankingAnalyzer } from './services/rankingAnalyzer';
 import { DebugService } from './services/debugService';
 import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { realtimeAlertService } from './services/realtimeAlertService';
+import { historicalHighCache } from './services/historicalHighCacheV2';
 import { log } from './utils/logger';
 
 export class TelegramBot {
@@ -174,6 +175,14 @@ export class TelegramBot {
 支持时间周期: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d
 支持报警类型: gain(涨幅), loss(跌幅), both(双向)
 
+📈 <b>历史新高查询:</b>
+/high btc 1w - 查询BTC一周内最高价
+/high eth all - 查询ETH历史最高价
+/nearhigh 1w - 接近1周新高的代币排名
+/nearhigh all 10 - 接近历史新高的前10个代币
+
+支持时间段: 1d, 1w, 1m, 3m, 6m, 1y, all
+
 📢 <b>推送通知:</b>
 /start_gainers_push - 启动涨幅榜推送
 /stop_gainers_push - 停止涨幅榜推送
@@ -181,10 +190,10 @@ export class TelegramBot {
 /stop_funding_push - 停止负费率榜推送
 /push_status - 查看推送状态
 
-
 ⚙️ <b>系统:</b>
 /status - 查看系统状态
 /cache_status - 查看实时数据缓存状态
+/high_status - 查看历史新高缓存状态
 /help - 查看帮助
 
 💡 提示: 默认查询合约数据，包含资金费率和持仓量信息`;
@@ -426,15 +435,17 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
                      validSymbols.includes(stat.symbol) &&
                      parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
             })
-            .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
-            .slice(0, 10);
+            .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent));
 
           log.info(`Gainers query served from REST API in ${Date.now() - queryTime}ms`);
         }
 
-        let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
-        
-        const priceFormatPromises = gainers.map(async (stat, index) => {
+        // 限制显示数量以避免消息过长
+        const displayLimit = 20;
+        const displayData = gainers.slice(0, displayLimit);
+        let message = `🚀 *24小时涨幅榜 TOP${displayData.length}*\n\n`;
+
+        const priceFormatPromises = displayData.map(async (stat, index) => {
           const symbol = stat.symbol.replace('USDT', '');
           const change = formatPriceChange(parseFloat(stat.priceChangePercent));
           const formattedPrice = await formatPriceWithSeparators(stat.lastPrice, stat.symbol);
@@ -693,15 +704,17 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
                      validSymbols.includes(stat.symbol) &&
                      parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
             })
-            .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
-            .slice(0, 10);
+            .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent));
 
           log.info(`Losers query served from REST API in ${Date.now() - queryTime}ms`);
         }
 
-        let message = `📉 *24小时跌幅榜 TOP10*\n\n`;
+        // 限制显示数量以避免消息过长
+        const displayLimit = 20;
+        const displayData = losers.slice(0, displayLimit);
+        let message = `📉 *24小时跌幅榜 TOP${displayData.length}*\n\n`;
         
-        const priceFormatPromisesLosers = losers.map(async (stat, index) => {
+        const priceFormatPromisesLosers = displayData.map(async (stat, index) => {
           const symbol = stat.symbol.replace('USDT', '');
           const change = formatPriceChange(parseFloat(stat.priceChangePercent));
           const formattedPrice = await formatPriceWithSeparators(stat.lastPrice, stat.symbol);
@@ -771,17 +784,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         console.log('🔴 Negative rates count:', negativeRates.length);
         
         const sortedRates = negativeRates
-          .sort((a, b) => parseFloat(a.fundingRate) - parseFloat(b.fundingRate))
-          .slice(0, 15);
+          .sort((a, b) => parseFloat(a.fundingRate) - parseFloat(b.fundingRate));
 
-        console.log('✅ Final sorted rates count:', sortedRates.length);
-        console.log('📈 Top 5 negative rates:', sortedRates.slice(0, 5).map(r => `${r.symbol}: ${r.fundingRate}`));
-        
+        // 限制显示数量以避免消息过长
+        const displayLimit = 25;
+        const displayData = sortedRates.slice(0, displayLimit);
+
+        console.log('✅ Final sorted rates count:', displayData.length);
+        console.log('📈 Top 5 negative rates:', displayData.slice(0, 5).map(r => `${r.symbol}: ${r.fundingRate}`));
+
         console.log('📝 Building message with prices...');
-        let message = `⚡ *负费率排行榜*\n\n`;
+        let message = `⚡ *负费率排行榜 TOP${displayData.length}*\n\n`;
         
         // Get prices for all symbols
-        const pricePromises = sortedRates.map(async (rate, index) => {
+        const pricePromises = displayData.map(async (rate, index) => {
           const symbol = rate.symbol.replace('USDT', '');
           const riskLevel = getTokenRiskLevel(rate.symbol);
           const riskIcon = getRiskIcon(riskLevel);
@@ -867,12 +883,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         }
 
         const sortedResults = oiResults
-          .sort((a, b) => b.change - a.change)
-          .slice(0, 10);
+          .sort((a, b) => b.change - a.change);
 
-        let message = `📈 *24小时持仓量增长榜*\n\n`;
-        
-        sortedResults.forEach((result, index) => {
+        // 限制显示数量以避免消息过长
+        const displayLimit = 20;
+        const displayData = sortedResults.slice(0, displayLimit);
+        let message = `📈 *24小时持仓量增长榜 TOP${displayData.length}*\n\n`;
+
+        displayData.forEach((result, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
@@ -927,11 +945,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
         const sortedResults = oiResults
           .sort((a, b) => b.change - a.change)
-          .slice(0, 10);
+;
 
-        let message = `📈 *4小时持仓量增长榜*\n\n`;
-        
-        sortedResults.forEach((result, index) => {
+        // 限制显示数量以避免消息过长
+        const displayLimit = 20;
+        const displayData = sortedResults.slice(0, displayLimit);
+        let message = `📈 *4小时持仓量增长榜 TOP${displayData.length}*\n\n`;
+
+        displayData.forEach((result, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
@@ -982,12 +1003,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         }
 
         const sortedResults = oiResults
-          .sort((a, b) => b.change - a.change)
-          .slice(0, 10);
+          .sort((a, b) => b.change - a.change);
 
-        let message = `📈 *1小时持仓量增长榜*\n\n`;
-        
-        sortedResults.forEach((result, index) => {
+        // 限制显示数量以避免消息过长
+        const displayLimit = 20;
+        const displayData = sortedResults.slice(0, displayLimit);
+        let message = `📈 *1小时持仓量增长榜 TOP${displayData.length}*\n\n`;
+
+        displayData.forEach((result, index) => {
           const changeIcon = result.change >= 0 ? '📈' : '📉';
           message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
         });
@@ -1476,6 +1499,240 @@ ${riskIcon} 币种: ${symbol}
       }
     });
 
+    // 历史新高查询命令
+    this.bot.command('high', async (ctx) => {
+      try {
+        const args = ctx.message.text.split(' ').slice(1);
+
+        if (args.length < 2) {
+          await ctx.reply(`📈 *历史新高查询*
+
+使用方法: \`/high <币种> <时间段>\`
+
+支持的时间段:
+• \`1w\` - 1周内最高价
+• \`1m\` - 1个月内最高价
+• \`6m\` - 6个月内最高价
+• \`1y\` - 1年内最高价
+• \`all\` - 全量历史最高价
+
+例如:
+• \`/high btc 1w\` - 查询BTC一周内最高价
+• \`/high eth all\` - 查询ETH历史最高价`, { parse_mode: 'Markdown' });
+          return;
+        }
+
+        const symbol = args[0].toUpperCase();
+        const timeframe = args[1].toLowerCase();
+
+        // 验证时间段
+        const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
+        if (!validTimeframes.includes(timeframe)) {
+          await ctx.reply('❌ 无效的时间段，请使用: 1w, 1m, 6m, 1y, all');
+          return;
+        }
+
+        const loadingMessage = await ctx.reply(`🔍 正在查询 ${symbol} 的${timeframe}历史新高...`);
+
+        const result = historicalHighCache.queryHistoricalHigh(symbol, timeframe);
+
+        if (!result) {
+          await ctx.telegram.editMessageText(
+            ctx.chat?.id,
+            loadingMessage.message_id,
+            undefined,
+            `❌ 未找到 ${symbol} 的${timeframe}历史数据，请检查币种名称或等待缓存初始化完成`
+          );
+          return;
+        }
+
+        const riskLevel = getTokenRiskLevel(result.symbol);
+        const riskIcon = getRiskIcon(riskLevel);
+
+        const timeframeNames: Record<string, string> = {
+          '1w': '1周',
+          '1m': '1个月',
+          '6m': '6个月',
+          '1y': '1年',
+          'all': '全量历史'
+        };
+
+        // 计算距今天数
+        const daysDiff = Math.floor((Date.now() - result.highTimestamp) / (24 * 60 * 60 * 1000));
+        const daysText = daysDiff === 0 ? '今天' :
+                        daysDiff > 0 ? `${daysDiff}天前` :
+                        `${Math.abs(daysDiff)}天后`;
+
+        let message = `📈 *${result.symbol} ${timeframeNames[timeframe]}新高数据*\n\n`;
+        message += `${riskIcon} 币种: ${result.symbol}\n`;
+        message += `💰 当前价格: $${await formatPriceWithSeparators(result.currentPrice, result.symbol)}\n`;
+        message += `🏔️ ${timeframeNames[timeframe]}最高价: $${await formatPriceWithSeparators(result.highPrice, result.symbol)}\n`;
+        message += `📅 新高时间: ${formatTimeToUTC8(result.highTimestamp)}\n`;
+        message += `⏳ 距今时间: ${daysText}\n\n`;
+
+        if (result.distancePercent >= 0) {
+          message += `🚀 *已突破${timeframeNames[timeframe]}新高*\n`;
+          message += `📊 超出新高: +${result.distancePercent.toFixed(2)}%\n`;
+        } else {
+          message += `📉 距离${timeframeNames[timeframe]}新高: ${result.distancePercent.toFixed(2)}%\n`;
+          message += `🎯 需要上涨: ${result.neededGainPercent.toFixed(2)}%\n`;
+        }
+
+        message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
+
+        await ctx.telegram.editMessageText(
+          ctx.chat?.id,
+          loadingMessage.message_id,
+          undefined,
+          message,
+          { parse_mode: 'Markdown' }
+        );
+
+      } catch (error) {
+        log.error('Historical high query error:', error);
+        await ctx.reply('❌ 查询历史新高失败，请稍后重试');
+      }
+    });
+
+    // 历史新高排名命令
+    this.bot.command('nearhigh', async (ctx) => {
+      try {
+        const args = ctx.message.text.split(' ').slice(1);
+
+        if (args.length === 0) {
+          await ctx.reply(`🏆 *接近历史新高排名*
+
+使用方法: \`/nearhigh <时间段> [数量]\`
+
+支持的时间段:
+• \`1w\` - 接近1周新高
+• \`1m\` - 接近1个月新高
+• \`6m\` - 接近6个月新高
+• \`1y\` - 接近1年新高
+• \`all\` - 接近全量历史新高
+
+例如:
+• \`/nearhigh 1w\` - 显示接近1周新高的前20个币种
+• \`/nearhigh all 10\` - 显示接近历史新高的前10个币种`, { parse_mode: 'Markdown' });
+          return;
+        }
+
+        const timeframe = args[0].toLowerCase();
+        const limit = args[1] ? parseInt(args[1]) : 20;
+
+        // 验证时间段
+        const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
+        if (!validTimeframes.includes(timeframe)) {
+          await ctx.reply('❌ 无效的时间段，请使用: 1w, 1m, 6m, 1y, all');
+          return;
+        }
+
+        // 验证数量
+        if (limit < 1 || limit > 50) {
+          await ctx.reply('❌ 数量必须在1-50之间');
+          return;
+        }
+
+        const loadingMessage = await ctx.reply(`🔍 正在查询接近${timeframe}新高的代币排名...`);
+
+        const ranking = historicalHighCache.getRankingByProximityToHigh(timeframe, limit);
+
+        if (ranking.length === 0) {
+          await ctx.telegram.editMessageText(
+            ctx.chat?.id,
+            loadingMessage.message_id,
+            undefined,
+            `❌ 暂无${timeframe}新高排名数据，请等待缓存初始化完成`
+          );
+          return;
+        }
+
+        const timeframeNames: Record<string, string> = {
+          '1w': '1周',
+          '1m': '1个月',
+          '6m': '6个月',
+          '1y': '1年',
+          'all': '全量历史'
+        };
+
+        let message = `🏆 *接近${timeframeNames[timeframe]}新高排名 TOP ${ranking.length}*\n\n`;
+
+        for (let index = 0; index < ranking.length; index++) {
+          const item = ranking[index];
+          const riskLevel = getTokenRiskLevel(item.symbol);
+          const riskIcon = getRiskIcon(riskLevel);
+
+          const rank = index + 1;
+          const distanceText = item.distancePercent >= 0
+            ? `+${item.distancePercent.toFixed(2)}%`
+            : `${item.distancePercent.toFixed(2)}%`;
+
+          // 计算距今天数
+          const daysDiff = Math.floor((Date.now() - item.highTimestamp) / (24 * 60 * 60 * 1000));
+          const daysText = daysDiff === 0 ? '今天' :
+                          daysDiff > 0 ? `${daysDiff}天前` :
+                          `${Math.abs(daysDiff)}天后`;
+
+          message += `${rank}. ${riskIcon} ${item.symbol}\n`;
+          message += `   💰 当前: $${await formatPriceWithSeparators(item.currentPrice, item.symbol)}\n`;
+          message += `   🏔️ 新高: $${await formatPriceWithSeparators(item.highPrice, item.symbol)} (${daysText})\n`;
+          message += `   📊 距离: ${distanceText}\n`;
+
+          if (item.neededGainPercent > 0) {
+            message += `   🎯 需涨: ${item.neededGainPercent.toFixed(2)}%\n`;
+          }
+
+          message += '\n';
+        }
+
+        message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
+
+        await ctx.telegram.editMessageText(
+          ctx.chat?.id,
+          loadingMessage.message_id,
+          undefined,
+          message,
+          { parse_mode: 'Markdown' }
+        );
+
+      } catch (error) {
+        log.error('Near high ranking error:', error);
+        await ctx.reply('❌ 查询新高排名失败，请稍后重试');
+      }
+    });
+
+    // 历史新高缓存状态命令
+    this.bot.command('high_status', async (ctx) => {
+      try {
+        const stats = historicalHighCache.getStats();
+        const timeframes = historicalHighCache.getSupportedTimeframes();
+
+        let message = `📈 *历史新高缓存状态*\n\n`;
+        message += `🔧 初始化状态: ${stats.isInitialized ? '✅ 已初始化' : '❌ 未初始化'}\n`;
+        message += `💾 缓存条目数: ${stats.cacheSize.toLocaleString()}\n`;
+
+        message += `📊 代币数量: ${stats.symbolCount.toLocaleString()}\n`;
+
+        message += `\n📊 *支持的时间段*:\n`;
+        timeframes.forEach(tf => {
+          message += `• ${tf.key} - ${tf.displayName}\n`;
+        });
+
+        message += `\n💡 *使用说明*:\n`;
+        message += `• 一次性数据收集，不自动更新\n`;
+        message += `• 查询速度极快，无需等待API调用\n`;
+        message += `• 支持所有USDT永续期货合约\n`;
+
+        message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
+
+        await ctx.replyWithMarkdown(message);
+
+      } catch (error) {
+        log.error('High status error:', error);
+        await ctx.reply('❌ 获取历史新高缓存状态失败，请稍后重试');
+      }
+    });
+
     // Debug命令 - 记录bug和优化建议
     this.bot.command('debug', async (ctx) => {
       try {
@@ -1864,6 +2121,8 @@ ${riskIcon} 币种: ${symbol}
       { command: 'toggle_alert', description: '启用/禁用报警 (例: /toggle_alert 1)' },
       { command: 'delete_alert', description: '删除报警配置 (例: /delete_alert 1)' },
       { command: 'alert_history', description: '查看报警触发历史' },
+      { command: 'high', description: '查询历史新高价格 (例: /high btc 1w)' },
+      { command: 'nearhigh', description: '接近历史新高排行榜 (例: /nearhigh 1m)' },
       { command: 'start_gainers_push', description: '启动涨幅榜推送通知' },
       { command: 'stop_gainers_push', description: '停止涨幅榜推送通知' },
       { command: 'start_funding_push', description: '启动负费率榜推送通知' },
