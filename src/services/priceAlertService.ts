@@ -47,7 +47,10 @@ export class PriceAlertService extends EventEmitter {
 
   // 冷却期管理 (防止同一配置短时间内重复触发)
   private cooldownMap: Map<string, number> = new Map(); // configId:symbol -> timestamp
-  private readonly COOLDOWN_MS = 5 * 60 * 1000; // 5分钟冷却期
+  private readonly COOLDOWN_MS = 2 * 60 * 1000; // 2分钟冷却期 (降低但增加其他防重复机制)
+
+  // 最近触发记录 (用于检测相似的变动)
+  private recentTriggers: Map<string, {changePercent: number, price: number, timestamp: number}> = new Map();
 
   constructor() {
     super();
@@ -130,6 +133,7 @@ export class PriceAlertService extends EventEmitter {
     this.isEnabled = false;
     this.alertConfigs.clear();
     this.cooldownMap.clear();
+    this.recentTriggers.clear();
 
     // 清空所有时间周期数据
     for (const timeframeData of this.timeframes.values()) {
@@ -152,6 +156,12 @@ export class PriceAlertService extends EventEmitter {
       timestamp: now,
       volume24h
     };
+
+    // 如果是容易重复触发的币种，添加额外日志
+    const frequentSymbols = ['QUSDT', 'UBUSDT', 'ARIAUSDT', 'ZORAUSDT'];
+    if (frequentSymbols.includes(symbol)) {
+      log.debug(`Price update for frequent symbol ${symbol}: $${price}`);
+    }
 
     // 存储到所有时间周期
     for (const timeframeData of this.timeframes.values()) {
@@ -189,7 +199,13 @@ export class PriceAlertService extends EventEmitter {
       // 检查冷却期
       const cooldownKey = `${config.id}:${symbol}`;
       const lastTrigger = this.cooldownMap.get(cooldownKey);
-      if (lastTrigger && Date.now() - lastTrigger < this.COOLDOWN_MS) continue;
+      const now = Date.now();
+      const timeSinceLastTrigger = lastTrigger ? now - lastTrigger : 0;
+
+      if (lastTrigger && timeSinceLastTrigger < this.COOLDOWN_MS) {
+        log.debug(`Alert cooldown active for ${symbol} (config ${config.id}): ${Math.floor(timeSinceLastTrigger/1000)}s since last trigger`);
+        continue;
+      }
 
       // 获取对应时间周期的历史数据
       const timeframeData = this.timeframes.get(config.timeframe);
@@ -198,16 +214,29 @@ export class PriceAlertService extends EventEmitter {
       const symbolSnapshots = timeframeData.snapshots.get(symbol);
       if (!symbolSnapshots || symbolSnapshots.length < 2) continue;
 
-      // 计算时间窗口开始的价格
-      const windowStart = Date.now() - timeframeData.windowMs;
-      const startSnapshot = symbolSnapshots.find(s => s.timestamp <= windowStart) ||
-                           symbolSnapshots[0]; // 如果没有足够历史数据，使用最早的
+      // 计算时间窗口开始的价格 - 使用更稳定的算法
+      const windowStart = now - timeframeData.windowMs;
+
+      // 找到最接近窗口开始时间的快照，而不是第一个满足条件的
+      let startSnapshot = symbolSnapshots[0]; // 默认最早的
+      let minTimeDiff = Math.abs(startSnapshot.timestamp - windowStart);
+
+      for (const snapshot of symbolSnapshots) {
+        const timeDiff = Math.abs(snapshot.timestamp - windowStart);
+        if (timeDiff < minTimeDiff && snapshot.timestamp <= windowStart) {
+          startSnapshot = snapshot;
+          minTimeDiff = timeDiff;
+        }
+      }
 
       if (!startSnapshot) continue;
 
       // 计算价格变动百分比
       const changePercent = ((currentSnapshot.price - startSnapshot.price) / startSnapshot.price) * 100;
       const absChangePercent = Math.abs(changePercent);
+
+      // 检查变动是否足够显著(避免微小波动触发)
+      if (absChangePercent < 0.1) continue; // 小于0.1%的变动忽略
 
       // 检查是否触发报警条件
       let shouldTrigger = false;
@@ -224,6 +253,21 @@ export class PriceAlertService extends EventEmitter {
       }
 
       if (shouldTrigger) {
+        // 检查是否为相似的变动(防止微小差异重复触发)
+        const recentKey = `${config.id}:${symbol}:${config.timeframe}`;
+        const recentTrigger = this.recentTriggers.get(recentKey);
+        const priceChangeThreshold = 0.5; // 价格变动超过0.5%才认为是新的触发
+
+        if (recentTrigger && now - recentTrigger.timestamp < 60 * 1000) { // 1分钟内
+          const priceDiff = Math.abs(currentSnapshot.price - recentTrigger.price) / recentTrigger.price * 100;
+          const changeDiff = Math.abs(changePercent - recentTrigger.changePercent);
+
+          if (priceDiff < priceChangeThreshold && changeDiff < 1.0) {
+            log.debug(`Skipping similar trigger for ${symbol}: price diff ${priceDiff.toFixed(2)}%, change diff ${changeDiff.toFixed(2)}%`);
+            continue;
+          }
+        }
+
         await this.triggerAlert(config, symbol, {
           changePercent,
           fromPrice: startSnapshot.price,
@@ -232,8 +276,16 @@ export class PriceAlertService extends EventEmitter {
           volume24h: currentSnapshot.volume24h
         });
 
-        // 设置冷却期
-        this.cooldownMap.set(cooldownKey, Date.now());
+        // 设置冷却期和记录最近触发
+        const triggerTime = Date.now();
+        this.cooldownMap.set(cooldownKey, triggerTime);
+        this.recentTriggers.set(recentKey, {
+          changePercent,
+          price: currentSnapshot.price,
+          timestamp: triggerTime
+        });
+
+        log.debug(`Alert triggered for ${symbol} (config ${config.id}), cooldown set until ${new Date(triggerTime + this.COOLDOWN_MS).toLocaleString()}`);
       }
     }
   }
@@ -432,6 +484,7 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
     const now = Date.now();
     let cleanedCount = 0;
 
+    // 清理冷却期记录
     for (const [key, timestamp] of this.cooldownMap.entries()) {
       if (now - timestamp > this.COOLDOWN_MS) {
         this.cooldownMap.delete(key);
@@ -439,8 +492,17 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
       }
     }
 
-    if (cleanedCount > 0) {
-      log.debug(`Cleaned up ${cleanedCount} expired cooldown records`);
+    // 清理最近触发记录 (保留5分钟)
+    let recentCleanedCount = 0;
+    for (const [key, record] of this.recentTriggers.entries()) {
+      if (now - record.timestamp > 5 * 60 * 1000) {
+        this.recentTriggers.delete(key);
+        recentCleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0 || recentCleanedCount > 0) {
+      log.debug(`Cleaned up ${cleanedCount} expired cooldown records and ${recentCleanedCount} recent trigger records`);
     }
   }
 
