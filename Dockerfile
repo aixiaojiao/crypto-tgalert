@@ -1,8 +1,8 @@
 # Multi-stage build for crypto-tgalert
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 # Install build dependencies for native modules
-RUN apk add --no-cache python3 make g++
+RUN apk add --no-cache python3 py3-setuptools make g++
 
 # Set working directory
 WORKDIR /app
@@ -21,10 +21,10 @@ COPY src/ ./src/
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine AS production
+FROM node:20-alpine AS production
 
 # Install sqlite3, Python and build dependencies for production
-RUN apk add --no-cache sqlite python3 make g++
+RUN apk add --no-cache sqlite python3 py3-setuptools make g++
 
 # Create app directory
 WORKDIR /app
