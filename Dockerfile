@@ -17,8 +17,6 @@ RUN npm ci && npm cache clean --force
 # Copy source code and configuration
 COPY src/ ./src/
 COPY *.json *.js *.md ./
-# Copy any additional directories needed
-COPY data/ ./data/ 2>/dev/null || true
 
 # Build TypeScript
 RUN npm run build
