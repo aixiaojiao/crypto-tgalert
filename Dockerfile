@@ -7,16 +7,15 @@ RUN apk add --no-cache python3 py3-setuptools make g++
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first for dependency installation
 COPY package*.json ./
-COPY tsconfig.json ./
 
 # Install all dependencies (including devDependencies for build)
 RUN npm ci && npm cache clean --force
 
-# Copy source code and configuration
+# Copy TypeScript configuration and source code
+COPY tsconfig.json ./
 COPY src/ ./src/
-COPY *.json *.js *.md ./
 
 # Build TypeScript
 RUN npm run build
