@@ -1,33 +1,7 @@
-# Multi-stage build for crypto-tgalert
-FROM node:20-alpine AS builder
+FROM node:20-alpine
 
-# Install build dependencies for native modules
-RUN apk add --no-cache python3 py3-setuptools make g++
-
-# Set working directory
-WORKDIR /app
-
-# Copy package files first for dependency installation
-COPY package*.json ./
-
-# Install all dependencies (including devDependencies for build)
-RUN npm ci && npm cache clean --force
-
-# Copy TypeScript configuration and source code
-COPY tsconfig.json ./
-COPY src/ ./src/
-
-# Debug: Check if files are copied correctly
-RUN ls -la && echo "=== src directory ===" && ls -la src/ && echo "=== data directory ===" && ls -la src/data/ || echo "No data dir" && echo "=== container directory ===" && ls -la src/core/container/ || echo "No container dir"
-
-# Build TypeScript
-RUN npm run build
-
-# Production stage
-FROM node:20-alpine AS production
-
-# Install sqlite3, Python and build dependencies for production
-RUN apk add --no-cache sqlite python3 py3-setuptools make g++
+# Install system dependencies
+RUN apk add --no-cache python3 py3-setuptools make g++ sqlite
 
 # Create app directory
 WORKDIR /app
@@ -39,20 +13,24 @@ RUN addgroup -g 1001 -S nodejs && \
 # Copy package files
 COPY package*.json ./
 
-# Install only production dependencies
-RUN npm ci --only=production && npm cache clean --force
+# Install dependencies
+RUN npm ci && npm cache clean --force
 
-# Copy built application from builder stage
-COPY --from=builder /app/dist ./dist
+# Copy source code and config
+COPY tsconfig.json ./
+COPY src/ ./src/
 
-# Create data directory for SQLite database
+# Build the application
+RUN npm run build
+
+# Create data directories
 RUN mkdir -p data logs && \
     chown -R tgalert:nodejs /app
 
 # Switch to non-root user
 USER tgalert
 
-# Expose port (if needed for health checks)
+# Expose port
 EXPOSE 3000
 
 # Health check
@@ -60,4 +38,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD node -e "process.exit(0)"
 
 # Start the application
-CMD ["npm", "run", "start:prod"]
+CMD ["npm", "start"]

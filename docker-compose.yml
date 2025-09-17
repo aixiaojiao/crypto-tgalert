@@ -5,7 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: production
     container_name: crypto-tgalert
     restart: unless-stopped
     environment:
