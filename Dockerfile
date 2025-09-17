@@ -20,18 +20,6 @@ RUN npm ci && npm cache clean --force
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Debug: Check file structure
-RUN echo "=== Checking file structure ===" && \
-    ls -la && \
-    echo "=== src directory ===" && \
-    ls -la src/ && \
-    echo "=== data directory ===" && \
-    ls -la src/data/ && \
-    echo "=== container directory ===" && \
-    ls -la src/core/container/ && \
-    echo "=== ServiceRegistry.ts content ===" && \
-    head -10 src/core/container/ServiceRegistry.ts
-
 # Build the application
 RUN npm run build
 

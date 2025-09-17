@@ -1,7 +1,7 @@
 import { Container } from './Container';
 import { IContainer, ServiceLifetime } from './IContainer';
 import { getDependencies, getInjectableMetadata, isInjectable, SERVICE_IDENTIFIERS } from './decorators';
-import { getDataManager } from '../../data/DataManager';
+// import { getDataManager } from '../../data/DataManager'; // 运行时加载
 import { binanceClient } from '../../services/binance';
 import { log } from '../../utils/logger';
 import { config } from '../../config';
@@ -24,10 +24,19 @@ export class ServiceRegistry {
     // 日志服务
     this.container.registerInstance(SERVICE_IDENTIFIERS.LOGGER, log);
 
-    // 数据管理器 - 单例
+    // 数据管理器 - 单例 (运行时动态加载)
     this.container.registerFactory(
       SERVICE_IDENTIFIERS.DATA_MANAGER,
-      () => getDataManager(),
+      () => {
+        try {
+          // 动态加载DataManager，避免构建时依赖缓存代码
+          const { getDataManager } = require('../../data/DataManager');
+          return getDataManager();
+        } catch (error) {
+          log.warn('DataManager not available, using null instance', { error: error instanceof Error ? error.message : String(error) });
+          return null;
+        }
+      },
       ServiceLifetime.SINGLETON
     );
 
