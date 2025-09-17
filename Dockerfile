@@ -14,8 +14,10 @@ COPY tsconfig.json ./
 # Install all dependencies (including devDependencies for build)
 RUN npm ci && npm cache clean --force
 
-# Copy source code
-COPY src/ ./src/
+# Copy all source code (including data directory structure)
+COPY . .
+# Remove unnecessary files from Docker image
+RUN rm -rf node_modules/.cache && rm -rf .git
 
 # Build TypeScript
 RUN npm run build
