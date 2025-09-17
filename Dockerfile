@@ -17,6 +17,9 @@ RUN npm ci && npm cache clean --force
 COPY tsconfig.json ./
 COPY src/ ./src/
 
+# Debug: Check if files are copied correctly
+RUN ls -la src/data/ && ls -la src/core/container/
+
 # Build TypeScript
 RUN npm run build
 
