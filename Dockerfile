@@ -18,7 +18,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 
 # Debug: Check if files are copied correctly
-RUN ls -la src/data/ && ls -la src/core/container/
+RUN ls -la && echo "=== src directory ===" && ls -la src/ && echo "=== data directory ===" && ls -la src/data/ || echo "No data dir" && echo "=== container directory ===" && ls -la src/core/container/ || echo "No container dir"
 
 # Build TypeScript
 RUN npm run build

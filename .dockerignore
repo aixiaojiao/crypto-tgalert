@@ -1,0 +1,20 @@
+# Keep important files and directories
+!src/
+!package*.json
+!tsconfig.json
+!*.md
+!*.js
+
+# Ignore everything else by default
+node_modules/
+dist/
+.git/
+.env
+.env.*
+logs/
+data/
+*.log
+.DS_Store
+.vscode/
+coverage/
+.nyc_output/
