@@ -357,14 +357,13 @@ describe('BinanceWebSocketClient', () => {
     test('should handle subscription to invalid symbol', async () => {
       // Binance WebSocket might not immediately reject invalid symbols
       // But our client should handle it gracefully
-      let errorOccurred = false;
-      
+
       try {
         await wsClient.subscribeTicker('INVALIDUSDT', () => {});
         // Even if it doesn't throw, it should track the subscription
         expect(wsClient.getActiveSubscriptionsCount()).toBe(1);
       } catch (error) {
-        errorOccurred = true;
+        // Error is expected for invalid symbols, test should still pass
       }
 
       // Either way, no uncaught exceptions should occur

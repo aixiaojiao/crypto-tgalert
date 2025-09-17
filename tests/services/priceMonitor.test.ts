@@ -1,4 +1,4 @@
-import { PriceMonitorService, AlertCheckResult } from '../../src/services/priceMonitor';
+import { PriceMonitorService } from '../../src/services/priceMonitor';
 import { BinanceClient } from '../../src/services/binance';
 import { PriceAlertModel } from '../../src/models/PriceAlert';
 import { getDatabase } from '../../src/database/connection';
@@ -206,7 +206,7 @@ describe('PriceMonitorService', () => {
       (PriceAlertModel.getAllActiveAlerts as jest.Mock).mockResolvedValue([mockAlert]);
       mockBinanceClient.getPrice.mockResolvedValue(55000); // Price above threshold
 
-      const results = await priceMonitor.checkAllAlerts();
+      await priceMonitor.checkAllAlerts();
 
       // First add the symbol to monitoring
       await priceMonitor.addSymbolMonitoring('BTCUSDT');

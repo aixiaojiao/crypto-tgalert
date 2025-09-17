@@ -2,8 +2,9 @@ import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { createHmac } from 'crypto';
 import { config } from '../config';
 import { log } from '../utils/logger';
-import { binanceRateLimit } from '../utils/ratelimit';
-import { oiCache, marketDataCache, CacheManager } from '../utils/cache';
+import { binanceRateLimit, BinanceRateLimiter } from '../utils/ratelimit';
+import { oiCache, marketDataCache, CacheManager, OICacheService, MarketDataCacheService } from '../utils/cache';
+import { Singleton } from '../core/container/decorators';
 import {
   SymbolPriceTicker,
   Ticker24hr,
@@ -36,6 +37,7 @@ export interface Binance24hrResponse {
   lowPrice: string;
 }
 
+@Singleton
 export class BinanceClient {
   private client: AxiosInstance;
   private futuresClient: AxiosInstance;
@@ -43,8 +45,19 @@ export class BinanceClient {
   private futuresBaseURL = 'https://fapi.binance.com';
   private apiKey: string;
   private apiSecret: string;
+  private rateLimiter: BinanceRateLimiter;
+  private oiCacheService: OICacheService;
+  private marketDataCacheService: MarketDataCacheService;
 
-  constructor() {
+  constructor(
+    rateLimiter?: BinanceRateLimiter,
+    oiCacheService?: OICacheService,
+    marketDataCacheService?: MarketDataCacheService
+  ) {
+    // 向后兼容：如果没有通过DI注入，使用现有的单例
+    this.rateLimiter = rateLimiter || binanceRateLimit as any;
+    this.oiCacheService = oiCacheService || oiCache as any;
+    this.marketDataCacheService = marketDataCacheService || marketDataCache as any;
     this.apiKey = config.binance.apiKey;
     this.apiSecret = config.binance.apiSecret;
 
@@ -68,7 +81,11 @@ export class BinanceClient {
 
     this.setupInterceptors();
     this.setupFuturesInterceptors();
-    log.info('BinanceClient initialized', { baseURL: this.baseURL, futuresBaseURL: this.futuresBaseURL });
+    log.info('BinanceClient initialized', {
+      baseURL: this.baseURL,
+      futuresBaseURL: this.futuresBaseURL,
+      usingDI: !!(rateLimiter && oiCacheService && marketDataCacheService)
+    });
   }
 
   private setupInterceptors(): void {
@@ -76,8 +93,8 @@ export class BinanceClient {
     this.client.interceptors.request.use(
       async (config) => {
         // Check rate limiting
-        if (binanceRateLimit.isLimited('binance-api')) {
-          const remaining = binanceRateLimit.getRemainingRequests('binance-api');
+        if (this.rateLimiter.isLimited('binance-api')) {
+          const remaining = this.rateLimiter.getRemainingRequests('binance-api');
           const error = new BinanceApiError(
             `Rate limit exceeded. Remaining requests: ${remaining}`,
             BinanceErrorCode.TOO_MANY_REQUESTS
@@ -162,8 +179,8 @@ export class BinanceClient {
     this.futuresClient.interceptors.request.use(
       async (config) => {
         // Check rate limiting
-        if (binanceRateLimit.isLimited('binance-futures')) {
-          const remaining = binanceRateLimit.getRemainingRequests('binance-futures');
+        if (this.rateLimiter.isLimited('binance-futures')) {
+          const remaining = this.rateLimiter.getRemainingRequests('binance-futures');
           const error = new BinanceApiError(
             `Rate limit exceeded. Remaining requests: ${remaining}`,
             BinanceErrorCode.TOO_MANY_REQUESTS
@@ -943,7 +960,7 @@ export class BinanceClient {
     const cacheKey = `oi:${symbol.toUpperCase()}:${period}:${limit}`;
     
     // Try to get from cache first
-    const cached = await oiCache.get(cacheKey);
+    const cached = await this.oiCacheService.get(cacheKey);
     if (cached) {
       log.debug(`Open interest stats from cache for ${symbol}`, { period, count: cached.length });
       return cached;
@@ -961,7 +978,7 @@ export class BinanceClient {
       const data = response.data;
       
       // Cache the result with appropriate TTL
-      await oiCache.set(cacheKey, data, CacheManager.TTL.OI_HIST);
+      await this.oiCacheService.set(cacheKey, data, CacheManager.TTL.OI_HIST);
       
       log.debug(`Open interest stats fetched for ${symbol}`, { period, count: data.length });
 
@@ -979,7 +996,7 @@ export class BinanceClient {
     const cacheKey = 'futures:trading_symbols';
     
     // Try to get from cache first
-    const cached = await marketDataCache.get(cacheKey);
+    const cached = await this.marketDataCacheService.get(cacheKey);
     if (cached) {
       log.debug('Futures trading symbols from cache', { count: cached.length });
       return cached;
@@ -992,7 +1009,7 @@ export class BinanceClient {
         .map(symbol => symbol.symbol);
       
       // Cache with 24-hour TTL since trading symbols change rarely
-      await marketDataCache.set(cacheKey, symbols, CacheManager.TTL.SYMBOLS);
+      await this.marketDataCacheService.set(cacheKey, symbols, CacheManager.TTL.SYMBOLS);
       
       log.debug('Futures trading symbols fetched', { count: symbols.length });
       return symbols;
@@ -1059,7 +1076,7 @@ export class BinanceClient {
     const cacheKey = `precision:${symbol.toUpperCase()}`;
     
     // Try cache first
-    const cached = await marketDataCache.get(cacheKey);
+    const cached = await this.marketDataCacheService.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -1077,7 +1094,7 @@ export class BinanceClient {
         };
         
         // Cache with 24-hour TTL
-        await marketDataCache.set(cacheKey, result, CacheManager.TTL.SYMBOLS);
+        await this.marketDataCacheService.set(cacheKey, result, CacheManager.TTL.SYMBOLS);
         return result;
       }
 
@@ -1093,7 +1110,7 @@ export class BinanceClient {
         };
         
         // Cache with 24-hour TTL
-        await marketDataCache.set(cacheKey, result, CacheManager.TTL.SYMBOLS);
+        await this.marketDataCacheService.set(cacheKey, result, CacheManager.TTL.SYMBOLS);
         return result;
       }
 

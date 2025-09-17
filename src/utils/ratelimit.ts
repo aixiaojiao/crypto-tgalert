@@ -1,4 +1,5 @@
 import { log } from './logger';
+import { Injectable, Singleton } from '../core/container/decorators';
 
 interface RateLimitConfig {
   windowMs: number;
@@ -10,6 +11,7 @@ interface RequestRecord {
   resetTime: number;
 }
 
+@Injectable()
 export class RateLimiter {
   private records = new Map<string, RequestRecord>();
   private config: RateLimitConfig;
@@ -98,7 +100,18 @@ export class RateLimiter {
   }
 }
 
-// 预定义的速率限制器
+// 创建Binance专用的速率限制器配置类
+@Singleton
+export class BinanceRateLimiter extends RateLimiter {
+  constructor() {
+    super({
+      windowMs: 60000, // 1分钟
+      maxRequests: 2000 // Binance限制2400/min，设为2000保守一些
+    });
+  }
+}
+
+// 保持向后兼容的导出（迁移期间使用）
 export const binanceRateLimit = new RateLimiter({
   windowMs: 60000, // 1分钟
   maxRequests: 2000 // Binance限制2400/min，设为2000保守一些

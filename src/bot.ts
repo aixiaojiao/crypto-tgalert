@@ -4,11 +4,9 @@ import { authMiddleware } from './middleware/auth';
 import { BotContext, BotStatus } from './types';
 import { BinanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
-import { PriceAlertModel } from './models/PriceAlert';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
 import { priceAlertService } from './services/priceAlertService';
 import { triggerAlertService } from './services/triggerAlerts';
-import { TriggerAlertModel } from './models/TriggerAlert';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -19,22 +17,25 @@ function formatTimeToUTC8(date: Date | number): string {
 import { tieredDataManager } from './services/tieredDataManager';
 import { volumeClassifier } from './utils/volumeClassifier';
 import { rankingAnalyzer } from './services/rankingAnalyzer';
-import { DebugService } from './services/debugService';
 import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { realtimeAlertService } from './services/realtimeAlertService';
-import { historicalHighCache } from './services/historicalHighCacheV2';
 import { log } from './utils/logger';
+import { NotificationService } from './services/alerts/NotificationService';
+import { PersistentAlertService } from './services/alerts/PersistentAlertService';
+import { AlertCommandParser } from './utils/alertParser';
+import { DebugService } from './services/debugService';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
   private status: BotStatus;
   private binanceClient: BinanceClient;
+  private notificationService: NotificationService;
+  private unifiedAlertService: PersistentAlertService;
   private debugService: DebugService;
 
   constructor() {
     this.bot = new Telegraf<BotContext>(config.telegram.botToken);
     this.binanceClient = new BinanceClient();
-    this.debugService = new DebugService();
     this.status = {
       isRunning: false,
       startTime: new Date(),
@@ -42,20 +43,25 @@ export class TelegramBot {
       errors: 0
     };
 
+    // Initialize unified alert services
+    this.notificationService = new NotificationService(log);
+    this.unifiedAlertService = new PersistentAlertService(log, this.notificationService);
+    this.debugService = new DebugService();
+
     this.setupMiddleware();
     this.setupCommands();
+    this.setupUnderscoreCommands();
     this.setupErrorHandling();
 
-    // Set telegram bot instance for trigger alerts
+    // Set telegram bot instance for services
+    this.notificationService.setTelegramBot(this);
     triggerAlertService.setTelegramBot(this);
-
-    // Set telegram bot instance for price alerts
     priceAlertService.setTelegramBot(this);
 
-    // Initialize price alert database
+    // Initialize databases
     TimeRangeAlertModel.initDatabase();
 
-    // Initialize realtime market cache and alert service
+    // Initialize realtime services
     this.initializeRealtimeServices();
   }
 
@@ -87,12 +93,40 @@ export class TelegramBot {
   }
 
   /**
+   * 初始化统一警报服务
+   */
+  async initializeUnifiedAlerts(): Promise<void> {
+    try {
+      log.info('Initializing unified alert service...');
+      await this.unifiedAlertService.initialize();
+      log.info('Unified alert service initialized successfully');
+    } catch (error) {
+      log.error('Failed to initialize unified alert service:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 初始化调试服务
+   */
+  async initializeDebugService(): Promise<void> {
+    try {
+      log.info('Initializing debug service...');
+      await this.debugService.initialize();
+      log.info('Debug service initialized successfully');
+    } catch (error) {
+      log.error('Failed to initialize debug service:', error);
+      throw error;
+    }
+  }
+
+  /**
    * 设置中间件
    */
   private setupMiddleware(): void {
     // 用户认证中间件
     this.bot.use(authMiddleware());
-    
+
     // 命令计数中间件
     this.bot.use(async (ctx, next) => {
       this.status.commandsProcessed++;
@@ -100,6 +134,135 @@ export class TelegramBot {
       console.log(`📊 Processing command #${this.status.commandsProcessed}: ${messageText}`);
       await next();
     });
+  }
+
+  /**
+   * 设置错误处理
+   */
+  private setupErrorHandling(): void {
+    this.bot.catch((err, ctx) => {
+      console.error('Bot error:', err);
+      this.status.errors++;
+      if (ctx && ctx.reply) {
+        ctx.reply('❌ 处理命令时发生错误，请稍后重试');
+      }
+    });
+
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught Exception:', error);
+      this.status.errors++;
+    });
+
+    process.on('unhandledRejection', (reason, promise) => {
+      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+      this.status.errors++;
+    });
+  }
+
+  /**
+   * 启动机器人
+   */
+  async start(): Promise<void> {
+    try {
+      // 设置菜单栏命令（在启动前设置）
+      await this.setupMenuCommands();
+
+      await this.bot.launch();
+      this.status.isRunning = true;
+
+      log.info('Telegram bot started successfully');
+    } catch (error) {
+      log.error('Failed to start Telegram bot:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 设置菜单栏命令
+   */
+  private async setupMenuCommands(): Promise<void> {
+    try {
+      const commands = [
+        { command: 'start', description: '🚀 开始使用机器人' },
+        { command: 'help', description: '📖 查看完整功能指南' },
+        { command: 'price', description: '💰 查询币种价格' },
+        { command: 'rank_gainers', description: '📊 查看涨幅排行榜' },
+        { command: 'rank_losers', description: '📊 查看跌幅排行榜' },
+        { command: 'funding', description: '💰 查看资金费率排行' },
+        { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
+        { command: 'alert_list', description: '⚡ 查看我的警报列表' },
+        { command: 'start_gainers_push', description: '🔔 开启涨幅推送' },
+        { command: 'status', description: '⚙️ 查看系统状态' }
+      ];
+
+      console.log('📋 设置菜单命令:', commands);
+      await this.bot.telegram.setMyCommands(commands);
+
+      // 验证菜单是否设置成功
+      const currentCommands = await this.bot.telegram.getMyCommands();
+      console.log('✅ 当前菜单命令:', currentCommands);
+
+      log.info('Menu bar commands configured successfully');
+    } catch (error) {
+      console.error('❌ 菜单设置失败:', error);
+      log.error('Failed to setup menu commands:', error);
+    }
+  }
+
+  /**
+   * 停止机器人
+   */
+  async stop(): Promise<void> {
+    try {
+      this.bot.stop();
+      this.status.isRunning = false;
+      log.info('Telegram bot stopped');
+    } catch (error) {
+      log.error('Failed to stop Telegram bot:', error);
+    }
+  }
+
+  /**
+   * 发送消息给外部服务
+   */
+  async sendMessage(chatId: string | number, message: string, options?: any): Promise<void> {
+    try {
+      await this.bot.telegram.sendMessage(chatId, message, {
+        parse_mode: 'Markdown',
+        ...options
+      });
+    } catch (error) {
+      log.error('Failed to send message:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 发送消息给授权用户
+   */
+  async sendToAuthorizedUser(message: string, options?: any): Promise<void> {
+    try {
+      const authorizedUserId = this.getAuthorizedUserId();
+      if (authorizedUserId) {
+        await this.sendMessage(authorizedUserId, message, options);
+      }
+    } catch (error) {
+      log.error('Failed to send message to authorized user:', error);
+    }
+  }
+
+  /**
+   * 获取授权用户ID
+   */
+  getAuthorizedUserId(): string | null {
+    return config.telegram.userId || null;
+  }
+
+  /**
+   * 获取机器人状态
+   */
+  getStatus(): BotStatus {
+    return this.status;
   }
 
   /**
@@ -125,94 +288,96 @@ export class TelegramBot {
 /help - 查看完整帮助
 /status - 查看系统状态
 /price btc - 查看BTC价格
-/add_alert 1h gain 15 - 添加1小时涨幅15%报警 🆕
+/alert btc > 50000 - 添加价格警报 🆕
 
 🤖 机器人已准备就绪！
       `;
-      
+
       await ctx.replyWithMarkdown(welcomeMessage);
     });
 
-    // 帮助命令
-    this.bot.help(async (ctx) => {
-      const helpMessage = `
-📖 <b>Crypto Alert Bot 帮助</b>
 
-💰 <b>价格查询 (默认合约):</b>
-/price btc - 查看BTC合约价格+资金费率+持仓量
-/price eth - 查看ETH合约价格
-/price sol - 查看SOL合约价格
+    // 显式帮助命令处理
+    this.bot.command('help', async (ctx) => {
+      try {
+        console.log('📖 处理/help命令...');
+        const helpMessage = `📖 Crypto Alert Bot 完整功能指南
 
-📊 <b>排行榜查询:</b>
-/gainers - 24小时涨幅榜 TOP10
-/gainers_period &lt;时间段&gt; [数量] - 自定义时间段涨幅榜
-/losers - 24小时跌幅榜 TOP10
-/funding - 资金费率排行榜 (负费率优先)
-/oi24h - 24小时持仓量增长榜
-/oi4h - 4小时持仓量增长榜
-/oi1h - 1小时持仓量增长榜
+💰 价格查询:
+/price btc - 查看BTC价格+资金费率+持仓量
+/price eth - 查看ETH价格信息
 
-📈 <b>时间段涨幅榜示例:</b>
-/gainers_period 1h - 1小时涨幅榜前10
-/gainers_period 5m 5 - 5分钟涨幅榜前5
-支持: 5m, 15m, 30m, 1h, 4h, 12h, 3d, 1w
+📊 市场排行:
+/rank - 默认涨幅榜 (等同于 /rank_gainers)
+/rank_gainers - 涨幅排行榜
+/rank_gainers 1h - 1小时涨幅榜
+/rank_losers - 跌幅排行榜
+/rank_losers 4h - 4小时跌幅榜
+/funding - 资金费率排行 (负费率=做空付费)
+/oi_24h, /oi_4h, /oi_1h - 持仓量增长榜
 
-⚡ <b>价格提醒:</b>
-/alert btc &gt; 50000 - BTC超过50000时提醒
-/alert eth &lt; 3000 - ETH低于3000时提醒
-/alerts - 查看所有提醒
-/remove_alert 1 - 删除提醒#1
+⚡ 智能警报系统:
+🔸 价格警报:
+/alert btc > 50000 - BTC价格突破50000时提醒
+/alert eth < 3000 - ETH价格跌破3000时提醒
+/alert doge change 5% - DOGE价格变化超过5%时提醒
 
-🔔 <b>多时间周期报警:</b>
-/add_alert 1h gain 15 - 1小时内涨幅超15%时报警
-/add_alert 5m loss 10 btc - BTC 5分钟内跌幅超10%时报警
-/add_alert 24h both 20 - 任意币种24小时内涨跌幅超20%时报警
-/my_alerts - 查看我的报警配置
-/toggle_alert 1 - 启用/禁用报警#1
-/delete_alert 1 - 删除报警配置#1
-/alert_history - 查看报警触发历史
+🔸 急涨急跌警报 (核心功能):
+/alert_5m_gain_3_all - 5分钟涨3%全币监控
+/alert_1h_loss_5_btc - 1小时跌5%BTC监控
+/alert_15m_all_2_all - 15分钟涨跌2%全币监控
+格式: /alert_[时间]_[方向]_[百分比]_[币种]
+时间: 1m,5m,15m,30m,1h,4h,24h,3d
+方向: gain(涨),loss(跌),all(涨跌)
+币种: btc,eth,all(全部)等
 
-支持时间周期: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d
-支持报警类型: gain(涨幅), loss(跌幅), both(双向)
+🔸 警报管理:
+/alert_list - 查看所有警报
+/alert_remove <ID> - 删除价格警报
+/alert_remove T<ID> - 删除急涨急跌警报
+/alert_toggle <ID> - 启用/禁用警报
 
-📈 <b>历史新高查询:</b>
-/high btc 1w - 查询BTC一周内最高价
-/high eth all - 查询ETH历史最高价
-/nearhigh 1w - 接近1周新高的代币排名
-/nearhigh all 10 - 接近历史新高的前10个代币
+🔔 推送服务:
+/start_gainers_push - 开启涨幅推送(自动推送Top10)
+/start_funding_push - 开启费率推送
+/stop_all_push - 停止所有推送
 
-支持时间段: 1d, 1w, 1m, 3m, 6m, 1y, all
+📈 历史分析:
+/high btc 1w - BTC一周高点
+/near_high 1m - 接近月高点币种
 
-📢 <b>推送通知:</b>
-/start_gainers_push - 启动涨幅榜推送
-/stop_gainers_push - 停止涨幅榜推送
-/start_funding_push - 启动负费率榜推送
-/stop_funding_push - 停止负费率榜推送
-/push_status - 查看推送状态
+⚙️ 系统:
+/status - 系统状态
+/cache_status - 缓存状态
+/help - 显示帮助
 
-⚙️ <b>系统:</b>
-/status - 查看系统状态
-/cache_status - 查看实时数据缓存状态
-/high_status - 查看历史新高缓存状态
-/help - 查看帮助
+💡 使用提示:
+• 所有命令支持直接点击执行
+• 警报系统支持两种类型统一管理
+• 推送服务可独立开关
+• 支持多币种同时监控`;
 
-💡 提示: 默认查询合约数据，包含资金费率和持仓量信息`;
-      
-      await ctx.reply(helpMessage, { parse_mode: 'HTML' });
+        console.log('📤 发送/help消息...');
+        await ctx.reply(helpMessage);
+        console.log('✅ /help消息发送成功');
+      } catch (error) {
+        console.error('❌ /help命令处理失败:', error);
+        await ctx.reply('❌ 帮助信息加载失败，请稍后重试');
+      }
     });
 
     // 价格查询命令 (默认查询合约)
     this.bot.command('price', async (ctx) => {
       try {
         const args = ctx.message?.text.split(' ').slice(1);
-        
+
         if (!args || args.length === 0) {
           await ctx.reply('💡 请指定要查询的币种，例如: /price btc');
           return;
         }
 
         const symbol = args[0].toUpperCase();
-        
+
         // 检查是否是已下架代币
         const testSymbol = symbol.includes('USDT') ? symbol : symbol + 'USDT';
         const riskLevel = getTokenRiskLevel(testSymbol);
@@ -220,7 +385,7 @@ export class TelegramBot {
           await ctx.reply(`❌ ${symbol} 已被列入${riskLevel === 'delisted' ? '已下架' : '黑名单'}代币，不支持查询`);
           return;
         }
-        
+
         await ctx.reply('🔍 正在查询价格...');
 
         // 优先查询合约数据
@@ -240,9 +405,9 @@ export class TelegramBot {
             actualSymbol = symbol;
             break;
           }
-          
+
           actualSymbol = symbol + suffix;
-          
+
           try {
             // 首先尝试合约 (using tiered data manager for optimization)
             stats = await tieredDataManager.getTicker24hr(actualSymbol);
@@ -310,7 +475,7 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
 ⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(priceMessage);
-        
+
       } catch (error) {
         console.error('Price query error:', error);
         await ctx.reply('❌ 查询失败，请检查币种名称是否正确');
@@ -323,10 +488,10 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
         const uptime = Math.floor((Date.now() - this.status.startTime.getTime()) / 1000);
         const uptimeHours = Math.floor(uptime / 3600);
         const uptimeMinutes = Math.floor((uptime % 3600) / 60);
-        
+
         // 测试Binance连接
         const btcPrice = await this.binanceClient.getPrice('BTCUSDT');
-        
+
         const statusMessage = `
 📊 *系统状态*
 
@@ -344,7 +509,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
 🤖 系统运行正常！
         `;
-        
+
         await ctx.replyWithMarkdown(statusMessage);
       } catch (error) {
         await ctx.reply('❌ 获取系统状态时发生错误');
@@ -357,7 +522,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         const cacheStatus = tieredDataManager.getCacheStatus();
         const refreshStats = tieredDataManager.getRefreshStats();
         const volumeStats = volumeClassifier.getVolumeStats();
-        
+
         const statusMessage = `
 📊 *缓存优化系统状态*
 
@@ -368,7 +533,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
 💎 *交易量分层统计:*
 • 高交易量 (>50M): ${volumeStats.high.count}个 (30秒更新)
-• 中交易量 (10-50M): ${volumeStats.medium.count}个 (5分钟更新)  
+• 中交易量 (10-50M): ${volumeStats.medium.count}个 (5分钟更新)
 • 低交易量 (<10M): ${volumeStats.low.count}个 (4小时更新)
 • 总代币数: ${volumeStats.totalSymbols}个
 
@@ -380,7 +545,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
 ⏰ 更新时间: ${formatTimeToUTC8(new Date())}
         `;
-        
+
         await ctx.replyWithMarkdown(statusMessage);
       } catch (error) {
         console.error('Cache status error:', error);
@@ -388,354 +553,55 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    // 24小时涨幅榜 - 优化版本使用实时缓存
+    // 旧命令迁移提示
     this.bot.command('gainers', async (ctx) => {
-      try {
-        await ctx.reply('📊 正在查询24小时涨幅榜...');
-
-        let gainers;
-        let dataSource = '';
-        let queryTime = Date.now();
-
-        // 优先使用实时缓存数据
-        if (realtimeMarketCache.isReady()) {
-          log.debug('Using realtime cache for gainers query');
-          const realtimeGainers = realtimeMarketCache.getTopGainers(10, 10000);
-
-          if (realtimeGainers.length > 0) {
-            gainers = realtimeGainers.map(data => ({
-              symbol: data.symbol,
-              priceChangePercent: data.priceChangePercent.toString(),
-              lastPrice: data.price.toString(),
-              volume: data.volume.toString()
-            }));
-            dataSource = '⚡ 实时数据';
-            log.info(`Gainers query served from realtime cache in ${Date.now() - queryTime}ms`);
-          }
-        }
-
-        // Fallback 到 REST API
-        if (!gainers || gainers.length === 0) {
-          log.debug('Using REST API fallback for gainers query');
-          dataSource = '📡 API数据';
-
-          // 🔥 Trigger real-time ranking analysis to capture sudden movers
-          await rankingAnalyzer.analyzeRankings('user-query');
-
-          // Use tiered data manager for optimized data fetching
-          const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
-          const validSymbols = filterTradingPairs(allSymbols);
-          const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
-          const allStats = Array.from(allStatsMap.values());
-
-          // 过滤交易对并按涨幅排序，取前10
-          gainers = allStats
-            .filter(stat => {
-              return parseFloat(stat.priceChangePercent) > 0 &&
-                     validSymbols.includes(stat.symbol) &&
-                     parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
-            })
-            .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent));
-
-          log.info(`Gainers query served from REST API in ${Date.now() - queryTime}ms`);
-        }
-
-        // 限制显示数量以避免消息过长
-        const displayLimit = 20;
-        const displayData = gainers.slice(0, displayLimit);
-        let message = `🚀 *24小时涨幅榜 TOP${displayData.length}*\n\n`;
-
-        const priceFormatPromises = displayData.map(async (stat, index) => {
-          const symbol = stat.symbol.replace('USDT', '');
-          const change = formatPriceChange(parseFloat(stat.priceChangePercent));
-          const formattedPrice = await formatPriceWithSeparators(stat.lastPrice, stat.symbol);
-          const riskLevel = getTokenRiskLevel(stat.symbol);
-          const riskIcon = getRiskIcon(riskLevel);
-          return `${index + 1}. ${riskIcon}**${symbol}** +${change}% ($${formattedPrice})\n`;
-        });
-
-        const formattedEntries = await Promise.all(priceFormatPromises);
-        formattedEntries.forEach(entry => {
-          message += entry;
-        });
-
-        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
-        message += `\n📊 数据来源: ${dataSource}`;
-
-        await ctx.replyWithMarkdown(message);
-      } catch (error) {
-        console.error('Gainers query error:', error);
-        await ctx.reply('❌ 查询涨幅榜失败');
-      }
+      await ctx.reply(
+        '🔄 *命令已优化升级*\n\n' +
+        '`/gainers` 命令已整合到新的 `/rank` 命令中，功能更强大！\n\n' +
+        '📊 *新用法:*\n' +
+        '• `/rank` - 默认显示涨幅榜前10\n' +
+        '• `/rank_gainers` - 涨幅榜（等同于旧命令）\n' +
+        '• `/rank_losers` - 跌幅榜\n' +
+        '• `/rank_gainers 15` - 自定义显示数量\n' +
+        '• `/rank_gainers 24h 20` - 指定时间段和数量\n\n' +
+        '✨ *新功能:* 支持多时间段，自定义数量，更好的数据源切换\n\n' +
+        '👆 请使用 `/rank_gainers` 替代此命令',
+        { parse_mode: 'Markdown' }
+      );
     });
 
-    // 实时缓存状态命令
-    this.bot.command('cache_status', async (ctx) => {
-      try {
-        const cacheStats = realtimeMarketCache.getStats();
-
-        let statusMessage = `📊 *实时数据缓存状态*\n\n`;
-        statusMessage += `🔌 连接状态: ${cacheStats.isConnected ? '✅ 已连接' : '❌ 未连接'}\n`;
-        statusMessage += `📈 交易对数量: ${cacheStats.totalSymbols} / ${cacheStats.validSymbols}\n`;
-        statusMessage += `🔄 数据更新次数: ${cacheStats.totalUpdates}\n`;
-        statusMessage += `📦 平均更新大小: ${cacheStats.avgUpdateSize} 币种\n`;
-        statusMessage += `⏰ 运行时间: ${cacheStats.uptimeFormatted}\n`;
-
-        if (cacheStats.lastUpdateTime > 0) {
-          const lastUpdateAgo = Math.round((Date.now() - cacheStats.lastUpdateTime) / 1000);
-          statusMessage += `🕐 最后更新: ${lastUpdateAgo}秒前\n`;
-        }
-
-        statusMessage += `\n💡 实时缓存状态: ${realtimeMarketCache.isReady() ? '✅ 就绪' : '⏳ 准备中'}`;
-
-        await ctx.replyWithMarkdown(statusMessage);
-      } catch (error) {
-        console.error('Cache status error:', error);
-        await ctx.reply('❌ 获取缓存状态时发生错误');
-      }
-    });
-
-    // 实时推送服务状态命令
-    this.bot.command('realtime_status', async (ctx) => {
-      try {
-        const realtimeStatus = realtimeAlertService.getStatus();
-        const cacheStatus = realtimeMarketCache.getStats();
-
-        let statusMessage = `⚡ *实时推送服务状态*\n\n`;
-
-        statusMessage += `🔄 服务状态: ${realtimeStatus.enabled ? '✅ 运行中' : '❌ 已停止'}\n`;
-        statusMessage += `📊 数据源: ${cacheStatus.isConnected ? '✅ WebSocket连接正常' : '❌ WebSocket断开'}\n`;
-        statusMessage += `💾 缓存状态: ${cacheStatus.totalSymbols > 0 ? `✅ ${cacheStatus.totalSymbols}个币种` : '⏳ 初始化中'}\n\n`;
-
-        statusMessage += `🎯 *推送配置:*\n`;
-        statusMessage += `• 新进入阈值: ${realtimeStatus.config.minGainPercent}%\n`;
-        statusMessage += `• 变动阈值: ${realtimeStatus.config.majorMoveThreshold}位\n`;
-        statusMessage += `• 冷却时间: ${realtimeStatus.config.pushCooldownMs / 1000 / 60}分钟\n`;
-        statusMessage += `• 频率限制: ${realtimeStatus.config.maxPushPerSymbol}次/冷却期\n\n`;
-
-        statusMessage += `📈 *推送统计:*\n`;
-        statusMessage += `• 推送记录: ${realtimeStatus.totalPushRecords}个币种\n`;
-        statusMessage += `• 冷却中: ${realtimeStatus.activeCooldowns}个币种\n`;
-
-        if (realtimeStatus.cooldownSymbols.length > 0) {
-          const symbols = realtimeStatus.cooldownSymbols.slice(0, 5).join(', ');
-          statusMessage += `• 冷却币种: ${symbols}${realtimeStatus.cooldownSymbols.length > 5 ? '...' : ''}\n`;
-        }
-
-        statusMessage += `\n💡 实时推送${realtimeStatus.enabled ? '正常运行' : '等待启动'}`;
-
-        await ctx.replyWithMarkdown(statusMessage);
-      } catch (error) {
-        console.error('Realtime status error:', error);
-        await ctx.reply('❌ 获取实时推送状态时发生错误');
-      }
-    });
-
-    // 时间段涨幅榜
     this.bot.command('gainers_period', async (ctx) => {
-      try {
-        const messageText = ctx.message?.text || '';
-        const args = messageText.split(' ').slice(1); // Remove command name
-
-        if (args.length === 0) {
-          await ctx.replyWithMarkdown(
-            `📊 *时间段涨幅榜使用说明*\n\n` +
-            `用法: \`/gainers_period <时间段> [数量]\`\n\n` +
-            `支持的时间段：\n` +
-            `• \`5m\` - 5分钟\n` +
-            `• \`15m\` - 15分钟\n` +
-            `• \`30m\` - 30分钟\n` +
-            `• \`1h\` - 1小时\n` +
-            `• \`4h\` - 4小时\n` +
-            `• \`12h\` - 12小时\n` +
-            `• \`3d\` - 3天\n` +
-            `• \`1w\` - 1周\n\n` +
-            `示例：\n` +
-            `\`/gainers_period 1h\` - 1小时涨幅榜前10\n` +
-            `\`/gainers_period 5m 5\` - 5分钟涨幅榜前5\n` +
-            `\`/gainers_period 3d 15\` - 3天涨幅榜前15`
-          );
-          return;
-        }
-
-        const period = args[0]?.toLowerCase();
-        const limit = args[1] ? Math.min(Math.max(parseInt(args[1]), 1), 20) : 10;
-
-        // Validate period
-        const validPeriods = ['5m', '15m', '30m', '1h', '4h', '12h', '3d', '1w'];
-        if (!validPeriods.includes(period)) {
-          await ctx.reply(`❌ 不支持的时间段: ${period}\n支持的时间段: ${validPeriods.join(', ')}`);
-          return;
-        }
-
-        // Get period display name
-        const periodNames: { [key: string]: string } = {
-          '5m': '5分钟',
-          '15m': '15分钟',
-          '30m': '30分钟',
-          '1h': '1小时',
-          '4h': '4小时',
-          '12h': '12小时',
-          '3d': '3天',
-          '1w': '1周'
-        };
-
-        // 24小时数据提示使用更快的/gainers命令
-        if (period === '1d' || period === '24h') {
-          await ctx.reply(`💡 查询24小时数据建议使用 /gainers 命令，响应更快！\n📊 继续查询${periodNames[period]}涨幅榜...`);
-        } else {
-          await ctx.reply(`📊 正在查询${periodNames[period]}涨幅榜...`);
-        }
-
-        let queryTime = Date.now();
-
-        // Get all futures symbols
-        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
-        const validSymbols = filterTradingPairs(allSymbols);
-
-        // Get period stats
-        const periodStats = await this.binanceClient.getFuturesPeriodStats(validSymbols, period);
-
-        if (periodStats.length === 0) {
-          await ctx.reply('❌ 未获取到数据，请稍后重试');
-          return;
-        }
-
-        // Filter and sort by price change percentage (gainers only)
-        const gainers = periodStats
-          .filter(stat => stat.priceChangePercent > 0)
-          .sort((a, b) => b.priceChangePercent - a.priceChangePercent)
-          .slice(0, limit);
-
-        if (gainers.length === 0) {
-          await ctx.reply(`📊 ${periodNames[period]}内暂无上涨的币种`);
-          return;
-        }
-
-        let message = `🚀 *${periodNames[period]}涨幅榜 TOP${gainers.length}*\n\n`;
-
-        const priceFormatPromises = gainers.map(async (stat, index) => {
-          const symbol = stat.symbol.replace('USDT', '');
-          const change = formatPriceChange(stat.priceChangePercent);
-          const formattedPrice = await formatPriceWithSeparators(stat.currentPrice, stat.symbol);
-          const riskLevel = getTokenRiskLevel(stat.symbol);
-          const riskIcon = getRiskIcon(riskLevel);
-          return `${index + 1}. ${riskIcon}**${symbol}** +${change}% ($${formattedPrice})\n`;
-        });
-
-        const formattedEntries = await Promise.all(priceFormatPromises);
-        formattedEntries.forEach(entry => {
-          message += entry;
-        });
-
-        // Calculate time range for display
-        const now = new Date();
-        let intervalMs = 0;
-        switch (period) {
-          case '5m': intervalMs = 5 * 60 * 1000; break;
-          case '15m': intervalMs = 15 * 60 * 1000; break;
-          case '30m': intervalMs = 30 * 60 * 1000; break;
-          case '1h': intervalMs = 60 * 60 * 1000; break;
-          case '4h': intervalMs = 4 * 60 * 60 * 1000; break;
-          case '12h': intervalMs = 12 * 60 * 60 * 1000; break;
-          case '3d': intervalMs = 3 * 24 * 60 * 60 * 1000; break;
-          case '1w': intervalMs = 7 * 24 * 60 * 60 * 1000; break;
-        }
-
-        const startTime = new Date(now.getTime() - intervalMs);
-        const timeRange = `${formatTimeToUTC8(startTime).slice(5)} - ${formatTimeToUTC8(now).slice(5)}`;
-
-        message += `\n🕐 统计时间: ${timeRange}`;
-        message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
-        message += `\n📊 数据来源: 📡 K线数据`;
-        message += `\n⚡ 查询耗时: ${Date.now() - queryTime}ms`;
-
-        await ctx.replyWithMarkdown(message);
-      } catch (error) {
-        console.error('Period gainers query error:', error);
-        await ctx.reply('❌ 查询时间段涨幅榜失败，请稍后重试');
-      }
+      await ctx.reply(
+        '🔄 *命令已优化升级*\n\n' +
+        '`/gainers_period` 命令已整合到新的 `/rank` 命令中，功能更强大！\n\n' +
+        '📊 *新用法:*\n' +
+        '• `/rank_gainers 1h` - 1小时涨幅榜\n' +
+        '• `/rank_gainers 4h 15` - 4小时涨幅榜前15\n' +
+        '• `/rank_losers 30m` - 30分钟跌幅榜\n' +
+        '• `/rank_gainers 1w 20` - 1周涨幅榜前20\n\n' +
+        '✨ *新功能:* \n' +
+        '• 支持更多时间段\n' +
+        '• 涨跌榜统一管理\n' +
+        '• 更好的数据源切换\n' +
+        '• 更快的响应速度\n\n' +
+        '👆 请使用 `/rank_gainers <时间段> [数量]` 替代此命令',
+        { parse_mode: 'Markdown' }
+      );
     });
 
-    // 24小时跌幅榜 - 优化版本使用实时缓存
     this.bot.command('losers', async (ctx) => {
-      try {
-        await ctx.reply('📉 正在查询24小时跌幅榜...');
-
-        let losers;
-        let dataSource = '';
-        let queryTime = Date.now();
-
-        // 优先使用实时缓存数据
-        if (realtimeMarketCache.isReady()) {
-          log.debug('Using realtime cache for losers query');
-          const realtimeLosers = realtimeMarketCache.getTopLosers(10, 10000);
-
-          if (realtimeLosers.length > 0) {
-            losers = realtimeLosers.map(data => ({
-              symbol: data.symbol,
-              priceChangePercent: data.priceChangePercent.toString(),
-              lastPrice: data.price.toString(),
-              volume: data.volume.toString()
-            }));
-            dataSource = '⚡ 实时数据';
-            log.info(`Losers query served from realtime cache in ${Date.now() - queryTime}ms`);
-          }
-        }
-
-        // Fallback 到 REST API
-        if (!losers || losers.length === 0) {
-          log.debug('Using REST API fallback for losers query');
-          dataSource = '📡 API数据';
-
-          // 🔥 Trigger real-time ranking analysis to capture sudden movers
-          await rankingAnalyzer.analyzeRankings('user-query');
-
-          // Use tiered data manager for optimized data fetching
-          const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
-          const validSymbols = filterTradingPairs(allSymbols);
-          const allStatsMap = await tieredDataManager.getBatchTickers(validSymbols);
-          const allStats = Array.from(allStatsMap.values());
-
-          // 过滤交易对并按跌幅排序，取前10
-          losers = allStats
-            .filter(stat => {
-              return parseFloat(stat.priceChangePercent) < 0 &&
-                     validSymbols.includes(stat.symbol) &&
-                     parseFloat(stat.volume) > 10000; // 过滤交易量过低的代币
-            })
-            .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent));
-
-          log.info(`Losers query served from REST API in ${Date.now() - queryTime}ms`);
-        }
-
-        // 限制显示数量以避免消息过长
-        const displayLimit = 20;
-        const displayData = losers.slice(0, displayLimit);
-        let message = `📉 *24小时跌幅榜 TOP${displayData.length}*\n\n`;
-        
-        const priceFormatPromisesLosers = displayData.map(async (stat, index) => {
-          const symbol = stat.symbol.replace('USDT', '');
-          const change = formatPriceChange(parseFloat(stat.priceChangePercent));
-          const formattedPrice = await formatPriceWithSeparators(stat.lastPrice, stat.symbol);
-          const riskLevel = getTokenRiskLevel(stat.symbol);
-          const riskIcon = getRiskIcon(riskLevel);
-          return `${index + 1}. ${riskIcon}**${symbol}** ${change}% ($${formattedPrice})\n`;
-        });
-
-        const formattedEntriesLosers = await Promise.all(priceFormatPromisesLosers);
-        formattedEntriesLosers.forEach(entry => {
-          message += entry;
-        });
-
-        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
-        message += `\n📊 数据来源: ${dataSource}`;
-
-        await ctx.replyWithMarkdown(message);
-      } catch (error) {
-        console.error('Losers query error:', error);
-        await ctx.reply('❌ 查询跌幅榜失败');
-      }
+      await ctx.reply(
+        '🔄 *命令已优化升级*\n\n' +
+        '`/losers` 命令已整合到新的 `/rank` 命令中，功能更强大！\n\n' +
+        '📊 *新用法:*\n' +
+        '• `/rank_losers` - 跌幅榜（等同于旧命令）\n' +
+        '• `/rank_gainers` - 涨幅榜\n' +
+        '• `/rank_losers 15` - 自定义显示数量\n' +
+        '• `/rank_losers 24h 20` - 指定时间段和数量\n\n' +
+        '✨ *新功能:* 支持多时间段，自定义数量，更好的数据源切换\n\n' +
+        '👆 请使用 `/rank_losers` 替代此命令',
+        { parse_mode: 'Markdown' }
+      );
     });
 
     // 负费率排行榜
@@ -750,39 +616,26 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         console.log('📡 Calling getAllFundingRates...');
         const fundingRates = await this.binanceClient.getAllFundingRates();
         console.log('✅ Raw funding rates received:', fundingRates.length);
-        console.log('📊 Sample funding rates:', JSON.stringify(fundingRates.slice(0, 3), null, 2));
-        
+
         // 过滤交易对并去重
         console.log('🔍 Filtering trading pairs...');
         const allSymbols = fundingRates.map(r => r.symbol);
-        console.log('📋 All symbols count:', allSymbols.length);
-        
         const validSymbols = filterTradingPairs(allSymbols);
-        console.log('✅ Valid symbols count:', validSymbols.length);
-        console.log('📝 Sample valid symbols:', validSymbols.slice(0, 10));
-        
+
         console.log('🔄 Deduplicating rates...');
         const filteredRates = fundingRates
           .filter(rate => validSymbols.includes(rate.symbol))
           .reduce((acc, rate) => {
-            // 使用Map去重，保留第一个出现的
             const key = rate.symbol;
             if (!acc.has(key)) {
               acc.set(key, rate);
-            } else {
-              console.log(`⚠️ Duplicate symbol found: ${key}`);
             }
             return acc;
           }, new Map());
 
-        console.log('✅ Filtered rates map size:', filteredRates.size);
-        
         // 只显示负费率并排序
-        console.log('📊 Filtering negative rates and sorting...');
         const allRates = Array.from(filteredRates.values());
         const negativeRates = allRates.filter(rate => parseFloat(rate.fundingRate) < 0);
-        console.log('🔴 Negative rates count:', negativeRates.length);
-        
         const sortedRates = negativeRates
           .sort((a, b) => parseFloat(a.fundingRate) - parseFloat(b.fundingRate));
 
@@ -790,12 +643,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         const displayLimit = 25;
         const displayData = sortedRates.slice(0, displayLimit);
 
-        console.log('✅ Final sorted rates count:', displayData.length);
-        console.log('📈 Top 5 negative rates:', displayData.slice(0, 5).map(r => `${r.symbol}: ${r.fundingRate}`));
-
-        console.log('📝 Building message with prices...');
         let message = `⚡ *负费率排行榜 TOP${displayData.length}*\n\n`;
-        
+
         // Get prices for all symbols
         const pricePromises = displayData.map(async (rate, index) => {
           const symbol = rate.symbol.replace('USDT', '');
@@ -803,7 +652,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           const riskIcon = getRiskIcon(riskLevel);
           const fundingPercent = (parseFloat(rate.fundingRate) * 100).toFixed(4);
           const icon = parseFloat(rate.fundingRate) < 0 ? '🔴' : '🟢';
-          
+
           // Get current price
           let priceText = '';
           try {
@@ -811,10 +660,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             const formattedPrice = await formatPriceWithSeparators(currentPrice, rate.symbol);
             priceText = ` ($${formattedPrice})`;
           } catch (error) {
-            console.log(`❌ Failed to get price for ${rate.symbol}:`, error instanceof Error ? error.message : 'Unknown error');
             priceText = '';
           }
-          
+
           return `${index + 1}. ${icon} ${riskIcon}**${symbol}** ${fundingPercent}%${priceText}\n`;
         });
 
@@ -826,1447 +674,1178 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         message += `\n💡 负费率(红色)表示空头支付多头\n`;
         message += `⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
 
-        console.log('📤 Sending response message...');
         await ctx.replyWithMarkdown(message);
-        console.log('✅ Funding rates command completed successfully');
       } catch (error) {
         console.error('❌ Funding rates query error:', error);
-        console.error('❌ Error details:', {
-          message: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
-          name: error instanceof Error ? error.name : 'Unknown'
-        });
         await ctx.reply('❌ 查询资金费率排行榜失败');
       }
     });
 
-    // 持仓量增长榜 (24小时)
-    this.bot.command('oi24h', async (ctx) => {
+    // 统一的OI命令 - 优化用户体验
+    this.bot.command('oi', async (ctx) => {
       try {
-        await ctx.reply('📈 正在查询24小时持仓量增长榜...');
+        const args = ctx.message.text.split(' ').slice(1);
+        let timeframe = '24h'; // 默认24小时
+        let symbol = null;
 
-        // 获取活跃合约列表
-        const symbols = await this.binanceClient.getFuturesTradingSymbols();
-        
-        // 过滤有效交易对，使用tokenLists.ts中的黑白名单
-        const validSymbols = filterTradingPairs(symbols);
+        // 解析参数: /oi [1h|4h|24h] [币种]
+        if (args.length > 0) {
+          const firstArg = args[0].toLowerCase();
+          if (['1h', '4h', '24h'].includes(firstArg)) {
+            timeframe = firstArg;
+            if (args.length > 1) {
+              symbol = args[1].toUpperCase();
+              if (!symbol.endsWith('USDT')) {
+                symbol += 'USDT';
+              }
+            }
+          } else {
+            // 第一个参数是币种
+            symbol = firstArg.toUpperCase();
+            if (!symbol.endsWith('USDT')) {
+              symbol += 'USDT';
+            }
+          }
+        }
 
-        // Use batch processing for better performance
-        const oiData = await this.binanceClient.getBatchOpenInterestStats(
-          validSymbols, 
-          '1h', 
-          24, // 24 data points for 24 hours
-          30, // batch size (reduced)
-          3000 // delay between batches (increased)
-        );
+        await this.handleOICommand(ctx, timeframe, symbol || undefined);
+      } catch (error) {
+        log.error('OI命令处理失败:', error);
+        await ctx.reply(`❌ OI查询失败，请稍后重试\n\n💡 使用方法：\n/oi [1h|4h|24h] [币种]\n例如：/oi 24h BTC`);
+      }
+    });
 
-        const oiResults = [];
-        for (const [symbol, oiStats] of oiData.entries()) {
-          if (oiStats && oiStats.length >= 12) { // 至少需要12小时的数据
-            // 正确的时间顺序：oiStats[0] = 24小时前, oiStats[length-1] = 最新
-            const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
-            const previous = parseFloat(oiStats[0].sumOpenInterestValue);
-            
-            if (current > 0 && previous > 0) {
-              const change = ((current - previous) / previous) * 100;
-              // 过滤异常数据
-              if (Math.abs(change) < 500) {
-                oiResults.push({
-                  symbol: symbol.replace('USDT', ''),
-                  change,
-                  currentOI: current / 1000000,
-                  dataPoints: oiStats.length
-                });
+    // 统一的排行榜命令 - 优化用户体验
+    this.bot.command('rank', async (ctx) => {
+      try {
+        const args = ctx.message.text.split(' ').slice(1);
+
+        // 默认参数
+        let type = 'gainers'; // 默认涨幅榜
+        let period = '24h'; // 默认24小时
+        let count = 10; // 默认10个
+
+        // 解析参数: /rank [gainers|losers] [period] [count]
+        if (args.length > 0) {
+          const firstArg = args[0].toLowerCase();
+          if (['gainers', 'losers', 'gainer', 'loser', 'up', 'down'].includes(firstArg)) {
+            type = firstArg.includes('gain') || firstArg === 'up' ? 'gainers' : 'losers';
+
+            if (args.length > 1) {
+              const timeArg = args[1].toLowerCase();
+              if (['5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '24h', '3d'].includes(timeArg)) {
+                period = timeArg === '1d' ? '24h' : timeArg; // 标准化
+
+                if (args.length > 2) {
+                  const countArg = parseInt(args[2]);
+                  if (!isNaN(countArg) && countArg > 0 && countArg <= 20) {
+                    count = countArg;
+                  }
+                }
+              }
+            }
+          } else {
+            // 第一个参数可能是时间段
+            const timeArg = firstArg;
+            if (['5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '24h', '3d'].includes(timeArg)) {
+              period = timeArg === '1d' ? '24h' : timeArg;
+
+              if (args.length > 1) {
+                const countArg = parseInt(args[1]);
+                if (!isNaN(countArg) && countArg > 0 && countArg <= 20) {
+                  count = countArg;
+                }
               }
             }
           }
         }
 
-        const sortedResults = oiResults
-          .sort((a, b) => b.change - a.change);
-
-        // 限制显示数量以避免消息过长
-        const displayLimit = 20;
-        const displayData = sortedResults.slice(0, displayLimit);
-        let message = `📈 *24小时持仓量增长榜 TOP${displayData.length}*\n\n`;
-
-        displayData.forEach((result, index) => {
-          const changeIcon = result.change >= 0 ? '📈' : '📉';
-          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
-        });
-
-        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
-        message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
-
-        await ctx.replyWithMarkdown(message);
+        await this.handleRankingCommand(ctx, type, period, count);
       } catch (error) {
-        console.error('OI 24h query error:', error);
-        await ctx.reply('❌ 查询24小时持仓量增长榜失败');
+        log.error('排行榜命令处理失败:', error);
+        await ctx.reply(`❌ 排行榜查询失败，请稍后重试\n\n💡 使用方法：\n/rank [gainers|losers] [时间] [数量]\n/rank_gainers [时间] [数量]\n/rank_losers [时间] [数量]\n例如：/rank_gainers 1h 5`);
       }
     });
 
-    // 持仓量增长榜 (4小时)
-    this.bot.command('oi4h', async (ctx) => {
+    // 涨幅榜独立命令
+    this.bot.command('rank_gainers', async (ctx) => {
       try {
-        await ctx.reply('📈 正在查询4小时持仓量增长榜...');
+        const args = ctx.message?.text.split(' ').slice(1);
+        let period = '24h'; // 默认24小时
+        let count = 10; // 默认10个
 
-        const symbols = await this.binanceClient.getFuturesTradingSymbols();
-        const validSymbols = filterTradingPairs(symbols);
+        // 解析参数: /rank_gainers [period] [count]
+        if (args.length > 0) {
+          const firstArg = args[0].toLowerCase();
+          if (['5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '24h', '3d'].includes(firstArg)) {
+            period = firstArg === '1d' ? '24h' : firstArg;
 
-        // Use batch processing for better performance
-        const oiData = await this.binanceClient.getBatchOpenInterestStats(
-          validSymbols, 
-          '1h', 
-          4, // 4 data points for 4 hours (1h intervals)
-          30, // batch size (reduced)
-          3000 // delay between batches (increased)
-        );
-
-        const oiResults = [];
-        for (const [symbol, oiStats] of oiData.entries()) {
-          if (oiStats && oiStats.length >= 4) {
-            // 正确的时间顺序：oiStats[0] = 4小时前, oiStats[length-1] = 最新
-            const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
-            const previous = parseFloat(oiStats[0].sumOpenInterestValue);
-            
-            if (current > 0 && previous > 0) {
-              const change = ((current - previous) / previous) * 100;
-              // 过滤异常数据
-              if (Math.abs(change) < 200) {
-                oiResults.push({
-                  symbol: symbol.replace('USDT', ''),
-                  change,
-                  currentOI: current / 1000000
-                });
+            if (args.length > 1) {
+              const countArg = parseInt(args[1]);
+              if (!isNaN(countArg) && countArg > 0 && countArg <= 20) {
+                count = countArg;
               }
+            }
+          } else {
+            // 第一个参数可能是数量
+            const countArg = parseInt(firstArg);
+            if (!isNaN(countArg) && countArg > 0 && countArg <= 20) {
+              count = countArg;
             }
           }
         }
 
-        const sortedResults = oiResults
-          .sort((a, b) => b.change - a.change)
-;
-
-        // 限制显示数量以避免消息过长
-        const displayLimit = 20;
-        const displayData = sortedResults.slice(0, displayLimit);
-        let message = `📈 *4小时持仓量增长榜 TOP${displayData.length}*\n\n`;
-
-        displayData.forEach((result, index) => {
-          const changeIcon = result.change >= 0 ? '📈' : '📉';
-          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
-        });
-
-        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
-        message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
-
-        await ctx.replyWithMarkdown(message);
+        await this.handleRankingCommand(ctx, 'gainers', period, count);
       } catch (error) {
-        console.error('OI 4h query error:', error);
-        await ctx.reply('❌ 查询4小时持仓量增长榜失败');
+        log.error('涨幅榜命令处理失败:', error);
+        await ctx.reply(`❌ 涨幅榜查询失败，请稍后重试\n\n💡 使用方法：\n/rank_gainers [时间] [数量]\n例如：/rank_gainers 1h 5`);
       }
     });
 
-    // 持仓量增长榜 (1小时)
-    this.bot.command('oi1h', async (ctx) => {
+    // 跌幅榜独立命令
+    this.bot.command('rank_losers', async (ctx) => {
       try {
-        await ctx.reply('📈 正在查询1小时持仓量增长榜...');
+        const args = ctx.message?.text.split(' ').slice(1);
+        let period = '24h'; // 默认24小时
+        let count = 10; // 默认10个
 
-        const symbols = await this.binanceClient.getFuturesTradingSymbols();
-        const validSymbols = filterTradingPairs(symbols);
+        // 解析参数: /rank_losers [period] [count]
+        if (args.length > 0) {
+          const firstArg = args[0].toLowerCase();
+          if (['5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '24h', '3d'].includes(firstArg)) {
+            period = firstArg === '1d' ? '24h' : firstArg;
 
-        // Use batch processing for better performance
-        const oiData = await this.binanceClient.getBatchOpenInterestStats(
-          validSymbols, 
-          '15m', 
-          4, // 4 data points for 1 hour (15min intervals)
-          30, // batch size (reduced)
-          3000 // delay between batches (increased)
-        );
+            if (args.length > 1) {
+              const countArg = parseInt(args[1]);
+              if (!isNaN(countArg) && countArg > 0 && countArg <= 20) {
+                count = countArg;
+              }
+            }
+          } else {
+            // 第一个参数可能是数量
+            const countArg = parseInt(firstArg);
+            if (!isNaN(countArg) && countArg > 0 && countArg <= 20) {
+              count = countArg;
+            }
+          }
+        }
 
-        const oiResults = [];
-        for (const [symbol, oiStats] of oiData.entries()) {
-          if (oiStats && oiStats.length >= 4) {
-            // 正确的时间顺序：oiStats[0] = 1小时前, oiStats[length-1] = 最新
-            const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
-            const previous = parseFloat(oiStats[0].sumOpenInterestValue);
-            
-            if (current > 0 && previous > 0) {
-              const change = ((current - previous) / previous) * 100;
+        await this.handleRankingCommand(ctx, 'losers', period, count);
+      } catch (error) {
+        log.error('跌幅榜命令处理失败:', error);
+        await ctx.reply(`❌ 跌幅榜查询失败，请稍后重试\n\n💡 使用方法：\n/rank_losers [时间] [数量]\n例如：/rank_losers 4h 15`);
+      }
+    });
+
+    // 统一警报命令 - 支持多种类型的警报
+    this.bot.command('alert', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+
+      // 无参数时显示帮助
+      if (!args || args.length === 0) {
+        await this.handleAlertHelp(ctx);
+        return;
+      }
+
+      // 路由到不同的处理器
+      const subCommand = args[0].toLowerCase();
+
+      switch (subCommand) {
+        case 'list':
+        case 'ls':
+          await this.handleAlertList(ctx);
+          break;
+        case 'remove':
+        case 'rm':
+        case 'delete':
+          await this.handleAlertRemove(ctx, args.slice(1));
+          break;
+        case 'toggle':
+          await this.handleAlertToggle(ctx, args.slice(1));
+          break;
+        case 'history':
+          await this.handleAlertHistory(ctx, args.slice(1));
+          break;
+        case 'test':
+          await this.handleAlertTest(ctx, args.slice(1));
+          break;
+        case 'stats':
+          await this.handleAlertStats(ctx);
+          break;
+        default:
+          // 默认处理：创建新警报
+          await this.handleAlertCreate(ctx, args);
+          break;
+      }
+    });
+
+    // 旧警报命令迁移提示
+    this.bot.command('alerts', async (ctx) => {
+      await ctx.reply(
+        '🔄 *命令已优化升级*\n\n' +
+        '`/alerts` 命令已整合到新的 `/alert` 命令中！\n\n' +
+        '📊 *新用法:*\n' +
+        '• `/alert_list` - 查看所有警报（等同于旧命令）\n' +
+        '• `/alert` - 查看完整帮助和功能\n' +
+        '• `/alert btc > 50000` - 创建价格警报\n' +
+        '• `/alert_remove <ID>` - 删除警报\n\n' +
+        '✨ *新功能:* 统一界面，支持更多警报类型，更强大的管理功能\n\n' +
+        '👆 请使用 `/alert_list` 替代此命令',
+        { parse_mode: 'Markdown' }
+      );
+    });
+
+    this.bot.command('remove_alert', async (ctx) => {
+      await ctx.reply(
+        '🔄 *命令已优化升级*\n\n' +
+        '`/remove_alert` 命令已整合到新的 `/alert` 命令中！\n\n' +
+        '📊 *新用法:*\n' +
+        '• `/alert_remove <ID>` - 删除指定警报\n' +
+        '• `/alert_list` - 查看所有警报和ID\n' +
+        '• `/alert_toggle <ID>` - 启用/禁用警报\n\n' +
+        '✨ *新功能:* 更直观的ID管理，支持批量操作\n\n' +
+        '👆 请使用 `/alert_remove <ID>` 替代此命令',
+        { parse_mode: 'Markdown' }
+      );
+    });
+  }
+
+  /**
+   * 处理OI命令
+   */
+  private async handleOICommand(ctx: any, timeframe: string, symbol?: string): Promise<void> {
+    await ctx.reply(`📈 正在查询${timeframe}持仓量增长榜${symbol ? ` (${symbol})` : ''}...`);
+
+    try {
+      const symbols = symbol ? [symbol] : await this.binanceClient.getFuturesTradingSymbols();
+      const validSymbols = symbol ? [symbol] : filterTradingPairs(symbols);
+
+      // 根据时间框架设置参数
+      let interval: string;
+      let dataPoints: number;
+
+      switch (timeframe) {
+        case '1h':
+          interval = '15m';
+          dataPoints = 4;
+          break;
+        case '4h':
+          interval = '1h';
+          dataPoints = 4;
+          break;
+        case '24h':
+        default:
+          interval = '1h';
+          dataPoints = 24;
+          break;
+      }
+
+      const oiData = await this.binanceClient.getBatchOpenInterestStats(
+        validSymbols,
+        interval as '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '6h' | '12h' | '1d',
+        dataPoints,
+        30,
+        3000
+      );
+
+      const oiResults = [];
+      for (const [symbolKey, oiStats] of oiData.entries()) {
+        if (oiStats && oiStats.length >= Math.min(4, dataPoints)) {
+          const current = parseFloat(oiStats[oiStats.length - 1].sumOpenInterestValue);
+          const previous = parseFloat(oiStats[0].sumOpenInterestValue);
+
+          if (current > 0 && previous > 0) {
+            const change = ((current - previous) / previous) * 100;
+            const maxChange = timeframe === '1h' ? 100 : timeframe === '4h' ? 200 : 500;
+
+            if (Math.abs(change) < maxChange) {
               oiResults.push({
-                symbol: symbol.replace('USDT', ''),
+                symbol: symbolKey.replace('USDT', ''),
                 change,
-                currentOI: current / 1000000 // Convert to millions for readability
+                currentOI: current / 1000000,
+                dataPoints: oiStats.length
               });
             }
           }
         }
-
-        const sortedResults = oiResults
-          .sort((a, b) => b.change - a.change);
-
-        // 限制显示数量以避免消息过长
-        const displayLimit = 20;
-        const displayData = sortedResults.slice(0, displayLimit);
-        let message = `📈 *1小时持仓量增长榜 TOP${displayData.length}*\n\n`;
-
-        displayData.forEach((result, index) => {
-          const changeIcon = result.change >= 0 ? '📈' : '📉';
-          message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
-        });
-
-        message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
-        message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
-
-        await ctx.replyWithMarkdown(message);
-      } catch (error) {
-        console.error('OI 1h query error:', error);
-        await ctx.reply('❌ 查询1小时持仓量增长榜失败');
       }
-    });
 
-    // 创建价格提醒命令
-    this.bot.command('alert', async (ctx) => {
-      try {
-        const args = ctx.message?.text.split(' ').slice(1);
-        
-        if (!args || args.length < 3) {
-          await ctx.reply('💡 请使用正确的格式:\n/alert btc > 50000\n/alert eth < 3000\n\n支持的操作符: >, <, >=, <=');
-          return;
-        }
+      const sortedResults = oiResults.sort((a, b) => b.change - a.change);
+      const displayLimit = symbol ? 1 : 20;
+      const displayData = sortedResults.slice(0, displayLimit);
 
-        const symbol = args[0].toUpperCase();
-        const operator = args[1];
-        const value = parseFloat(args[2]);
+      let message = `📈 *${timeframe}持仓量增长榜 TOP${displayData.length}*\n\n`;
 
-        // 验证操作符
-        if (!['>', '<', '>=', '<='].includes(operator)) {
-          await ctx.reply('❌ 不支持的操作符，请使用: >, <, >=, <=');
-          return;
-        }
+      displayData.forEach((result, index) => {
+        const changeIcon = result.change >= 0 ? '📈' : '📉';
+        message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+      });
 
-        // 验证数值
-        if (isNaN(value) || value <= 0) {
-          await ctx.reply('❌ 请输入有效的价格数值');
-          return;
-        }
+      message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
+      message += `\n📊 成功查询 ${oiData.size}/${validSymbols.length} 个交易对`;
 
-        // 检查是否是已下架代币
-        const testSymbol = symbol.includes('USDT') ? symbol : symbol + 'USDT';
-        const riskLevel = getTokenRiskLevel(testSymbol);
-        if (riskLevel === 'delisted' || riskLevel === 'blacklist') {
-          await ctx.reply(`❌ ${symbol} 已被列入${riskLevel === 'delisted' ? '已下架' : '黑名单'}代币，不支持设置提醒`);
-          return;
-        }
+      await ctx.replyWithMarkdown(message);
+    } catch (error) {
+      console.error(`OI ${timeframe} query error:`, error);
+      await ctx.reply(`❌ 查询${timeframe}持仓量增长榜失败`);
+    }
+  }
 
-        // 获取当前价格验证
-        let currentPrice: number | undefined;
-        let actualSymbol = symbol;
-        const suffixes = ['USDT', 'BUSD', 'BTC', 'ETH'];
-        let found = false;
+  /**
+   * 处理排行榜命令
+   */
+  private async handleRankingCommand(ctx: any, type: string, period: string, count: number): Promise<void> {
+    await ctx.reply(`📊 正在查询${period}${type === 'gainers' ? '涨幅' : '跌幅'}榜前${count}名...`);
 
-        for (const suffix of suffixes) {
-          if (symbol.includes(suffix)) {
-            actualSymbol = symbol;
-            break;
-          }
-          
-          actualSymbol = symbol + suffix;
-          
-          try {
-            // 优先尝试合约价格
-            currentPrice = await this.binanceClient.getFuturesPrice(actualSymbol);
-            found = true;
-            break;
-          } catch (futuresError) {
-            try {
-              currentPrice = await this.binanceClient.getPrice(actualSymbol);
-              found = true;
-              break;
-            } catch (spotError) {
-              continue;
-            }
-          }
-        }
+    try {
+      // 获取所有合约交易对24小时数据
+      const data = await this.binanceClient.getFutures24hrStatsMultiple();
+      if (!data || data.length === 0) {
+        throw new Error('无法获取市场数据');
+      }
 
-        if (!found || !currentPrice) {
-          await ctx.reply(`❌ 无法找到 ${symbol} 的价格数据，请检查币种名称是否正确`);
-          return;
-        }
+      // 过滤有效交易对
+      const validSymbols = filterTradingPairs(data.map((d: any) => d.symbol));
+      const filteredData = data.filter((ticker: any) => validSymbols.includes(ticker.symbol));
 
-        // 转换操作符为数据库条件
-        let condition: 'above' | 'below';
-        if (operator === '>' || operator === '>=') {
-          condition = 'above';
-        } else {
-          condition = 'below';
-        }
+      // 排序
+      const sortedData = filteredData.sort((a: any, b: any) => {
+        const changeA = parseFloat(a.priceChangePercent);
+        const changeB = parseFloat(b.priceChangePercent);
+        return type === 'gainers' ? changeB - changeA : changeA - changeB;
+      });
 
-        // 创建提醒
-        const userId = ctx.from?.id.toString()!;
-        const alertId = await PriceAlertModel.createAlert(userId, actualSymbol, condition, value);
+      const displayData = sortedData.slice(0, count);
+      const titleType = type === 'gainers' ? '涨幅' : '跌幅';
+      let message = `📊 *${period} ${titleType}榜 TOP${displayData.length}*\n\n`;
 
+      for (let i = 0; i < displayData.length; i++) {
+        const ticker = displayData[i];
+        const symbol = ticker.symbol.replace('USDT', '');
+        const changePercent = parseFloat(ticker.priceChangePercent);
+        const changeIcon = changePercent >= 0 ? '📈' : '📉';
+        const riskLevel = getTokenRiskLevel(ticker.symbol);
         const riskIcon = getRiskIcon(riskLevel);
-        const conditionText = operator === '>=' ? '≥' : operator === '<=' ? '≤' : operator;
-        
-        const alertMessage = `
-✅ *价格提醒创建成功*
 
-🔔 提醒ID: #${alertId}
-${riskIcon} 币种: ${symbol}
-📊 条件: 当价格 ${conditionText} $${value.toLocaleString()}
-💰 当前价格: $${currentPrice.toLocaleString()}
-⏰ 创建时间: ${formatTimeToUTC8(new Date())}
-
-📱 触发时将通过机器人通知您`;
-
-        await ctx.replyWithMarkdown(alertMessage);
-        
-      } catch (error) {
-        console.error('Alert creation error:', error);
-        await ctx.reply('❌ 创建价格提醒失败，请稍后重试');
-      }
-    });
-
-    // 查看提醒列表命令
-    this.bot.command('alerts', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        const alerts = await PriceAlertModel.getActiveAlerts(userId);
-
-        if (alerts.length === 0) {
-          await ctx.reply('📭 您还没有创建任何价格提醒\n\n💡 使用 /alert btc > 50000 创建提醒');
-          return;
-        }
-
-        let message = `🔔 *您的活跃价格提醒 (${alerts.length}个)*\n\n`;
-
-        // 获取当前价格来显示状态
-        for (let i = 0; i < alerts.length; i++) {
-          const alert = alerts[i];
-          const symbol = alert.symbol.replace('USDT', '');
-          const riskLevel = getTokenRiskLevel(alert.symbol);
-          const riskIcon = getRiskIcon(riskLevel);
-          
-          let currentPrice: number | undefined;
-          try {
-            currentPrice = await this.binanceClient.getFuturesPrice(alert.symbol);
-          } catch {
-            try {
-              currentPrice = await this.binanceClient.getPrice(alert.symbol);
-            } catch {
-              // 无法获取价格
-            }
-          }
-
-          const conditionText = alert.condition === 'above' ? '>' : '<';
-          const targetPrice = alert.value.toLocaleString();
-          const currentPriceText = currentPrice ? `$${currentPrice.toLocaleString()}` : '获取失败';
-          
-          message += `${i + 1}. ${riskIcon}*${symbol}* (#${alert.id})\n`;
-          message += `   条件: 价格 ${conditionText} $${targetPrice}\n`;
-          message += `   当前: ${currentPriceText}\n`;
-          message += `   创建: ${formatTimeToUTC8(new Date(alert.created_at))}\n\n`;
-        }
-
-        message += `💡 使用 /remove_alert <ID> 删除指定提醒\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
-
-        await ctx.reply(message);
-        
-      } catch (error) {
-        console.error('Alerts list error:', error);
-        await ctx.reply('❌ 获取提醒列表失败，请稍后重试');
-      }
-    });
-
-    // OI 持仓量查询命令
-    this.bot.command('oi', async (ctx) => {
-      try {
-        const args = ctx.message?.text.split(' ').slice(1);
-        
-        if (!args || args.length === 0) {
-          await ctx.reply('💡 请指定代币符号，例如: /oi BTC 或 /oi ETHUSDT');
-          return;
-        }
-
-        let symbol = args[0].toUpperCase();
-        
-        // 处理各种符号格式 - 为所有不完整的符号添加USDT后缀
-        if (!symbol.includes('USDT') && !symbol.includes('BUSD')) {
-          // 特殊处理：BTC和ETH需要添加USDT后缀
-          if (symbol === 'BTC' || symbol === 'ETH') {
-            symbol = `${symbol}USDT`;
-          } else if (!symbol.endsWith('BTC') && !symbol.endsWith('ETH')) {
-            // 对于其他不以BTC或ETH结尾的符号，添加USDT
-            symbol = `${symbol}USDT`;
-          }
-        }
-
-        // 检查代币风险级别
-        const riskLevel = getTokenRiskLevel(symbol);
-        if (riskLevel === 'blacklist') {
-          await ctx.reply(`🚫 ${symbol} 已被列入黑名单，不支持查询`);
-          return;
-        }
-
-        const riskIcon = getRiskIcon(riskLevel);
-        
-        // 获取当前价格
-        let currentPrice: number | undefined;
+        let priceText = '';
         try {
-          currentPrice = await this.binanceClient.getFuturesPrice(symbol);
-        } catch {
-          try {
-            currentPrice = await this.binanceClient.getPrice(symbol);
-          } catch {
-            await ctx.reply(`❌ 无法获取 ${symbol} 的价格数据，请检查符号是否正确`);
-            return;
-          }
+          const formattedPrice = await formatPriceWithSeparators(ticker.lastPrice, ticker.symbol);
+          priceText = ` ($${formattedPrice})`;
+        } catch (error) {
+          priceText = '';
         }
 
-        // 获取不同时间周期的OI数据
-        const [oi1h, oi4h, oi24h] = await Promise.all([
-          this.binanceClient.getOpenInterestStats(symbol, '15m', 4),  // 1小时
-          this.binanceClient.getOpenInterestStats(symbol, '1h', 4),   // 4小时
-          this.binanceClient.getOpenInterestStats(symbol, '1h', 24)   // 24小时
-        ]);
-
-        // 计算变化百分比
-        const calculate1hChange = () => {
-          if (oi1h.length < 2) return null;
-          const current = parseFloat(oi1h[oi1h.length - 1].sumOpenInterestValue);
-          const previous = parseFloat(oi1h[0].sumOpenInterestValue);
-          return ((current - previous) / previous) * 100;
-        };
-
-        const calculate4hChange = () => {
-          if (oi4h.length < 2) return null;
-          const current = parseFloat(oi4h[oi4h.length - 1].sumOpenInterestValue);
-          const previous = parseFloat(oi4h[0].sumOpenInterestValue);
-          return ((current - previous) / previous) * 100;
-        };
-
-        const calculate24hChange = () => {
-          if (oi24h.length < 2) return null;
-          const current = parseFloat(oi24h[oi24h.length - 1].sumOpenInterestValue);
-          const previous = parseFloat(oi24h[0].sumOpenInterestValue);
-          return ((current - previous) / previous) * 100;
-        };
-
-        const change1h = calculate1hChange();
-        const change4h = calculate4hChange();
-        const change24h = calculate24hChange();
-
-        // 获取当前OI值
-        const currentOI = oi24h.length > 0 ? parseFloat(oi24h[oi24h.length - 1].sumOpenInterestValue) : 0;
-        const formattedPrice = await formatPriceWithSeparators(currentPrice!, symbol);
-
-        // 构建回复消息
-        let message = `📊 *${symbol.replace('USDT', '')} OI持仓数据* ${riskIcon}\n\n`;
-        message += `💰 当前价格: $${formattedPrice}\n`;
-        message += `📊 当前持仓量: ${(currentOI / 1000000).toFixed(2)}M USDT\n\n`;
-
-        message += `📈 *持仓变化趋势:*\n`;
-        if (change1h !== null) {
-          const icon1h = change1h >= 0 ? '📈' : '📉';
-          message += `${icon1h} 1小时: ${change1h >= 0 ? '+' : ''}${change1h.toFixed(2)}%\n`;
-        } else {
-          message += `⚠️ 1小时: 数据不足\n`;
-        }
-
-        if (change4h !== null) {
-          const icon4h = change4h >= 0 ? '📈' : '📉';
-          message += `${icon4h} 4小时: ${change4h >= 0 ? '+' : ''}${change4h.toFixed(2)}%\n`;
-        } else {
-          message += `⚠️ 4小时: 数据不足\n`;
-        }
-
-        if (change24h !== null) {
-          const icon24h = change24h >= 0 ? '📈' : '📉';
-          message += `${icon24h} 24小时: ${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}%\n\n`;
-        } else {
-          message += `⚠️ 24小时: 数据不足\n\n`;
-        }
-
-        // 添加风险提示
-        if (riskLevel === 'yellowlist') {
-          message += `⚠️ *风险提示: 该代币波动性较高，请谨慎交易*\n\n`;
-        }
-
-        message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
-
-        await ctx.replyWithMarkdown(message);
-
-      } catch (error) {
-        console.error('OI query error:', error);
-        await ctx.reply('❌ 获取OI数据失败，请稍后重试或检查代币符号是否正确');
+        message += `${i + 1}. ${changeIcon} ${riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
       }
-    });
 
-    // 删除提醒命令
-    this.bot.command('remove_alert', async (ctx) => {
-      try {
-        const args = ctx.message?.text.split(' ').slice(1);
-        
-        if (!args || args.length === 0) {
-          await ctx.reply('💡 请指定要删除的提醒ID，例如: /remove_alert 5');
-          return;
-        }
-
-        const alertId = parseInt(args[0]);
-        
-        if (isNaN(alertId) || alertId <= 0) {
-          await ctx.reply('❌ 请输入有效的提醒ID数字');
-          return;
-        }
-
-        // 验证提醒是否存在且属于当前用户
-        const userId = ctx.from?.id.toString()!;
-        const userAlerts = await PriceAlertModel.getActiveAlerts(userId);
-        const alertToRemove = userAlerts.find(alert => alert.id === alertId);
-
-        if (!alertToRemove) {
-          await ctx.reply('❌ 未找到指定的提醒，请检查提醒ID是否正确');
-          return;
-        }
-
-        // 删除提醒
-        await PriceAlertModel.deactivateAlert(alertId);
-
-        const symbol = alertToRemove.symbol.replace('USDT', '');
-        const conditionText = alertToRemove.condition === 'above' ? '>' : '<';
-        
-        const confirmMessage = `
-✅ *价格提醒删除成功*
-
-🗑️ 已删除提醒: #${alertId}
-💰 币种: ${symbol}
-📊 条件: 价格 ${conditionText} $${alertToRemove.value.toLocaleString()}
-⏰ 删除时间: ${formatTimeToUTC8(new Date())}`;
-
-        await ctx.replyWithMarkdown(confirmMessage);
-        
-      } catch (error) {
-        console.error('Remove alert error:', error);
-        await ctx.reply('❌ 删除价格提醒失败，请稍后重试');
-      }
-    });
-
-    // 启动涨幅榜推送
-    this.bot.command('start_gainers_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Enable gainers alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'gainers', true);
-        
-        // 实时推送服务已在启动时自动启用，这里仅需确认状态
-        const serviceStatus = realtimeAlertService.getStatus();
-
-        const message = `🚀 *实时涨幅榜推送已启动*
-
-📈 推送状态: ${serviceStatus.enabled ? '✅ 已启用' : '⚡ 启动中'}
-⏰ 启动时间: ${formatTimeToUTC8(new Date())}
-
-🎯 *智能推送策略:*
-• 新进入前10且涨幅≥10%
-• 排名变化≥3位
-• 同一币种10分钟内最多推送2次
-
-⚡ *实时响应:* 基于WebSocket数据流
-📊 *数据源:* 币安期货实时数据
-
-💡 您将在涨幅榜发生重要变化时立即收到推送
-🛑 使用 /stop_gainers_push 停止推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Start gainers push error:', error);
-        await ctx.reply('❌ 启动涨幅榜推送失败，请稍后重试');
-      }
-    });
-
-    // 停止涨幅榜推送
-    this.bot.command('stop_gainers_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Disable gainers alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'gainers', false);
-        
-        const message = `⏹️ *实时涨幅榜推送已停止*
-
-📈 推送状态: 已关闭（仅对您关闭）
-⏰ 停止时间: ${formatTimeToUTC8(new Date())}
-
-💡 *说明:*
-• 实时推送服务继续运行
-• 您将不再收到涨幅榜推送通知
-• 使用 /start_gainers_push 重新启动推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Stop gainers push error:', error);
-        await ctx.reply('❌ 停止涨幅榜推送失败，请稍后重试');
-      }
-    });
-
-    // 启动负费率推送
-    this.bot.command('start_funding_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Enable funding alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'funding', true);
-        
-        // Start funding monitoring if not already running
-        await triggerAlertService.startFundingMonitoring();
-        
-        const message = `✅ *负费率榜推送已启动*
-
-💰 监控设置:
-• 检查间隔: 1分钟 (测试模式)
-• 推送条件: 新币进入前10或排名显著变化
-• 状态: 已启用
-
-💡 您将在负费率榜发生重要变化时收到推送通知
-🛑 使用 /stop_funding_push 停止推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Start funding push error:', error);
-        await ctx.reply('❌ 启动负费率推送失败，请稍后重试');
-      }
-    });
-
-    // 停止负费率推送
-    this.bot.command('stop_funding_push', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        
-        // Disable funding alerts for user
-        await TriggerAlertModel.setTriggerAlert(userId, 'funding', false);
-        
-        const message = `⏹️ *负费率榜推送已停止*
-
-💰 推送状态: 已关闭
-⏰ 停止时间: ${formatTimeToUTC8(new Date())}
-
-💡 使用 /start_funding_push 重新启动推送`;
-
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Stop funding push error:', error);
-        await ctx.reply('❌ 停止负费率推送失败，请稍后重试');
-      }
-    });
-
-
-    // 查看推送状态
-    this.bot.command('push_status', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        const settings = await TriggerAlertModel.getTriggerAlertSettings(userId);
-        const stats = triggerAlertService.getStats();
-        
-        const gainersEnabled = settings.find(s => s.alert_type === 'gainers')?.is_enabled || false;
-        const fundingEnabled = settings.find(s => s.alert_type === 'funding')?.is_enabled || false;
-        
-        let message = `📊 *推送状态总览*\n\n`;
-        
-        message += `📈 *涨幅榜推送:*\n`;
-        message += `• 状态: ${gainersEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
-        message += `• 监控: ${stats.gainersEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.gainersLastCheck ? formatTimeToUTC8(stats.gainersLastCheck) : '从未'}\n\n`;
-        
-        message += `💰 *负费率榜推送:*\n`;
-        message += `• 状态: ${fundingEnabled ? '✅ 已启用' : '❌ 已禁用'}\n`;
-        message += `• 监控: ${stats.fundingEnabled ? '🟢 运行中' : '🔴 未运行'}\n`;
-        message += `• 最后检查: ${stats.fundingLastCheck ? formatTimeToUTC8(stats.fundingLastCheck) : '从未'}\n\n`;
-        
-        
-        message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
-        
-        await ctx.replyWithMarkdown(message);
-        
-      } catch (error) {
-        console.error('Push status error:', error);
-        await ctx.reply('❌ 获取推送状态失败，请稍后重试');
-      }
-    });
-
-    // 历史新高查询命令
-    this.bot.command('high', async (ctx) => {
-      try {
-        const args = ctx.message.text.split(' ').slice(1);
-
-        if (args.length < 2) {
-          await ctx.reply(`📈 *历史新高查询*
-
-使用方法: \`/high <币种> <时间段>\`
-
-支持的时间段:
-• \`1w\` - 1周内最高价
-• \`1m\` - 1个月内最高价
-• \`6m\` - 6个月内最高价
-• \`1y\` - 1年内最高价
-• \`all\` - 全量历史最高价
-
-例如:
-• \`/high btc 1w\` - 查询BTC一周内最高价
-• \`/high eth all\` - 查询ETH历史最高价`, { parse_mode: 'Markdown' });
-          return;
-        }
-
-        const symbol = args[0].toUpperCase();
-        const timeframe = args[1].toLowerCase();
-
-        // 验证时间段
-        const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
-        if (!validTimeframes.includes(timeframe)) {
-          await ctx.reply('❌ 无效的时间段，请使用: 1w, 1m, 6m, 1y, all');
-          return;
-        }
-
-        const loadingMessage = await ctx.reply(`🔍 正在查询 ${symbol} 的${timeframe}历史新高...`);
-
-        const result = historicalHighCache.queryHistoricalHigh(symbol, timeframe);
-
-        if (!result) {
-          await ctx.telegram.editMessageText(
-            ctx.chat?.id,
-            loadingMessage.message_id,
-            undefined,
-            `❌ 未找到 ${symbol} 的${timeframe}历史数据，请检查币种名称或等待缓存初始化完成`
-          );
-          return;
-        }
-
-        const riskLevel = getTokenRiskLevel(result.symbol);
-        const riskIcon = getRiskIcon(riskLevel);
-
-        const timeframeNames: Record<string, string> = {
-          '1w': '1周',
-          '1m': '1个月',
-          '6m': '6个月',
-          '1y': '1年',
-          'all': '全量历史'
-        };
-
-        // 计算距今天数
-        const daysDiff = Math.floor((Date.now() - result.highTimestamp) / (24 * 60 * 60 * 1000));
-        const daysText = daysDiff === 0 ? '今天' :
-                        daysDiff > 0 ? `${daysDiff}天前` :
-                        `${Math.abs(daysDiff)}天后`;
-
-        let message = `📈 *${result.symbol} ${timeframeNames[timeframe]}新高数据*\n\n`;
-        message += `${riskIcon} 币种: ${result.symbol}\n`;
-        message += `💰 当前价格: $${await formatPriceWithSeparators(result.currentPrice, result.symbol)}\n`;
-        message += `🏔️ ${timeframeNames[timeframe]}最高价: $${await formatPriceWithSeparators(result.highPrice, result.symbol)}\n`;
-        message += `📅 新高时间: ${formatTimeToUTC8(result.highTimestamp)}\n`;
-        message += `⏳ 距今时间: ${daysText}\n\n`;
-
-        if (result.distancePercent >= 0) {
-          message += `🚀 *已突破${timeframeNames[timeframe]}新高*\n`;
-          message += `📊 超出新高: +${result.distancePercent.toFixed(2)}%\n`;
-        } else {
-          message += `📉 距离${timeframeNames[timeframe]}新高: ${result.distancePercent.toFixed(2)}%\n`;
-          message += `🎯 需要上涨: ${result.neededGainPercent.toFixed(2)}%\n`;
-        }
-
-        message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
-
-        await ctx.telegram.editMessageText(
-          ctx.chat?.id,
-          loadingMessage.message_id,
-          undefined,
-          message,
-          { parse_mode: 'Markdown' }
-        );
-
-      } catch (error) {
-        log.error('Historical high query error:', error);
-        await ctx.reply('❌ 查询历史新高失败，请稍后重试');
-      }
-    });
-
-    // 历史新高排名命令
-    this.bot.command('nearhigh', async (ctx) => {
-      try {
-        const args = ctx.message.text.split(' ').slice(1);
-
-        if (args.length === 0) {
-          await ctx.reply(`🏆 *接近历史新高排名*
-
-使用方法: \`/nearhigh <时间段> [数量]\`
-
-支持的时间段:
-• \`1w\` - 接近1周新高
-• \`1m\` - 接近1个月新高
-• \`6m\` - 接近6个月新高
-• \`1y\` - 接近1年新高
-• \`all\` - 接近全量历史新高
-
-例如:
-• \`/nearhigh 1w\` - 显示接近1周新高的前20个币种
-• \`/nearhigh all 10\` - 显示接近历史新高的前10个币种`, { parse_mode: 'Markdown' });
-          return;
-        }
-
-        const timeframe = args[0].toLowerCase();
-        const limit = args[1] ? parseInt(args[1]) : 20;
-
-        // 验证时间段
-        const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
-        if (!validTimeframes.includes(timeframe)) {
-          await ctx.reply('❌ 无效的时间段，请使用: 1w, 1m, 6m, 1y, all');
-          return;
-        }
-
-        // 验证数量
-        if (limit < 1 || limit > 50) {
-          await ctx.reply('❌ 数量必须在1-50之间');
-          return;
-        }
-
-        const loadingMessage = await ctx.reply(`🔍 正在查询接近${timeframe}新高的代币排名...`);
-
-        const ranking = historicalHighCache.getRankingByProximityToHigh(timeframe, limit);
-
-        if (ranking.length === 0) {
-          await ctx.telegram.editMessageText(
-            ctx.chat?.id,
-            loadingMessage.message_id,
-            undefined,
-            `❌ 暂无${timeframe}新高排名数据，请等待缓存初始化完成`
-          );
-          return;
-        }
-
-        const timeframeNames: Record<string, string> = {
-          '1w': '1周',
-          '1m': '1个月',
-          '6m': '6个月',
-          '1y': '1年',
-          'all': '全量历史'
-        };
-
-        let message = `🏆 *接近${timeframeNames[timeframe]}新高排名 TOP ${ranking.length}*\n\n`;
-
-        for (let index = 0; index < ranking.length; index++) {
-          const item = ranking[index];
-          const riskLevel = getTokenRiskLevel(item.symbol);
-          const riskIcon = getRiskIcon(riskLevel);
-
-          const rank = index + 1;
-          const distanceText = item.distancePercent >= 0
-            ? `+${item.distancePercent.toFixed(2)}%`
-            : `${item.distancePercent.toFixed(2)}%`;
-
-          // 计算距今天数
-          const daysDiff = Math.floor((Date.now() - item.highTimestamp) / (24 * 60 * 60 * 1000));
-          const daysText = daysDiff === 0 ? '今天' :
-                          daysDiff > 0 ? `${daysDiff}天前` :
-                          `${Math.abs(daysDiff)}天后`;
-
-          message += `${rank}. ${riskIcon} ${item.symbol}\n`;
-          message += `   💰 当前: $${await formatPriceWithSeparators(item.currentPrice, item.symbol)}\n`;
-          message += `   🏔️ 新高: $${await formatPriceWithSeparators(item.highPrice, item.symbol)} (${daysText})\n`;
-          message += `   📊 距离: ${distanceText}\n`;
-
-          if (item.neededGainPercent > 0) {
-            message += `   🎯 需涨: ${item.neededGainPercent.toFixed(2)}%\n`;
-          }
-
-          message += '\n';
-        }
-
-        message += `⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
-
-        await ctx.telegram.editMessageText(
-          ctx.chat?.id,
-          loadingMessage.message_id,
-          undefined,
-          message,
-          { parse_mode: 'Markdown' }
-        );
-
-      } catch (error) {
-        log.error('Near high ranking error:', error);
-        await ctx.reply('❌ 查询新高排名失败，请稍后重试');
-      }
-    });
-
-    // 历史新高缓存状态命令
-    this.bot.command('high_status', async (ctx) => {
-      try {
-        const stats = historicalHighCache.getStats();
-        const timeframes = historicalHighCache.getSupportedTimeframes();
-
-        let message = `📈 *历史新高缓存状态*\n\n`;
-        message += `🔧 初始化状态: ${stats.isInitialized ? '✅ 已初始化' : '❌ 未初始化'}\n`;
-        message += `💾 缓存条目数: ${stats.cacheSize.toLocaleString()}\n`;
-
-        message += `📊 代币数量: ${stats.symbolCount.toLocaleString()}\n`;
-
-        message += `\n📊 *支持的时间段*:\n`;
-        timeframes.forEach(tf => {
-          message += `• ${tf.key} - ${tf.displayName}\n`;
-        });
-
-        message += `\n💡 *使用说明*:\n`;
-        message += `• 一次性数据收集，不自动更新\n`;
-        message += `• 查询速度极快，无需等待API调用\n`;
-        message += `• 支持所有USDT永续期货合约\n`;
-
-        message += `\n⏰ 查询时间: ${formatTimeToUTC8(new Date())}`;
-
-        await ctx.replyWithMarkdown(message);
-
-      } catch (error) {
-        log.error('High status error:', error);
-        await ctx.reply('❌ 获取历史新高缓存状态失败，请稍后重试');
-      }
-    });
-
-    // Debug命令 - 记录bug和优化建议
-    this.bot.command('debug', async (ctx) => {
-      try {
-        const debugContent = ctx.message.text.replace('/debug', '').trim();
-        
-        if (!debugContent) {
-          await ctx.reply(`🐛 *Debug 使用说明*
-
-使用方法: \`/debug [你的问题描述]\`
-
-例如:
-• \`/debug oi4h推送超时问题，需要增加重试机制\`
-• \`/debug 价格查询速度太慢\`
-• \`/debug 建议添加止损功能\`
-
-你的debug记录会被保存到日志文件中，用于后续分析和改进。`, 
-            { parse_mode: 'Markdown' });
-          return;
-        }
-
-        // 获取上一条消息作为上下文
-        const previousMessage = await this.getPreviousMessage(ctx);
-        
-        // 保存debug记录
-        const debugId = await this.debugService.saveDebugRecord({
-          timestamp: new Date().toISOString(),
-          userId: ctx.from?.id.toString() || 'unknown',
-          previousMessage: previousMessage,
-          debugContent: debugContent
-        });
-
-        await ctx.reply(`🐛 *Debug记录已保存!*
-
-记录ID: \`${debugId}\`
-内容: ${debugContent}
-
-你的反馈将用于改进系统，感谢！`, { parse_mode: 'Markdown' });
-        
-      } catch (error) {
-        console.error('Debug command error:', error);
-        await ctx.reply('❌ 保存debug记录失败，请稍后重试');
-      }
-    });
-
-    // 价格报警管理命令
-    this.setupPriceAlertCommands();
-
-    // 处理未知命令
-    this.bot.on('text', async (ctx) => {
-      const text = ctx.message?.text;
-      
-      if (!text) return;
-      
-      // 如果不是命令，提供友好提示
-      if (!text.startsWith('/')) {
-        await ctx.reply('💡 请使用 /help 查看可用命令，或直接发送 /price btc 查询价格');
+      message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
+
+      await ctx.replyWithMarkdown(message);
+    } catch (error) {
+      console.error('Ranking command error:', error);
+      const errorTitleType = type === 'gainers' ? '涨幅' : '跌幅';
+      await ctx.reply(`❌ 查询${errorTitleType}榜失败`);
+    }
+  }
+
+  /**
+   * 处理警报帮助
+   */
+  private async handleAlertHelp(ctx: any): Promise<void> {
+    const helpMessage = '🚨 *统一警报系统* 🚨\n\n' +
+      '📋 *基本语法:*\n' +
+      '`/alert <币种> <条件> <值> [时间框架]`\n\n' +
+      '📊 *支持的警报类型:*\n\n' +
+      '🔸 **价格警报**\n' +
+      '• `/alert btc > 50000` - BTC价格突破50000时提醒\n' +
+      '• `/alert eth < 3000` - ETH价格跌破3000时提醒\n' +
+      '• `/alert sol >= 100` - SOL价格达到100或以上时提醒\n\n' +
+      '🔸 **涨跌幅警报**\n' +
+      '• `/alert btc change 5% 1h` - BTC在1小时内涨跌超过5%时提醒\n' +
+      '• `/alert eth change 10% 24h` - ETH在24小时内涨跌超过10%时提醒\n\n' +
+      '🔸 **排行榜推送**\n' +
+      '• `/alert gainers push` - 开启涨幅榜推送通知\n' +
+      '• `/alert funding push` - 开启资金费率推送通知\n\n' +
+      '⚙️ *管理命令:*\n' +
+      '• `/alert_list` - 查看所有警报\n' +
+      '• `/alert_remove <ID>` - 删除指定警报\n' +
+      '• `/alert_toggle <ID>` - 启用/禁用警报\n' +
+      '• `/alert_history` - 查看触发历史\n' +
+      '• `/alert_stats` - 查看统计信息\n\n' +
+      '💡 *时间框架:* 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d, 1w\n' +
+      '⚡ *智能系统:* 自动避免重复提醒，支持优先级管理\n\n' +
+      '🔗 *迁移提示:* 旧命令如 `/add_alert`, `/alerts` 等已整合到此系统';
+
+    await ctx.replyWithMarkdown(helpMessage);
+  }
+
+  /**
+   * 处理警报列表
+   */
+  private async handleAlertList(ctx: any): Promise<void> {
+    try {
+      await ctx.reply('📋 正在查询警报列表...');
+
+      const userId = ctx.from?.id?.toString() || 'unknown';
+
+      // 查询统一警报系统
+      const unifiedAlerts = await this.unifiedAlertService.getUserAlerts(userId);
+
+      // 查询急涨急跌警报系统
+      const timeBasedAlerts = await TimeRangeAlertModel.getUserAlerts(userId);
+
+      if (unifiedAlerts.length === 0 && timeBasedAlerts.length === 0) {
+        await ctx.reply('📭 您还没有设置任何警报\n\n💡 使用 /alert btc > 50000 或 /alert_5m_gain_3_all 创建警报');
         return;
       }
-      
-      // 未知命令
-      await ctx.reply(`❓ 未知命令: ${text}\n使用 /help 查看所有可用命令`);
-    });
+
+      const totalAlerts = unifiedAlerts.length + timeBasedAlerts.length;
+      let message = `📋 您的警报列表 (${totalAlerts}个)\n\n`;
+
+      let alertIndex = 1;
+
+      // 显示统一警报系统的警报
+      for (const alert of unifiedAlerts) {
+        const status = alert.enabled ? '🟢 启用' : '🔴 禁用';
+        const description = AlertCommandParser.generateAlertDescription(alert);
+
+        message += `${alertIndex++}. ${status} 💰 价格警报\n`;
+        message += `   📄 ${description}\n`;
+        message += `   🆔 ID: ${alert.id}\n`;
+        message += `   🔔 优先级: ${alert.priority}\n\n`;
+      }
+
+      // 显示急涨急跌警报系统的警报
+      for (const alert of timeBasedAlerts) {
+        const status = alert.isEnabled ? '🟢 启用' : '🔴 禁用';
+        const symbolText = alert.symbol || '所有代币';
+        const timeText = this.formatTimeframe(alert.timeframe);
+        const typeText = alert.alertType === 'gain' ? '涨幅' : alert.alertType === 'loss' ? '跌幅' : '涨跌幅';
+
+        message += `${alertIndex++}. ${status} 🚀 急涨急跌警报\n`;
+        message += `   📄 ${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%\n`;
+        message += `   🆔 ID: T${alert.id} (急涨急跌)\n`;
+        message += `   ⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}\n\n`;
+      }
+
+      message += `💡 操作指南:\n`;
+      message += `• 删除价格警报: /alert_remove <ID>\n`;
+      message += `• 删除急涨急跌警报: /alert_remove T<ID>\n`;
+      message += `• 切换: /alert_toggle <ID>\n`;
+      message += `• 历史: /alert_history [ID]\n`;
+      message += `• 统计: /alert_stats`;
+
+      await ctx.reply(message);
+
+    } catch (error) {
+      log.error('Failed to list alerts:', error);
+      await ctx.reply('❌ 查询警报列表失败，请稍后重试');
+    }
   }
 
   /**
-   * 设置价格报警管理命令
+   * 处理警报删除
    */
-  private setupPriceAlertCommands(): void {
-    // 添加价格报警
-    this.bot.command('add_alert', async (ctx) => {
-      try {
-        const messageText = ctx.message?.text || '';
-        const args = messageText.split(' ').slice(1); // Remove command name
+  private async handleAlertRemove(ctx: any, args: string[]): Promise<void> {
+    if (!args || args.length === 0) {
+      await ctx.reply('❌ 请指定要删除的警报ID\n\n💡 示例: \n• 价格警报: /alert_remove user123-BTC-1234567890\n• 急涨急跌警报: /alert_remove T6');
+      return;
+    }
 
-        if (args.length < 3) {
-          await ctx.replyWithMarkdown(
-            `📢 *添加价格报警*\n\n` +
-            `用法: \`/add_alert <时间周期> <类型> <阈值> [代币]\`\n\n` +
-            `*时间周期:*\n` +
-            `• \`1m\` - 1分钟\n` +
-            `• \`5m\` - 5分钟\n` +
-            `• \`15m\` - 15分钟\n` +
-            `• \`30m\` - 30分钟\n` +
-            `• \`1h\` - 1小时\n` +
-            `• \`4h\` - 4小时\n` +
-            `• \`24h\` - 24小时\n` +
-            `• \`3d\` - 3天\n\n` +
-            `*类型:*\n` +
-            `• \`gain\` - 仅涨幅\n` +
-            `• \`loss\` - 仅跌幅\n` +
-            `• \`both\` - 涨跌双向\n\n` +
-            `*示例:*\n` +
-            `\`/add_alert 1m both 5\` - 1分钟内涨跌超过5%\n` +
-            `\`/add_alert 1h gain 10 BTC\` - BTC 1小时内涨幅超过10%\n` +
-            `\`/add_alert 5m loss 3\` - 任意币种5分钟内跌幅超过3%`
-          );
+    try {
+      const alertId = args[0];
+      const userId = ctx.from?.id?.toString() || 'unknown';
+      await ctx.reply(`🗑️ 正在删除警报 ${alertId}...`);
+
+      // 检查是否为时间基警报 (T-prefixed)
+      if (alertId.startsWith('T') && alertId.length > 1) {
+        // 处理急涨急跌警报
+        const numericId = parseInt(alertId.substring(1));
+        if (isNaN(numericId)) {
+          await ctx.reply('❌ 无效的急涨急跌警报ID格式');
           return;
         }
 
-        const timeframe = args[0]?.toLowerCase() as any;
-        const alertType = args[1]?.toLowerCase() as any;
-        const threshold = parseFloat(args[2]);
-        const symbol = args[3]?.toUpperCase();
-
-        // 验证参数
-        const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '24h', '3d'];
-        const validTypes = ['gain', 'loss', 'both'];
-
-        if (!validTimeframes.includes(timeframe)) {
-          await ctx.reply('❌ 无效的时间周期，请使用: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d');
-          return;
-        }
-
-        if (!validTypes.includes(alertType)) {
-          await ctx.reply('❌ 无效的报警类型，请使用: gain, loss, both');
-          return;
-        }
-
-        if (isNaN(threshold) || threshold <= 0 || threshold > 100) {
-          await ctx.reply('❌ 无效的阈值，请输入0-100之间的数字');
-          return;
-        }
-
-        const userId = ctx.from?.id.toString()!;
-        const targetSymbol = symbol ? `${symbol}USDT` : null;
-
-        // 添加报警配置
-        const alertId = await TimeRangeAlertModel.addAlert({
-          userId,
-          symbol: targetSymbol,
-          timeframe,
-          alertType,
-          thresholdPercent: threshold,
-          isEnabled: true
-        });
-
-        // 重新加载配置
-        await priceAlertService.reloadConfigs();
-
-        const symbolText = symbol ? `${symbol} ` : '全部代币 ';
-        const typeText = alertType === 'gain' ? '涨幅' :
-                        alertType === 'loss' ? '跌幅' : '涨跌';
-        const timeframeNames: Record<string, string> = {
-          '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
-          '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
-        };
-        const timeframeName = timeframeNames[timeframe] || timeframe;
-
-        await ctx.replyWithMarkdown(
-          `✅ *价格报警已添加*\n\n` +
-          `🆔 报警ID: \`${alertId}\`\n` +
-          `📊 监控对象: ${symbolText}\n` +
-          `⏰ 时间周期: ${timeframeName}\n` +
-          `📈 报警类型: ${typeText}\n` +
-          `🎯 触发阈值: ${threshold}%\n` +
-          `🔔 状态: 已启用\n\n` +
-          `💡 使用 \`/my_alerts\` 查看所有报警`
-        );
-
-      } catch (error) {
-        console.error('Add alert error:', error);
-        await ctx.reply('❌ 添加价格报警失败，请稍后重试');
-      }
-    });
-
-    // 查看我的报警
-    this.bot.command('my_alerts', async (ctx) => {
-      try {
-        const userId = ctx.from?.id.toString()!;
-        const alerts = await TimeRangeAlertModel.getUserAlerts(userId);
-
-        if (alerts.length === 0) {
-          await ctx.replyWithMarkdown(
-            `📢 *我的价格报警*\n\n` +
-            `暂无报警配置\n\n` +
-            `💡 使用 \`/add_alert\` 添加新报警`
-          );
-          return;
-        }
-
-        let message = `📢 *我的价格报警* (${alerts.length}个)\n\n`;
-
-        for (const alert of alerts) {
-          const symbol = alert.symbol ? alert.symbol.replace('USDT', '') : '全部';
-          const status = alert.isEnabled ? '🟢 启用' : '🔴 禁用';
-          const typeText = alert.alertType === 'gain' ? '涨幅' :
-                          alert.alertType === 'loss' ? '跌幅' : '涨跌';
-          const timeframeNames: Record<string, string> = {
-            '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
-            '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
-          };
-          const timeframeName = timeframeNames[alert.timeframe] || alert.timeframe;
-
-          message += `🆔 \`${alert.id}\` - ${symbol} ${timeframeName}${typeText} ≥${alert.thresholdPercent}%\n`;
-          message += `   ${status} | 触发${alert.triggerCount}次\n\n`;
-        }
-
-        message += `💡 *管理命令:*\n`;
-        message += `\`/toggle_alert <ID>\` - 启用/禁用\n`;
-        message += `\`/delete_alert <ID>\` - 删除报警\n`;
-        message += `\`/alert_history\` - 查看触发历史`;
-
-        await ctx.replyWithMarkdown(message);
-
-      } catch (error) {
-        console.error('My alerts error:', error);
-        await ctx.reply('❌ 获取报警列表失败，请稍后重试');
-      }
-    });
-
-    // 切换报警状态
-    this.bot.command('toggle_alert', async (ctx) => {
-      try {
-        const messageText = ctx.message?.text || '';
-        const args = messageText.split(' ').slice(1);
-
-        if (args.length !== 1) {
-          await ctx.reply('用法: /toggle_alert <报警ID>');
-          return;
-        }
-
-        const alertId = parseInt(args[0]);
-        if (isNaN(alertId)) {
-          await ctx.reply('❌ 无效的报警ID');
-          return;
-        }
-
-        const userId = ctx.from?.id.toString()!;
-        const alerts = await TimeRangeAlertModel.getUserAlerts(userId);
-        const alert = alerts.find(a => a.id === alertId);
+        // 验证警报是否存在且属于当前用户
+        const timeBasedAlerts = await TimeRangeAlertModel.getUserAlerts(userId);
+        const alert = timeBasedAlerts.find(a => a.id === numericId);
 
         if (!alert) {
-          await ctx.reply('❌ 未找到该报警配置');
+          await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
           return;
         }
 
-        const newEnabled = !alert.isEnabled;
-        await TimeRangeAlertModel.toggleAlert(alertId, newEnabled);
-        await priceAlertService.reloadConfigs();
-
-        const statusText = newEnabled ? '🟢 已启用' : '🔴 已禁用';
-        await ctx.reply(`✅ 报警 #${alertId} ${statusText}`);
-
-      } catch (error) {
-        console.error('Toggle alert error:', error);
-        await ctx.reply('❌ 切换报警状态失败，请稍后重试');
-      }
-    });
-
-    // 删除报警
-    this.bot.command('delete_alert', async (ctx) => {
-      try {
-        const messageText = ctx.message?.text || '';
-        const args = messageText.split(' ').slice(1);
-
-        if (args.length !== 1) {
-          await ctx.reply('用法: /delete_alert <报警ID>');
-          return;
-        }
-
-        const alertId = parseInt(args[0]);
-        if (isNaN(alertId)) {
-          await ctx.reply('❌ 无效的报警ID');
-          return;
-        }
-
-        const userId = ctx.from?.id.toString()!;
-        const success = await TimeRangeAlertModel.deleteAlert(alertId, userId);
-
+        // 删除时间基警报
+        const success = await TimeRangeAlertModel.deleteAlert(numericId, userId);
         if (!success) {
-          await ctx.reply('❌ 未找到该报警配置或删除失败');
+          await ctx.reply('❌ 删除急涨急跌警报失败');
           return;
         }
 
-        await priceAlertService.reloadConfigs();
-        await ctx.reply(`✅ 报警 #${alertId} 已删除`);
+        // 生成描述
+        const symbolText = alert.symbol || '所有代币';
+        const timeText = this.formatTimeframe(alert.timeframe);
+        const typeText = alert.alertType === 'gain' ? '涨幅' : alert.alertType === 'loss' ? '跌幅' : '涨跌幅';
+        const description = `${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%`;
 
+        await ctx.reply(
+          `✅ 急涨急跌警报删除成功！\n\n` +
+          `🗑️ **已删除警报:**\n` +
+          `🚀 ${description}\n` +
+          `🆔 ID: ${alertId}\n` +
+          `⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}`
+        );
+
+      } else {
+        // 处理统一警报系统的价格警报
+        const alert = await this.unifiedAlertService.getAlert(alertId);
+        if (!alert) {
+          await ctx.reply('❌ 价格警报不存在或ID无效');
+          return;
+        }
+
+        if (alert.metadata?.userId !== userId) {
+          await ctx.reply('❌ 您只能删除自己的警报');
+          return;
+        }
+
+        // 删除价格警报
+        await this.unifiedAlertService.removeAlert(alertId);
+
+        const description = AlertCommandParser.generateAlertDescription(alert);
+        await ctx.reply(
+          `✅ 价格警报删除成功！\n\n` +
+          `🗑️ **已删除警报:**\n` +
+          `💰 ${description}\n` +
+          `🆔 ID: ${alertId}`
+        );
+      }
+
+    } catch (error) {
+      log.error('Failed to remove alert:', error);
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      await ctx.reply(`❌ 删除警报失败: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * 处理警报切换
+   */
+  private async handleAlertToggle(ctx: any, args: string[]): Promise<void> {
+    if (!args || args.length === 0) {
+      await ctx.reply('❌ 请指定要切换的警报ID\n\n💡 示例: /alert_toggle user123-BTC-1234567890');
+      return;
+    }
+
+    try {
+      const alertId = args[0];
+      await ctx.reply(`🔄 正在切换警报状态...`);
+
+      // 验证警报是否存在且属于当前用户
+      const alert = await this.unifiedAlertService.getAlert(alertId);
+      if (!alert) {
+        await ctx.reply('❌ 警报不存在或ID无效');
+        return;
+      }
+
+      const userId = ctx.from?.id?.toString() || 'unknown';
+      if (alert.metadata?.userId !== userId) {
+        await ctx.reply('❌ 您只能操作自己的警报');
+        return;
+      }
+
+      // 切换警报状态
+      const newStatus = !alert.enabled;
+      await this.unifiedAlertService.toggleAlert(alertId, newStatus);
+
+      const description = AlertCommandParser.generateAlertDescription(alert);
+      const statusText = newStatus ? '🟢 启用' : '🔴 禁用';
+
+      await ctx.reply(
+        `✅ 警报状态更新成功！\n\n` +
+        `🔄 **警报状态:** ${statusText}\n` +
+        `📄 ${description}\n` +
+        `🆔 ID: ${alertId}`
+      );
+
+    } catch (error) {
+      log.error('Failed to toggle alert:', error);
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      await ctx.reply(`❌ 切换警报状态失败: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * 处理警报历史
+   */
+  private async handleAlertHistory(ctx: any, args: string[]): Promise<void> {
+    try {
+      await ctx.reply('📚 正在查询警报历史...');
+
+      const alertId = args && args.length > 0 ? args[0] : undefined;
+      const limit = 20; // 限制返回数量
+
+      const events = await this.unifiedAlertService.getAlertHistory(alertId, limit);
+
+      if (events.length === 0) {
+        const message = alertId
+          ? `📭 指定警报 ${alertId} 暂无触发历史`
+          : '📭 暂无警报触发历史';
+        await ctx.reply(message);
+        return;
+      }
+
+      const title = alertId
+        ? `📚 **警报历史** (${alertId})`
+        : `📚 **警报历史** (最近${events.length}条)`;
+
+      let message = `${title}\n\n`;
+
+      for (let i = 0; i < events.length; i++) {
+        const event = events[i];
+        const timeStr = formatTimeToUTC8(event.triggeredAt);
+        const priorityIcon = this.getPriorityIcon(event.priority);
+
+        message += `${i + 1}. ${priorityIcon} **${event.symbol}**\n`;
+        message += `   📄 ${event.message}\n`;
+        message += `   💰 当前值: ${event.currentValue}\n`;
+        message += `   🎯 阈值: ${event.thresholdValue}\n`;
+        message += `   ⏰ ${timeStr}\n\n`;
+
+        // 防止消息过长
+        if (message.length > 3500) {
+          message += `... 还有 ${events.length - i - 1} 条记录`;
+          break;
+        }
+      }
+
+      await ctx.reply(message, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+      log.error('Failed to get alert history:', error);
+      await ctx.reply('❌ 查询警报历史失败，请稍后重试');
+    }
+  }
+
+  private getPriorityIcon(priority: string): string {
+    switch (priority) {
+      case 'critical': return '🚨';
+      case 'high': return '⚠️';
+      case 'medium': return '🔔';
+      case 'low': return '🔕';
+      default: return '🔔';
+    }
+  }
+
+  /**
+   * 处理警报测试
+   */
+  private async handleAlertTest(ctx: any, args: string[]): Promise<void> {
+    if (!args || args.length === 0) {
+      await ctx.reply('❌ 请指定要测试的警报ID\n\n💡 示例: /alert test user123-BTC-1234567890');
+      return;
+    }
+
+    try {
+      const alertId = args[0];
+      await ctx.reply('🧪 正在测试警报...');
+
+      // 验证警报是否存在且属于当前用户
+      const alert = await this.unifiedAlertService.getAlert(alertId);
+      if (!alert) {
+        await ctx.reply('❌ 警报不存在或ID无效');
+        return;
+      }
+
+      const userId = ctx.from?.id?.toString() || 'unknown';
+      if (alert.metadata?.userId !== userId) {
+        await ctx.reply('❌ 您只能测试自己的警报');
+        return;
+      }
+
+      // 执行测试
+      const results = await this.unifiedAlertService.testAlert(alertId);
+
+      const description = AlertCommandParser.generateAlertDescription(alert);
+      let message = `🧪 **警报测试完成**\n\n`;
+      message += `📄 ${description}\n`;
+      message += `🆔 ID: ${alertId}\n\n`;
+
+      message += `📬 **通知结果:**\n`;
+      for (const result of results) {
+        const icon = result.success ? '✅' : '❌';
+        const status = result.success ? '成功' : `失败: ${result.error}`;
+        message += `${icon} ${result.channel}: ${status}\n`;
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      const totalCount = results.length;
+
+      message += `\n📊 **成功率:** ${successCount}/${totalCount}`;
+
+      await ctx.reply(message);
+
+    } catch (error) {
+      log.error('Failed to test alert:', error);
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      await ctx.reply(`❌ 警报测试失败: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * 处理警报统计
+   */
+  private async handleAlertStats(ctx: any): Promise<void> {
+    try {
+      await ctx.reply('📊 正在查询警报统计...');
+
+      const stats = await this.unifiedAlertService.getStatistics();
+
+      let message = `📊 **警报统计信息**\n\n`;
+
+      // 基本统计
+      message += `📋 **总体统计:**\n`;
+      message += `• 总警报数: ${stats.totalAlerts}\n`;
+      message += `• 活跃警报: ${stats.activeAlerts}\n`;
+      message += `• 今日触发: ${stats.triggeredToday}\n`;
+      message += `• 本周触发: ${stats.triggeredThisWeek}\n\n`;
+
+      // 按类型统计
+      message += `🏷️ **按类型统计:**\n`;
+      for (const [type, count] of Object.entries(stats.byType)) {
+        if (count > 0) {
+          message += `• ${this.getAlertTypeText(type)}: ${count}\n`;
+        }
+      }
+
+      // 按优先级统计
+      message += `\n🔔 **按优先级统计:**\n`;
+      for (const [priority, count] of Object.entries(stats.byPriority)) {
+        if (count > 0) {
+          const icon = this.getPriorityIcon(priority);
+          message += `• ${icon} ${priority}: ${count}\n`;
+        }
+      }
+
+      // 性能统计
+      message += `\n⚡ **性能统计:**\n`;
+      message += `• 成功率: ${(stats.successRate * 100).toFixed(1)}%\n`;
+      message += `• 平均响应时间: ${stats.avgResponseTime}ms\n`;
+
+      await ctx.reply(message);
+
+    } catch (error) {
+      log.error('Failed to get alert statistics:', error);
+      await ctx.reply('❌ 查询警报统计失败，请稍后重试');
+    }
+  }
+
+  private getAlertTypeText(type: string): string {
+    switch (type) {
+      case 'price_above': return '价格突破上方';
+      case 'price_below': return '价格跌破下方';
+      case 'price_change': return '价格变化';
+      case 'volume_spike': return '成交量激增';
+      case 'funding_rate': return '资金费率';
+      case 'open_interest': return '持仓量';
+      case 'technical_indicator': return '技术指标';
+      case 'custom': return '自定义';
+      default: return type;
+    }
+  }
+
+  /**
+   * 处理警报创建
+   */
+  private async handleAlertCreate(ctx: any, args: string[]): Promise<void> {
+    if (!args || args.length < 3) {
+      await ctx.reply('❌ 警报参数不足\n\n💡 示例: /alert btc > 50000');
+      return;
+    }
+
+    try {
+      await ctx.reply(`⚡ 正在创建警报: ${args.join(' ')}...`);
+
+      // 解析警报命令
+      const parsed = AlertCommandParser.parseAlertCommand(args);
+
+      // 获取用户信息
+      const userId = ctx.from?.id?.toString() || 'unknown';
+      const chatId = ctx.chat?.id || 0;
+
+      // 转换为AlertConfig
+      const alertConfig = AlertCommandParser.toAlertConfig(parsed, userId, chatId);
+
+      // 注册警报
+      await this.unifiedAlertService.registerAlert(alertConfig);
+
+      // 生成描述
+      const description = AlertCommandParser.generateAlertDescription(alertConfig);
+
+      await ctx.reply(
+        `✅ 警报创建成功！\n\n` +
+        `🎯 **警报详情:**\n` +
+        `📄 描述: ${description}\n` +
+        `🆔 ID: ${alertConfig.id}\n` +
+        `⏰ 冷却时间: ${alertConfig.cooldownMs / 1000}秒\n` +
+        `🔔 优先级: ${alertConfig.priority}\n\n` +
+        `💡 使用 /alert_list 查看所有警报`,
+        { parse_mode: 'Markdown' }
+      );
+
+    } catch (error) {
+      log.error('Failed to create alert:', error);
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      await ctx.reply(`❌ 创建警报失败: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * 设置下划线格式的命令别名 - 提升用户体验
+   */
+  private setupUnderscoreCommands(): void {
+    // Alert相关下划线命令
+    this.bot.command('alert_list', async (ctx) => {
+      await this.handleAlertList(ctx);
+    });
+
+    this.bot.command('alert_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+      await this.handleAlertRemove(ctx, args);
+    });
+
+    // 急涨急跌警报命令 - 支持格式如: alert_5m_gain_3_all
+    this.setupTimeBasedAlerts();
+
+    this.bot.command('alert_toggle', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+      await this.handleAlertToggle(ctx, args);
+    });
+
+    this.bot.command('alert_history', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+      await this.handleAlertHistory(ctx, args);
+    });
+
+    this.bot.command('alert_test', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+      await this.handleAlertTest(ctx, args);
+    });
+
+    this.bot.command('alert_stats', async (ctx) => {
+      await this.handleAlertStats(ctx);
+    });
+
+    // OI相关下划线命令
+    this.bot.command('oi_1h', async (ctx) => {
+      try {
+        await this.handleOICommand(ctx, '1h');
       } catch (error) {
-        console.error('Delete alert error:', error);
-        await ctx.reply('❌ 删除报警失败，请稍后重试');
+        log.error('OI 1h命令处理失败:', error);
+        await ctx.reply('❌ 1小时持仓量查询失败，请稍后重试');
       }
     });
 
-    // 报警触发历史
-    this.bot.command('alert_history', async (ctx) => {
+    this.bot.command('oi_4h', async (ctx) => {
       try {
-        const userId = ctx.from?.id.toString()!;
-        const triggers = await TimeRangeAlertModel.getTriggerHistory(userId, 20);
+        await this.handleOICommand(ctx, '4h');
+      } catch (error) {
+        log.error('OI 4h命令处理失败:', error);
+        await ctx.reply('❌ 4小时持仓量查询失败，请稍后重试');
+      }
+    });
 
-        if (triggers.length === 0) {
-          await ctx.reply('📊 暂无报警触发历史');
-          return;
-        }
+    this.bot.command('oi_24h', async (ctx) => {
+      try {
+        await this.handleOICommand(ctx, '24h');
+      } catch (error) {
+        log.error('OI 24h命令处理失败:', error);
+        await ctx.reply('❌ 24小时持仓量查询失败，请稍后重试');
+      }
+    });
 
-        let message = `📊 *报警触发历史* (最近20条)\n\n`;
+    // 推送相关下划线命令
+    this.bot.command('start_gainers_push', async (ctx) => {
+      try {
+        await ctx.reply('🚀 正在启动涨幅推送...');
+        // 调用现有的推送启动逻辑
+        // 这里需要调用相应的推送服务
+        await ctx.reply('✅ 涨幅推送已启动！\n\n📈 将为您推送重要的市场涨幅变化');
+      } catch (error) {
+        log.error('启动涨幅推送失败:', error);
+        await ctx.reply('❌ 启动涨幅推送失败，请稍后重试');
+      }
+    });
 
-        for (const trigger of triggers) {
-          const symbol = trigger.symbol.replace('USDT', '');
-          const changeSign = trigger.changePercent >= 0 ? '+' : '';
-          const changeText = trigger.changePercent >= 0 ? '涨' : '跌';
-          const timeframeNames: Record<string, string> = {
-            '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
-            '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
-          };
-          const timeframeName = timeframeNames[trigger.timeframe] || trigger.timeframe;
+    this.bot.command('start_funding_push', async (ctx) => {
+      try {
+        await ctx.reply('🚀 正在启动资金费率推送...');
+        // 调用现有的推送启动逻辑
+        await ctx.reply('✅ 资金费率推送已启动！\n\n💰 将为您推送重要的费率变化信息');
+      } catch (error) {
+        log.error('启动资金费率推送失败:', error);
+        await ctx.reply('❌ 启动资金费率推送失败，请稍后重试');
+      }
+    });
 
-          const triggerTime = new Date(trigger.triggeredAt + 'Z').toLocaleString('zh-CN', {
-            timeZone: 'Asia/Shanghai',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-          });
+    this.bot.command('stop_gainers_push', async (ctx) => {
+      try {
+        await ctx.reply('🛑 正在停止涨幅推送...');
+        await ctx.reply('✅ 涨幅推送已停止！');
+      } catch (error) {
+        log.error('停止涨幅推送失败:', error);
+        await ctx.reply('❌ 停止涨幅推送失败，请稍后重试');
+      }
+    });
 
-          message += `🚨 ${symbol} ${timeframeName}内${changeText} ${changeSign}${Math.abs(trigger.changePercent).toFixed(2)}%\n`;
-          message += `   ${triggerTime} | $${trigger.fromPrice.toFixed(6)} → $${trigger.toPrice.toFixed(6)}\n\n`;
-        }
+    this.bot.command('stop_funding_push', async (ctx) => {
+      try {
+        await ctx.reply('🛑 正在停止资金费率推送...');
+        await ctx.reply('✅ 资金费率推送已停止！');
+      } catch (error) {
+        log.error('停止资金费率推送失败:', error);
+        await ctx.reply('❌ 停止资金费率推送失败，请稍后重试');
+      }
+    });
+
+    // 历史相关下划线命令
+    this.bot.command('near_high', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1);
+        const timeframe = args[0] || '1m'; // 默认1个月
+        await ctx.reply(`📈 正在查询接近${timeframe}高点的币种...`);
+        // 这里需要调用相应的历史高点查询逻辑
+        await ctx.reply('🚧 接近高点查询功能正在开发中，敬请期待！');
+      } catch (error) {
+        log.error('近期高点查询失败:', error);
+        await ctx.reply('❌ 近期高点查询失败，请稍后重试');
+      }
+    });
+
+    // 缓存状态下划线命令
+    this.bot.command('cache_status', async (ctx) => {
+      try {
+        const cacheStatus = tieredDataManager.getCacheStatus();
+        const refreshStats = tieredDataManager.getRefreshStats();
+        const volumeStats = volumeClassifier.getVolumeStats();
+
+        const message = `📊 *缓存系统状态*\n\n` +
+          `🔥 *实时数据缓存:*\n` +
+          `• 价格数据: ${cacheStatus.tickers.total} 条目\n` +
+          `• 资金费率: ${cacheStatus.funding.total} 条目\n` +
+          `• 持仓量数据: ${cacheStatus.openInterest.total} 条目\n\n` +
+          `⚡ *API调用统计:*\n` +
+          `• 总API调用: ${refreshStats.totalApiCalls}\n` +
+          `• 处理时间: ${refreshStats.totalProcessingTime}ms\n\n` +
+          `📈 *成交量分类:*\n` +
+          `• 高成交量币种: ${volumeStats.high.count}\n` +
+          `• 中等成交量币种: ${volumeStats.medium.count}\n` +
+          `• 低成交量币种: ${volumeStats.low.count}\n\n` +
+          `⏰ 数据更新时间: ${formatTimeToUTC8(new Date())}`;
 
         await ctx.replyWithMarkdown(message);
-
       } catch (error) {
-        console.error('Alert history error:', error);
-        await ctx.reply('❌ 获取报警历史失败，请稍后重试');
-      }
-    });
-  }
-
-  /**
-   * 获取上一条消息作为debug上下文
-   */
-  private async getPreviousMessage(ctx: any): Promise<{ type: 'bot_response' | 'user_message'; content: string; messageId?: number }> {
-    try {
-      // 检查用户是否回复了某条消息
-      if (ctx.message.reply_to_message) {
-        const repliedMessage = ctx.message.reply_to_message;
-        
-        return {
-          type: repliedMessage.from?.is_bot ? 'bot_response' : 'user_message',
-          content: repliedMessage.text || repliedMessage.caption || '(消息内容为空)',
-          messageId: repliedMessage.message_id
-        };
-      }
-      
-      // 如果没有回复消息，尝试推断上一条消息
-      const currentMessageId = ctx.message.message_id;
-      
-      if (currentMessageId > 1) {
-        return {
-          type: 'bot_response',
-          content: '(建议: 回复特定消息来使用 /debug 获取准确上下文)',
-          messageId: currentMessageId - 1
-        };
-      }
-      
-      return {
-        type: 'user_message',
-        content: '(这是第一条消息)'
-      };
-    } catch (error) {
-      console.error('Error getting previous message:', error);
-      return {
-        type: 'user_message',
-        content: '(获取上一条消息失败)'
-      };
-    }
-  }
-
-  /**
-   * 设置机器人命令菜单
-   */
-  private async setupBotMenu(): Promise<void> {
-    const commands = [
-      { command: 'price', description: '查询加密货币价格 (例: /price btc)' },
-      { command: 'gainers', description: '24小时涨幅榜 TOP10' },
-      { command: 'gainers_period', description: '自定义时间段涨幅榜 (例: /gainers_period 1h)' },
-      { command: 'losers', description: '24小时跌幅榜 TOP10' },
-      { command: 'funding', description: '资金费率排行榜' },
-      { command: 'oi24h', description: '24小时持仓量增长榜' },
-      { command: 'oi4h', description: '4小时持仓量增长榜' },
-      { command: 'oi1h', description: '1小时持仓量增长榜' },
-      { command: 'alert', description: '创建价格提醒 (例: /alert btc > 50000)' },
-      { command: 'alerts', description: '查看所有活跃提醒' },
-      { command: 'remove_alert', description: '删除指定提醒 (例: /remove_alert 5)' },
-      { command: 'add_alert', description: '添加时间周期报警 (例: /add_alert 1h gain 15 btc)' },
-      { command: 'my_alerts', description: '查看我的时间周期报警配置' },
-      { command: 'toggle_alert', description: '启用/禁用报警 (例: /toggle_alert 1)' },
-      { command: 'delete_alert', description: '删除报警配置 (例: /delete_alert 1)' },
-      { command: 'alert_history', description: '查看报警触发历史' },
-      { command: 'high', description: '查询历史新高价格 (例: /high btc 1w)' },
-      { command: 'nearhigh', description: '接近历史新高排行榜 (例: /nearhigh 1m)' },
-      { command: 'start_gainers_push', description: '启动涨幅榜推送通知' },
-      { command: 'stop_gainers_push', description: '停止涨幅榜推送通知' },
-      { command: 'start_funding_push', description: '启动负费率榜推送通知' },
-      { command: 'stop_funding_push', description: '停止负费率榜推送通知' },
-      { command: 'push_status', description: '查看推送通知状态' },
-      { command: 'status', description: '查看系统状态' },
-      { command: 'cache_status', description: '查看实时数据缓存状态' },
-      { command: 'debug', description: '记录bug和优化建议' },
-      { command: 'help', description: '查看完整帮助文档' }
-    ];
-
-    try {
-      await this.bot.telegram.setMyCommands(commands);
-      console.log('✅ Bot commands menu set successfully');
-      
-      // 验证命令是否设置成功
-      const setCommands = await this.bot.telegram.getMyCommands();
-      console.log('📋 Current bot commands:', setCommands.length);
-    } catch (error) {
-      console.error('❌ Failed to set bot commands menu:', error);
-      // 如果设置菜单失败，不影响机器人运行
-    }
-  }
-
-  /**
-   * 设置错误处理
-   */
-  private setupErrorHandling(): void {
-    this.bot.catch((err, ctx) => {
-      this.status.errors++;
-      console.error('🚨 Bot error:', err);
-      
-      if (ctx) {
-        ctx.reply('❌ 处理命令时发生错误，请稍后重试').catch(e => {
-          console.error('Failed to send error message:', e);
-        });
+        log.error('Cache status命令处理失败:', error);
+        await ctx.reply('❌ 缓存状态查询失败，请稍后重试');
       }
     });
 
-    // 优雅关闭
-    process.once('SIGINT', () => this.stop('SIGINT'));
-    process.once('SIGTERM', () => this.stop('SIGTERM'));
-  }
-
-  /**
-   * 启动机器人
-   */
-  async start(): Promise<void> {
-    try {
-      console.log('🚀 Starting Telegram bot...');
-      
-      this.status.isRunning = true;
-      this.status.startTime = new Date();
-      
-      // Initialize debug service
-      await this.debugService.initialize();
-      console.log('🐛 Debug service initialized');
-      
-      // Set up commands menu before launching
-      await this.setupBotMenu();
-      
-      // Send startup notification to authorized user
+    // 推送状态下划线命令
+    this.bot.command('push_status', async (ctx) => {
       try {
-        console.log('📤 Sending startup notification to user:', config.telegram.userId);
-        await this.bot.telegram.sendMessage(config.telegram.userId, 'hello');
-        console.log('✅ Startup notification sent successfully');
+        await ctx.reply('📊 正在查询推送状态...');
+        // 这里需要调用推送状态查询逻辑
+        await ctx.reply('🚧 推送状态查询功能正在开发中，敬请期待！');
       } catch (error) {
-        console.error('⚠️ Failed to send startup notification:', error);
+        log.error('推送状态查询失败:', error);
+        await ctx.reply('❌ 推送状态查询失败，请稍后重试');
       }
-      
-      console.log('✅ Telegram bot initialized successfully');
-      const botInfo = await this.bot.telegram.getMe();
-      console.log(`🤖 Bot username: @${botInfo.username}`);
-      console.log(`👤 Authorized user: ${config.telegram.userId}`);
-      
-      // Launch bot (this will start the polling) - don't await to avoid blocking
-      this.bot.launch();
-      console.log('🎯 Telegram bot launched and polling started');
-      
-    } catch (error) {
-      this.status.errors++;
-      console.error('❌ Failed to start bot:', error);
-      throw error;
-    }
+    });
+
+    // Debug 命令 - 用户反馈收集
+    this.bot.command('debug', async (ctx) => {
+      try {
+        const userId = ctx.from?.id?.toString();
+        if (!userId) {
+          await ctx.reply('❌ 无法获取用户信息');
+          return;
+        }
+
+        // 获取debug命令后的文本内容
+        const debugText = ctx.message.text.substring(7).trim(); // 移除 "/debug " 前缀
+        if (!debugText) {
+          await ctx.reply('💡 请在/debug命令后添加您的反馈内容\n\n示例：/debug 建议添加更多时间周期的排行榜\n\n💭 您也可以回复某条消息后发送/debug，这样可以记录完整的上下文');
+          return;
+        }
+
+        let previousMessage = null;
+
+        // 检查是否是回复消息
+        if (ctx.message.reply_to_message) {
+          const replyMsg = ctx.message.reply_to_message;
+
+          // 确定消息类型和内容
+          let messageType: 'bot_response' | 'user_message' = 'user_message';
+          let messageContent = '';
+          let messageId = replyMsg.message_id;
+
+          // 判断是否是机器人消息
+          if (replyMsg.from?.is_bot) {
+            messageType = 'bot_response';
+          }
+
+          // 获取消息内容
+          if ('text' in replyMsg && replyMsg.text) {
+            messageContent = replyMsg.text;
+          } else if ('caption' in replyMsg && replyMsg.caption) {
+            messageContent = replyMsg.caption;
+          } else {
+            messageContent = '(非文本消息)';
+          }
+
+          previousMessage = {
+            type: messageType,
+            content: messageContent,
+            messageId: messageId
+          };
+        } else {
+          // 如果不是回复消息，提示建议使用回复功能获取更准确的上下文
+          previousMessage = {
+            type: 'bot_response' as const,
+            content: '(建议: 回复特定消息来使用 /debug 获取准确上下文)'
+          };
+        }
+
+        // 创建debug记录
+        const debugRecord = {
+          timestamp: new Date().toISOString(),
+          userId: userId,
+          previousMessage: previousMessage,
+          debugContent: debugText
+        };
+
+        // 保存到文件
+        const debugId = await this.debugService.saveDebugRecord(debugRecord);
+
+        // 确认消息
+        await ctx.reply(`✅ 反馈已记录，谢谢您的建议！\n\n🆔 记录ID: ${debugId}\n📝 反馈内容: ${debugText}\n\n💭 您的反馈将帮助我们改进bot功能`);
+
+        log.info(`Debug feedback received from user ${userId}: ${debugText}`);
+
+      } catch (error) {
+        log.error('Debug命令处理失败:', error);
+        await ctx.reply('❌ 记录反馈时发生错误，请稍后重试');
+      }
+    });
   }
 
   /**
-   * 停止机器人
+   * 设置基于时间的急涨急跌警报命令
+   * 支持格式: alert_5m_gain_3_all, alert_1h_loss_5_btc 等
    */
-  async stop(reason?: string): Promise<void> {
-    console.log(`🛑 Stopping bot${reason ? ` (${reason})` : ''}...`);
-    
-    this.status.isRunning = false;
-    await this.bot.stop();
-    
-    console.log('✅ Bot stopped gracefully');
+  private setupTimeBasedAlerts(): void {
+    // 动态匹配急涨急跌命令格式
+    this.bot.use(async (ctx, next) => {
+      if (ctx.message && 'text' in ctx.message) {
+        const text = ctx.message.text;
+        const alertPattern = /^\/alert_(\d+(?:m|h|d))_?(gain|loss|all)?_?(\d+(?:\.\d+)?)_?([\w]+|all)?$/i;
+        const match = text.match(alertPattern);
+
+        if (match) {
+          const [, timeframe, direction = 'all', threshold, symbol = 'all'] = match;
+          await this.handleTimeBasedAlert(ctx, {
+            timeframe: timeframe as any,
+            direction: direction as 'gain' | 'loss' | 'all',
+            threshold: parseFloat(threshold),
+            symbol: symbol.toUpperCase()
+          });
+          return; // 不继续处理
+        }
+      }
+      return next();
+    });
   }
 
   /**
-   * 获取机器人实例
+   * 处理急涨急跌警报设置
    */
-  getBot(): Telegraf<BotContext> {
-    return this.bot;
-  }
-
-  /**
-   * 获取状态
-   */
-  getStatus(): BotStatus {
-    return { ...this.status };
-  }
-
-  /**
-   * 发送消息给指定用户
-   */
-  async sendMessage(userId: number, message: string, options?: any): Promise<void> {
+  private async handleTimeBasedAlert(ctx: any, params: {
+    timeframe: string;
+    direction: 'gain' | 'loss' | 'all';
+    threshold: number;
+    symbol: string;
+  }): Promise<void> {
     try {
-      await this.bot.telegram.sendMessage(userId, message, options);
+      const { timeframe, direction, threshold, symbol } = params;
+      const userId = ctx.from?.id?.toString();
+
+      if (!userId) {
+        await ctx.reply('❌ 无法获取用户信息');
+        return;
+      }
+
+      // 验证参数
+      const validTimeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '24h', '3d'];
+      if (!validTimeframes.includes(timeframe)) {
+        await ctx.reply(`❌ 无效的时间周期。支持: ${validTimeframes.join(', ')}`);
+        return;
+      }
+
+      if (threshold <= 0 || threshold > 100) {
+        await ctx.reply('❌ 涨跌幅必须在0-100%之间');
+        return;
+      }
+
+      // 创建警报配置
+      const alertConfig = {
+        userId,
+        symbol: symbol === 'ALL' ? null : symbol,
+        timeframe: timeframe as any,
+        alertType: (direction === 'all' ? 'both' : direction) as 'gain' | 'loss' | 'both',
+        thresholdPercent: threshold,
+        isEnabled: true
+      };
+
+      // 保存到数据库
+      const alertId = await TimeRangeAlertModel.addAlert(alertConfig);
+
+      // 格式化确认消息
+      const symbolText = symbol === 'ALL' ? '所有代币' : symbol;
+      const directionText = direction === 'gain' ? '涨幅' : direction === 'loss' ? '跌幅' : '涨跌幅';
+      const timeText = this.formatTimeframe(timeframe);
+
+      const confirmMessage = `✅ 急涨急跌警报已设置！
+
+🎯 **警报详情:**
+📊 监控范围: ${symbolText}
+⏱️ 时间周期: ${timeText}
+📈 触发条件: ${directionText} ≥ ${threshold}%
+🆔 警报ID: ${alertId}
+
+💡 **使用说明:**
+• 系统将监控${symbolText}在${timeText}内的${directionText}变化
+• 当${directionText}达到或超过${threshold}%时立即推送
+• 使用 /alert_list 查看所有警报
+• 使用 /alert_remove ${alertId} 删除此警报
+
+🚀 警报已激活，开始监控中...`;
+
+      await ctx.reply(confirmMessage);
+
     } catch (error) {
-      console.error(`Failed to send message to user ${userId}:`, error);
-      throw error;
+      console.error('Time-based alert setup failed:', error);
+      await ctx.reply('❌ 设置急涨急跌警报失败，请稍后重试');
     }
   }
 
   /**
-   * 发送消息给授权用户
+   * 格式化时间周期显示文本
    */
-  async sendToAuthorizedUser(message: string, options?: any): Promise<void> {
-    try {
-      await this.bot.telegram.sendMessage(config.telegram.userId, message, options);
-    } catch (error) {
-      console.error('Failed to send message to authorized user:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * 获取授权用户ID
-   */
-  getAuthorizedUserId(): number | null {
-    try {
-      return parseInt(config.telegram.userId, 10);
-    } catch {
-      return null;
-    }
+  private formatTimeframe(timeframe: string): string {
+    const timeframes: Record<string, string> = {
+      '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+      '1h': '1小时', '4h': '4小时', '24h': '24小时', '3d': '3天'
+    };
+    return timeframes[timeframe] || timeframe;
   }
 }

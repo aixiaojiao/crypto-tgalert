@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { log } from './logger';
+import { Injectable, Singleton } from '../core/container/decorators';
 
 export interface CacheEntry<T> {
   value: T;
@@ -26,6 +27,7 @@ export interface CacheOptions {
 /**
  * Multi-tier caching system with L1 memory cache and L2 persistent cache
  */
+@Injectable()
 export class CacheManager<T = any> {
   private memoryCache = new Map<string, CacheEntry<T>>();
   private stats = {
@@ -259,7 +261,52 @@ export class CacheManager<T = any> {
   }
 }
 
-// Global cache instances for different data types
+// DI-ready cache service classes for different data types
+@Singleton
+export class PriceCacheService extends CacheManager {
+  constructor() {
+    super({
+      maxSize: 5000,
+      defaultTtl: CacheManager.TTL.PRICE,
+      enablePersistent: false // Price data is too volatile for persistent cache
+    });
+  }
+}
+
+@Singleton
+export class MarketDataCacheService extends CacheManager {
+  constructor() {
+    super({
+      maxSize: 2000,
+      defaultTtl: CacheManager.TTL.STATS_24H,
+      enablePersistent: true
+    });
+  }
+}
+
+@Singleton
+export class OICacheService extends CacheManager {
+  constructor() {
+    super({
+      maxSize: 3000,
+      defaultTtl: CacheManager.TTL.OI_HIST,
+      enablePersistent: true
+    });
+  }
+}
+
+@Singleton
+export class FundingCacheService extends CacheManager {
+  constructor() {
+    super({
+      maxSize: 1000,
+      defaultTtl: CacheManager.TTL.FUNDING,
+      enablePersistent: true
+    });
+  }
+}
+
+// 保持向后兼容的导出（迁移期间使用）
 export const priceCache = new CacheManager({
   maxSize: 5000,
   defaultTtl: CacheManager.TTL.PRICE,

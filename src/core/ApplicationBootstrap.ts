@@ -47,6 +47,12 @@ export class ApplicationBootstrap {
   private registerBusinessServices(): void {
     log.debug('📝 Registering business services');
 
+    // Batch 1: 注册基础层DI服务
+    this.registerFoundationServices();
+
+    // Batch 2: 注册核心API服务
+    this.registerCoreApiServices();
+
     // 注册触发警报服务 (保持向后兼容)
     this.serviceRegistry.registerInstance('TRIGGER_ALERT_SERVICE', triggerAlertService);
 
@@ -118,6 +124,61 @@ export class ApplicationBootstrap {
     });
 
     log.debug('✅ Business services registered');
+  }
+
+  /**
+   * 注册基础层服务 (Batch 1 DI Migration)
+   */
+  private registerFoundationServices(): void {
+    log.debug('📝 Registering foundation services (Batch 1)');
+
+    // 注册速率限制器
+    this.serviceRegistry.registerFactory('BINANCE_RATE_LIMITER', () => {
+      const { BinanceRateLimiter } = require('../utils/ratelimit');
+      return new BinanceRateLimiter();
+    });
+
+    // 注册缓存服务
+    this.serviceRegistry.registerFactory('PRICE_CACHE_SERVICE', () => {
+      const { PriceCacheService } = require('../utils/cache');
+      return new PriceCacheService();
+    });
+
+    this.serviceRegistry.registerFactory('MARKET_DATA_CACHE_SERVICE', () => {
+      const { MarketDataCacheService } = require('../utils/cache');
+      return new MarketDataCacheService();
+    });
+
+    this.serviceRegistry.registerFactory('OI_CACHE_SERVICE', () => {
+      const { OICacheService } = require('../utils/cache');
+      return new OICacheService();
+    });
+
+    this.serviceRegistry.registerFactory('FUNDING_CACHE_SERVICE', () => {
+      const { FundingCacheService } = require('../utils/cache');
+      return new FundingCacheService();
+    });
+
+    log.debug('✅ Foundation services registered (Batch 1)');
+  }
+
+  /**
+   * 注册核心API服务 (Batch 2 DI Migration)
+   */
+  private registerCoreApiServices(): void {
+    log.debug('📝 Registering core API services (Batch 2)');
+
+    // 注册BinanceClient
+    this.serviceRegistry.registerFactory('BINANCE_CLIENT_SERVICE', (container) => {
+      const { BinanceClient } = require('../services/binance');
+      const rateLimiter = container.resolve('BINANCE_RATE_LIMITER');
+      const oiCacheService = container.resolve('OI_CACHE_SERVICE');
+      const marketDataCacheService = container.resolve('MARKET_DATA_CACHE_SERVICE');
+
+      return new BinanceClient(rateLimiter, oiCacheService, marketDataCacheService);
+    });
+
+    log.debug('✅ Core API services registered (Batch 2)');
   }
 
   /**

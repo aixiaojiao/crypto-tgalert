@@ -11,17 +11,26 @@ import {
   AlertPriority
 } from './IAlertService';
 import { log } from '../../utils/logger';
+
 export class NotificationService implements INotificationService {
   private templates = new Map<string, NotificationTemplate>();
   private configs = new Map<NotificationChannel, NotificationConfig>();
   private history: NotificationHistoryItem[] = [];
   private rateLimitMap = new Map<string, number>();
+  private telegramBot: any; // TelegramBot instance
 
   constructor(
     private logger: typeof log
   ) {
     this.initializeDefaultConfigs();
     this.initializeDefaultTemplates();
+  }
+
+  /**
+   * 设置Telegram Bot实例
+   */
+  setTelegramBot(bot: any): void {
+    this.telegramBot = bot;
   }
 
   async sendNotification(
@@ -255,16 +264,25 @@ export class NotificationService implements INotificationService {
     context: NotificationContext
   ): Promise<NotificationResult> {
     try {
-      // 这里应该集成实际的Telegram Bot API
-      // 暂时返回模拟结果
+      if (!this.telegramBot) {
+        throw new Error('Telegram bot not configured');
+      }
+
+      // 从context中获取chatId，或使用默认的授权用户
+      const chatId = context.metadata?.alert?.metadata?.chatId || this.telegramBot.getAuthorizedUserId();
+
+      if (!chatId) {
+        throw new Error('No valid chat ID available for notification');
+      }
+
       this.logger.info('Sending Telegram notification', {
         alertId: context.event.alertId,
+        chatId,
         messageLength: message.length
       });
 
-      // TODO: 实际的Telegram发送逻辑
-      // const bot = await this.getTelegramBot();
-      // const result = await bot.sendMessage(message);
+      // 发送消息
+      await this.telegramBot.sendMessage(chatId, message);
 
       return {
         success: true,
@@ -272,6 +290,11 @@ export class NotificationService implements INotificationService {
         messageId: `tg-${Date.now()}`
       };
     } catch (error) {
+      this.logger.error('Failed to send Telegram notification', {
+        alertId: context.event.alertId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
       return {
         success: false,
         channel: NotificationChannel.TELEGRAM,

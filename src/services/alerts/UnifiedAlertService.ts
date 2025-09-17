@@ -20,7 +20,7 @@ export class UnifiedAlertService implements IAlertService {
   private isProcessing = false;
 
   constructor(
-    private logger: typeof log,
+    protected logger: typeof log,
     private notificationService: INotificationService
   ) {}
 
@@ -245,7 +245,7 @@ export class UnifiedAlertService implements IAlertService {
     };
   }
 
-  private async handleTriggeredAlert(event: AlertEvent, alert: AlertConfig): Promise<void> {
+  protected async handleTriggeredAlert(event: AlertEvent, alert: AlertConfig): Promise<void> {
     // 记录触发时间
     this.lastTriggerTimes.set(alert.id, Date.now());
     this.cooldownMap.set(alert.id, Date.now() + alert.cooldownMs);
