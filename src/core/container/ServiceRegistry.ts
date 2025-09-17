@@ -1,7 +1,7 @@
 import { Container } from './Container';
 import { IContainer, ServiceLifetime } from './IContainer';
 import { getDependencies, getInjectableMetadata, isInjectable, SERVICE_IDENTIFIERS } from './decorators';
-import { getDataManager } from '@/data/DataManager';
+import { getDataManager } from '../../data/DataManager';
 import { binanceClient } from '../../services/binance';
 import { log } from '../../utils/logger';
 import { config } from '../../config';
