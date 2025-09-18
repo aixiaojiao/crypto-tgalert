@@ -5,6 +5,7 @@ import { PriceMonitorService } from './services/priceMonitor';
 import { triggerAlertService } from './services/triggerAlerts';
 import { historicalHighCache } from './services/historicalHighCacheV2';
 import { binanceRateLimit } from './utils/ratelimit';
+import { getServiceRegistry } from './core/container';
 
 /**
  * 完整的应用程序类 - 集成所有组件
@@ -31,19 +32,24 @@ export class CryptoTgAlertApp {
       console.log('📊 Initializing database...');
       await initDatabase();
 
-      // 2. 初始化统一警报服务
+      // 2. 初始化服务注册表
+      console.log('🔧 Initializing service registry...');
+      getServiceRegistry();
+      console.log('✅ Service registry initialized');
+
+      // 3. 初始化统一警报服务
       console.log('⚡ Initializing unified alert service...');
       await this.telegramBot.initializeUnifiedAlerts();
 
-      // 3. 初始化调试服务
+      // 4. 初始化调试服务
       console.log('🐛 Initializing debug service...');
       await this.telegramBot.initializeDebugService();
 
-      // 4. 初始化触发提醒服务
+      // 5. 初始化触发提醒服务
       console.log('⚡ Initializing trigger alerts...');
       await triggerAlertService.initialize();
 
-      // 5. 测试Binance连接（带重试机制）
+      // 6. 测试Binance连接（带重试机制）
       console.log('💰 Testing Binance connection...');
       let btcPrice: number;
 
@@ -56,20 +62,20 @@ export class CryptoTgAlertApp {
         btcPrice = 50000; // 使用默认值继续启动
       }
 
-      // 5. 启动价格监控
+      // 7. 启动价格监控
       console.log('⚡ Starting price monitoring...');
       await this.priceMonitor.startMonitoring();
 
-      // 6. 初始化历史新高缓存
+      // 8. 初始化历史新高缓存
       console.log('📈 Initializing historical high cache...');
       await historicalHighCache.initialize();
 
       console.log('✅ All systems online!');
 
-      // 7. 发送启动通知（在启动Telegram机器人前）
+      // 9. 发送启动通知（在启动Telegram机器人前）
       await this.sendStartupNotification(btcPrice);
 
-      // 8. 启动Telegram机器人（这是阻塞操作，必须最后执行）
+      // 10. 启动Telegram机器人（这是阻塞操作，必须最后执行）
       console.log('🤖 Starting Telegram bot...');
       await this.telegramBot.start();
       

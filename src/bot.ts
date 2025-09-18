@@ -24,6 +24,11 @@ import { NotificationService } from './services/alerts/NotificationService';
 import { PersistentAlertService } from './services/alerts/PersistentAlertService';
 import { AlertCommandParser } from './utils/alertParser';
 import { DebugService } from './services/debugService';
+import { resolve } from './core/container';
+import { SERVICE_IDENTIFIERS } from './core/container/decorators';
+import { BlacklistCommandHandler } from './services/telegram/commands/BlacklistCommandHandler';
+import { MuteCommandHandler } from './services/telegram/commands/MuteCommandHandler';
+import { FilterCommandHandler } from './services/telegram/commands/FilterCommandHandler';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -32,6 +37,9 @@ export class TelegramBot {
   private notificationService: NotificationService;
   private unifiedAlertService: PersistentAlertService;
   private debugService: DebugService;
+  private blacklistCommandHandler: BlacklistCommandHandler;
+  private muteCommandHandler: MuteCommandHandler;
+  private filterCommandHandler: FilterCommandHandler;
 
   constructor() {
     this.bot = new Telegraf<BotContext>(config.telegram.botToken);
@@ -47,6 +55,13 @@ export class TelegramBot {
     this.notificationService = new NotificationService(log);
     this.unifiedAlertService = new PersistentAlertService(log, this.notificationService);
     this.debugService = new DebugService();
+
+    // Initialize filter command handlers
+    const filterManager = resolve(SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER) as any;
+    const userFilterService = resolve(SERVICE_IDENTIFIERS.USER_FILTER_SERVICE) as any;
+    this.blacklistCommandHandler = new BlacklistCommandHandler(null, log, filterManager, userFilterService);
+    this.muteCommandHandler = new MuteCommandHandler(null, log, filterManager, userFilterService);
+    this.filterCommandHandler = new FilterCommandHandler(null, log, filterManager, userFilterService);
 
     this.setupMiddleware();
     this.setupCommands();
@@ -193,6 +208,12 @@ export class TelegramBot {
         { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
         { command: 'alert_list', description: '⚡ 查看我的警报列表' },
         { command: 'start_gainers_push', description: '🔔 开启涨幅推送' },
+        { command: 'blacklist_add', description: '🛡️ 添加个人黑名单' },
+        { command: 'blacklist_list', description: '🛡️ 查看过滤规则' },
+        { command: 'mute_add', description: '🔇 临时屏蔽代币' },
+        { command: 'mute_list', description: '🔇 查看屏蔽列表' },
+        { command: 'filter_settings', description: '⚙️ 过滤设置管理' },
+        { command: 'filter_volume', description: '⚙️ 设置交易量阈值' },
         { command: 'status', description: '⚙️ 查看系统状态' }
       ];
 
@@ -291,6 +312,11 @@ export class TelegramBot {
 /price btc - 查看BTC价格
 /alert btc > 50000 - 添加价格警报 🆕
 
+🛡️ *过滤管理:*
+/blacklist_add doge - 添加DOGE到黑名单
+/mute_add shib 2h - 临时屏蔽SHIB 2小时
+/filter_settings - 查看过滤设置
+
 🤖 机器人已准备就绪！
       `;
 
@@ -351,6 +377,17 @@ export class TelegramBot {
 📈 历史分析:
 /high btc 1w - BTC一周高点
 /near_high 1m - 接近月高点币种
+
+🛡️ 过滤管理:
+/blacklist_add <symbol> - 添加个人黑名单
+/blacklist_remove <symbol> - 移除黑名单
+/blacklist_list - 查看过滤规则状态
+/mute_add <symbol> <duration> - 临时屏蔽代币
+/mute_remove <symbol> - 解除屏蔽
+/mute_list - 查看屏蔽列表
+/filter_settings - 查看过滤设置
+/filter_volume <amount> - 设置交易量阈值
+/filter_auto on/off - 启用/禁用自动过滤
 
 ⚙️ 系统:
 /status - 系统状态
@@ -1643,6 +1680,31 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       await ctx.reply(`❌ 创建警报失败: ${errorMessage}`);
     }
+
+    // Filter management commands
+    this.bot.command('blacklist', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      const result = await this.blacklistCommandHandler.handle(ctx, args);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('mute', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      const result = await this.muteCommandHandler.handle(ctx, args);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('filter', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      const result = await this.filterCommandHandler.handle(ctx, args);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
   }
 
   /**
@@ -1804,6 +1866,121 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         log.error('推送状态查询失败:', error);
         await ctx.reply('❌ 推送状态查询失败，请稍后重试');
+      }
+    });
+
+    // Filter相关下划线命令
+    this.bot.command('blacklist_add', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /blacklist_add <symbol> [reason]\n示例: /blacklist_add SHIB 垃圾币');
+        return;
+      }
+      const result = await this.blacklistCommandHandler.handle(ctx, ['add', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('blacklist_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /blacklist_remove <symbol>\n示例: /blacklist_remove DOGE');
+        return;
+      }
+      const result = await this.blacklistCommandHandler.handle(ctx, ['remove', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('blacklist_list', async (ctx) => {
+      const result = await this.blacklistCommandHandler.handle(ctx, ['list']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('blacklist_clear', async (ctx) => {
+      const result = await this.blacklistCommandHandler.handle(ctx, ['clear']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('mute_add', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length < 2) {
+        await ctx.reply('❌ 参数不足\n用法: /mute_add <symbol> <duration> [reason]\n示例: /mute_add DOGE 2h 波动太大\n\n时间格式: 30m, 2h, 1d, 1w');
+        return;
+      }
+      const result = await this.muteCommandHandler.handle(ctx, args);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('mute_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要解除屏蔽的代币符号\n用法: /mute_remove <symbol>\n示例: /mute_remove BTC');
+        return;
+      }
+      const result = await this.muteCommandHandler.handle(ctx, ['remove', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('mute_list', async (ctx) => {
+      const result = await this.muteCommandHandler.handle(ctx, ['list']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('mute_clear', async (ctx) => {
+      const result = await this.muteCommandHandler.handle(ctx, ['clear']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('filter_settings', async (ctx) => {
+      const result = await this.filterCommandHandler.handle(ctx, ['settings']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('filter_volume', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定交易量阈值\n用法: /filter_volume <amount>\n示例: /filter_volume 10 (表示10M USDT)');
+        return;
+      }
+      const result = await this.filterCommandHandler.handle(ctx, ['volume', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('filter_auto', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定开关状态\n用法: /filter_auto on|off\n示例: /filter_auto on');
+        return;
+      }
+      const result = await this.filterCommandHandler.handle(ctx, ['auto', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('filter_stats', async (ctx) => {
+      const result = await this.filterCommandHandler.handle(ctx, ['stats']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 

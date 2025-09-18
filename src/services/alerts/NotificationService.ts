@@ -11,6 +11,9 @@ import {
   AlertPriority
 } from './IAlertService';
 import { log } from '../../utils/logger';
+import { resolve } from '../../core/container';
+import { SERVICE_IDENTIFIERS } from '../../core/container/decorators';
+import { IAdvancedFilterManager } from '../filters/AdvancedFilterManager';
 
 export class NotificationService implements INotificationService {
   private templates = new Map<string, NotificationTemplate>();
@@ -18,12 +21,20 @@ export class NotificationService implements INotificationService {
   private history: NotificationHistoryItem[] = [];
   private rateLimitMap = new Map<string, number>();
   private telegramBot: any; // TelegramBot instance
+  private filterManager: IAdvancedFilterManager | null = null;
 
   constructor(
     private logger: typeof log
   ) {
     this.initializeDefaultConfigs();
     this.initializeDefaultTemplates();
+
+    // Initialize filter manager
+    try {
+      this.filterManager = resolve(SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER) as IAdvancedFilterManager;
+    } catch (error) {
+      this.logger.warn('Failed to initialize filter manager in NotificationService', { error });
+    }
   }
 
   /**
@@ -275,10 +286,43 @@ export class NotificationService implements INotificationService {
         throw new Error('No valid chat ID available for notification');
       }
 
+      // 检查用户过滤设置
+      if (this.filterManager && context.event.symbol) {
+        try {
+          const shouldSend = await this.filterManager.shouldSendAlert(
+            chatId.toString(),
+            context.event.symbol,
+            context.event.type
+          );
+
+          if (!shouldSend) {
+            this.logger.info('Notification filtered by user settings', {
+              alertId: context.event.alertId,
+              symbol: context.event.symbol,
+              chatId,
+              type: context.event.type
+            });
+
+            return {
+              success: true, // 认为是成功的，只是被过滤了
+              channel: NotificationChannel.TELEGRAM,
+              messageId: `filtered-${Date.now()}`
+            };
+          }
+        } catch (filterError) {
+          this.logger.error('Error checking filter settings, sending notification anyway', {
+            alertId: context.event.alertId,
+            symbol: context.event.symbol,
+            error: filterError
+          });
+        }
+      }
+
       this.logger.info('Sending Telegram notification', {
         alertId: context.event.alertId,
         chatId,
-        messageLength: message.length
+        messageLength: message.length,
+        symbol: context.event.symbol
       });
 
       // 发送消息

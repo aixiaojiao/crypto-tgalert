@@ -25,6 +25,25 @@ export interface AlertHistory {
   message: string;
 }
 
+export interface UserFilter {
+  id: number;
+  user_id: string;
+  symbol: string;
+  filter_type: 'blacklist' | 'mute';
+  expires_at: number | null;
+  reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface UserFilterSettings {
+  user_id: string;
+  volume_threshold: number;
+  enable_auto_filter: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
 export const createTables = `
   CREATE TABLE IF NOT EXISTS user_config (
     user_id TEXT PRIMARY KEY,
@@ -54,6 +73,31 @@ export const createTables = `
     FOREIGN KEY(alert_id) REFERENCES price_alerts(id)
   );
 
+  CREATE TABLE IF NOT EXISTS user_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    filter_type TEXT NOT NULL CHECK (filter_type IN ('blacklist', 'mute')),
+    expires_at INTEGER NULL,
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES user_config(user_id),
+    UNIQUE(user_id, symbol, filter_type)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_filter_settings (
+    user_id TEXT PRIMARY KEY,
+    volume_threshold INTEGER DEFAULT 10000000,
+    enable_auto_filter BOOLEAN DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES user_config(user_id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts(is_active, symbol);
   CREATE INDEX IF NOT EXISTS idx_alert_history_alert ON alert_history(alert_id);
+  CREATE INDEX IF NOT EXISTS idx_user_filters_user ON user_filters(user_id, filter_type);
+  CREATE INDEX IF NOT EXISTS idx_user_filters_expires ON user_filters(expires_at);
+  CREATE INDEX IF NOT EXISTS idx_user_filters_symbol ON user_filters(symbol);
 `;

@@ -277,6 +277,28 @@ export class ServiceRegistry {
       },
       ServiceLifetime.SINGLETON
     );
+
+    // === User Filter Management System (用户过滤管理系统) ===
+    // 用户过滤服务
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.USER_FILTER_SERVICE,
+      (_container) => {
+        const { UserFilterService } = require('../../services/filters/UserFilterService');
+        return new UserFilterService();
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 高级过滤管理器
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER,
+      (container) => {
+        const { AdvancedFilterManager } = require('../../services/filters/AdvancedFilterManager');
+        const userFilterService = container.resolve(SERVICE_IDENTIFIERS.USER_FILTER_SERVICE);
+        return new AdvancedFilterManager(userFilterService);
+      },
+      ServiceLifetime.SINGLETON
+    );
   }
 
   /**

@@ -153,7 +153,11 @@ export const SERVICE_IDENTIFIERS = {
   PATTERN_ANALYZER: Symbol('PatternAnalyzer'),
   SUPPORT_RESISTANCE_ANALYZER: Symbol('SupportResistanceAnalyzer'),
   DIVERGENCE_ANALYZER: Symbol('DivergenceAnalyzer'),
-  MULTI_TIMEFRAME_ANALYZER: Symbol('MultiTimeFrameAnalyzer')
+  MULTI_TIMEFRAME_ANALYZER: Symbol('MultiTimeFrameAnalyzer'),
+
+  // User Filter Management System (用户过滤管理系统)
+  USER_FILTER_SERVICE: Symbol('UserFilterService'),
+  ADVANCED_FILTER_MANAGER: Symbol('AdvancedFilterManager')
 } as const;
 
 export type ServiceIdentifiers = typeof SERVICE_IDENTIFIERS;

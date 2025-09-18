@@ -3,6 +3,9 @@ import { log } from '../utils/logger';
 import { realtimeMarketCache, RankingResult } from './realtimeMarketCache';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
 import { getRiskIcon, getTokenRiskLevel, isRiskyToken } from '../config/tokenLists';
+import { resolve } from '../core/container';
+import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
+import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 // Utility function for UTC+8 time formatting
 function formatTimeToUTC8(date: Date | number): string {
   const targetDate = typeof date === 'number' ? new Date(date) : date;
@@ -42,6 +45,7 @@ export class RealtimeAlertService {
   private config: RealtimeAlertConfig;
   private pushRecords: Map<string, SymbolPushRecord> = new Map();
   private isEnabled: boolean = false;
+  private filterManager: IAdvancedFilterManager | null = null;
 
   constructor(config?: Partial<RealtimeAlertConfig>) {
     this.config = {
@@ -52,6 +56,13 @@ export class RealtimeAlertService {
       maxPushPerSymbol: 2,          // 10分钟内最多推送2次
       ...config
     };
+
+    // Initialize filter manager
+    try {
+      this.filterManager = resolve(SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER) as IAdvancedFilterManager;
+    } catch (error) {
+      log.warn('Failed to initialize filter manager in RealtimeAlertService', { error });
+    }
 
     log.info('RealtimeAlertService initialized', this.config);
   }
@@ -269,8 +280,35 @@ export class RealtimeAlertService {
       // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
       let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
 
-      // 显示完整TOP10榜单
-      const top10 = currentRankings.slice(0, 10);
+      // 显示完整TOP10榜单（过滤被屏蔽的代币）
+      let filteredRankings = currentRankings;
+
+      // 应用用户过滤设置
+      if (this.filterManager) {
+        try {
+          const userId = authorizedUserId.toString();
+          const filteredSymbols = await this.filterManager.filterSymbolList(
+            userId,
+            currentRankings.map(r => r.symbol.replace('USDT', ''))
+          );
+
+          filteredRankings = currentRankings.filter(ranking =>
+            filteredSymbols.includes(ranking.symbol.replace('USDT', ''))
+          );
+
+          if (filteredRankings.length < currentRankings.length) {
+            log.info('Some symbols filtered from ranking push', {
+              originalCount: currentRankings.length,
+              filteredCount: filteredRankings.length,
+              userId
+            });
+          }
+        } catch (filterError) {
+          log.error('Error applying filters to ranking push, showing all symbols', { filterError });
+        }
+      }
+
+      const top10 = filteredRankings.slice(0, 10);
       const priceFormatPromises = top10.map(async (ranking, index) => {
         const symbol = ranking.symbol.replace('USDT', '');
         const changePercent = formatPriceChange(ranking.priceChangePercent);
@@ -287,24 +325,53 @@ export class RealtimeAlertService {
         message += entry;
       });
 
-      // 添加变化提示
-      const newEntries = changes.filter(c => c.changeType === 'new_entry');
-      const positionChanges = changes.filter(c => c.changeType === 'position_change');
+      // 添加变化提示（也需要过滤）
+      let filteredNewEntries = changes.filter(c => c.changeType === 'new_entry');
+      let filteredPositionChanges = changes.filter(c => c.changeType === 'position_change');
 
-      if (newEntries.length > 0 || positionChanges.length > 0) {
+      // 对变化提示也应用过滤
+      if (this.filterManager) {
+        try {
+          const userId = authorizedUserId.toString();
+
+          if (filteredNewEntries.length > 0) {
+            const newEntrySymbols = await this.filterManager.filterSymbolList(
+              userId,
+              filteredNewEntries.map(c => c.symbol.replace('USDT', ''))
+            );
+            filteredNewEntries = filteredNewEntries.filter(change =>
+              newEntrySymbols.includes(change.symbol.replace('USDT', ''))
+            );
+          }
+
+          if (filteredPositionChanges.length > 0) {
+            const positionChangeSymbols = await this.filterManager.filterSymbolList(
+              userId,
+              filteredPositionChanges.map(c => c.symbol.replace('USDT', ''))
+            );
+            filteredPositionChanges = filteredPositionChanges.filter(change =>
+              positionChangeSymbols.includes(change.symbol.replace('USDT', ''))
+            );
+          }
+        } catch (filterError) {
+          log.error('Error applying filters to ranking changes', { filterError });
+        }
+      }
+
+      if (filteredNewEntries.length > 0 || filteredPositionChanges.length > 0) {
         message += `\n🔥 *本次变化:*\n`;
 
         // 新进入前10
-        if (newEntries.length > 0) {
-          for (const change of newEntries.slice(0, 2)) {
+        if (filteredNewEntries.length > 0) {
+          for (const change of filteredNewEntries.slice(0, 2)) {
             const symbol = change.symbol.replace('USDT', '');
             message += `• 🆕 **${symbol}** 新进入#${change.currentPosition}\n`;
           }
         }
 
         // 排名大幅变化
-        if (positionChanges.length > 0) {
-          for (const change of positionChanges.slice(0, 2)) {
+        if (filteredPositionChanges.length > 0) {
+          for (const change of filteredPositionChanges.slice(0, 2)) {
             const symbol = change.symbol.replace('USDT', '');
             const moveDirection = change.changeValue > 0 ? '⬆️' : '⬇️';
             const moveText = change.changeValue > 0 ? '上升' : '下降';
@@ -327,8 +394,8 @@ export class RealtimeAlertService {
         log.info(`Realtime ranking alert sent`, {
           userId,
           changesCount: changes.length,
-          newEntries: newEntries.length,
-          positionChanges: positionChanges.length
+          newEntries: filteredNewEntries.length,
+          positionChanges: filteredPositionChanges.length
         });
       }
 
