@@ -24,6 +24,99 @@ export class ServiceRegistry {
     // 日志服务
     this.container.registerInstance(SERVICE_IDENTIFIERS.LOGGER, log);
 
+    // === FOUNDATION LAYER (基础层 - 无依赖) ===
+    this.registerFoundationServices();
+
+    // === DATA LAYER (数据层) ===
+    this.registerDataServices();
+
+    // === BUSINESS LAYER (业务层 - 有依赖) ===
+    this.registerBusinessServices();
+
+    // === APPLICATION LAYER (应用层 - 复合依赖) ===
+    this.registerApplicationServices();
+
+    log.info('Core services registered', {
+      services: this.container.getRegisteredServices().map(s => s.toString())
+    });
+  }
+
+  /**
+   * 注册基础层服务 - 无外部依赖
+   */
+  private registerFoundationServices(): void {
+    // 速率限制器
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.BINANCE_RATE_LIMITER,
+      () => {
+        const { binanceRateLimit } = require('../../utils/ratelimit');
+        return binanceRateLimit;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 缓存服务
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.PRICE_CACHE,
+      () => {
+        const { priceCache } = require('../../utils/cache');
+        return priceCache;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.MARKET_DATA_CACHE,
+      () => {
+        const { marketDataCache } = require('../../utils/cache');
+        return marketDataCache;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.OI_CACHE,
+      () => {
+        const { oiCache } = require('../../utils/cache');
+        return oiCache;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.FUNDING_CACHE,
+      () => {
+        const { fundingCache } = require('../../utils/cache');
+        return fundingCache;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 音量分类器
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.VOLUME_CLASSIFIER,
+      () => {
+        const { volumeClassifier } = require('../../utils/volumeClassifier');
+        return volumeClassifier;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 数据库连接
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.DATABASE_CONNECTION,
+      () => {
+        const { initDatabase } = require('../../database/connection');
+        return initDatabase; // 返回初始化函数
+      },
+      ServiceLifetime.SINGLETON
+    );
+  }
+
+  /**
+   * 注册数据层服务
+   */
+  private registerDataServices(): void {
     // 数据管理器 - 单例 (运行时动态加载)
     this.container.registerFactory(
       SERVICE_IDENTIFIERS.DATA_MANAGER,
@@ -40,12 +133,105 @@ export class ServiceRegistry {
       ServiceLifetime.SINGLETON
     );
 
-    // Binance客户端 - 单例
-    this.container.registerInstance(SERVICE_IDENTIFIERS.BINANCE_CLIENT, binanceClient);
+    // Binance客户端 - 依赖速率限制器和缓存
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.BINANCE_CLIENT,
+      (_container) => {
+        // 暂时保持对现有单例的兼容性，逐步迁移
+        return binanceClient;
+      },
+      ServiceLifetime.SINGLETON
+    );
 
-    log.info('Core services registered', {
-      services: this.container.getRegisteredServices().map(s => s.toString())
-    });
+    // 分层数据管理器
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.TIERED_DATA_MANAGER,
+      (_container) => {
+        const { tieredDataManager } = require('../../services/tieredDataManager');
+        return tieredDataManager;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // Binance WebSocket客户端
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.BINANCE_WEBSOCKET_CLIENT,
+      (_container) => {
+        const { binanceWebSocket } = require('../../services/binanceWebSocket');
+        return binanceWebSocket;
+      },
+      ServiceLifetime.SINGLETON
+    );
+  }
+
+  /**
+   * 注册业务层服务 - 有依赖
+   */
+  private registerBusinessServices(): void {
+    // 实时市场缓存
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.REALTIME_MARKET_CACHE,
+      (_container) => {
+        const { realtimeMarketCache } = require('../../services/realtimeMarketCache');
+        return realtimeMarketCache;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 历史高点缓存
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE,
+      (_container) => {
+        const { historicalHighCache } = require('../../services/historicalHighCacheV2');
+        return historicalHighCache;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 排名分析器
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.RANKING_ANALYZER,
+      (_container) => {
+        const { rankingAnalyzer } = require('../../services/rankingAnalyzer');
+        return rankingAnalyzer;
+      },
+      ServiceLifetime.SINGLETON
+    );
+  }
+
+  /**
+   * 注册应用层服务 - 复合依赖
+   */
+  private registerApplicationServices(): void {
+    // 价格监控服务
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.PRICE_MONITOR_SERVICE,
+      (_container) => {
+        const { priceMonitor } = require('../../services/priceMonitor');
+        return priceMonitor;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 触发警报服务
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE,
+      (_container) => {
+        const { triggerAlertService } = require('../../services/triggerAlerts');
+        return triggerAlertService;
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 实时警报服务
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.REALTIME_ALERT_SERVICE,
+      (_container) => {
+        const { realtimeAlertService } = require('../../services/realtimeAlertService');
+        return realtimeAlertService;
+      },
+      ServiceLifetime.SINGLETON
+    );
   }
 
   /**

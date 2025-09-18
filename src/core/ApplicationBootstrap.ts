@@ -2,10 +2,7 @@ import { Application, ApplicationConfig, ILifecycleAware } from './Application';
 import { ServiceRegistry, getServiceRegistry, SERVICE_IDENTIFIERS } from './container';
 import { log } from '../utils/logger';
 
-// 导入现有服务以便注册
-import { triggerAlertService } from '../services/triggerAlerts';
-import { historicalHighCache } from '../services/historicalHighCacheV2';
-import { realtimeMarketCache } from '../services/realtimeMarketCache';
+// 现在不再需要直接导入单例服务，全部通过DI容器管理
 
 export class ApplicationBootstrap {
   private application: Application;
@@ -23,13 +20,19 @@ export class ApplicationBootstrap {
     try {
       log.info('🔧 Configuring application services');
 
-      // 1. 注册业务服务
-      this.registerBusinessServices();
+      // 1. 验证服务注册（所有13个核心服务已在ServiceRegistry中注册）
+      this.validateServiceRegistration();
 
-      // 2. 配置服务依赖
+      // 2. 注册额外的业务服务（非核心服务）
+      this.registerAdditionalServices();
+
+      // 3. 配置服务依赖
       this.configureServiceDependencies();
 
-      // 3. 启动应用
+      // 4. 预热关键服务
+      await this.preheatCriticalServices();
+
+      // 5. 启动应用
       await this.application.initialize();
       await this.application.start();
 
@@ -42,25 +45,104 @@ export class ApplicationBootstrap {
   }
 
   /**
-   * 注册业务服务
+   * 验证服务注册 - 确保所有13个核心服务都已注册
    */
-  private registerBusinessServices(): void {
-    log.debug('📝 Registering business services');
+  private validateServiceRegistration(): void {
+    const requiredServices = [
+      // Foundation Layer
+      SERVICE_IDENTIFIERS.BINANCE_RATE_LIMITER,
+      SERVICE_IDENTIFIERS.PRICE_CACHE,
+      SERVICE_IDENTIFIERS.MARKET_DATA_CACHE,
+      SERVICE_IDENTIFIERS.OI_CACHE,
+      SERVICE_IDENTIFIERS.FUNDING_CACHE,
+      SERVICE_IDENTIFIERS.VOLUME_CLASSIFIER,
+      SERVICE_IDENTIFIERS.DATABASE_CONNECTION,
 
-    // Batch 1: 注册基础层DI服务
-    this.registerFoundationServices();
+      // Data Layer
+      SERVICE_IDENTIFIERS.BINANCE_CLIENT,
+      SERVICE_IDENTIFIERS.TIERED_DATA_MANAGER,
+      SERVICE_IDENTIFIERS.BINANCE_WEBSOCKET_CLIENT,
 
-    // Batch 2: 注册核心API服务
-    this.registerCoreApiServices();
+      // Business Layer
+      SERVICE_IDENTIFIERS.REALTIME_MARKET_CACHE,
+      SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE,
+      SERVICE_IDENTIFIERS.RANKING_ANALYZER,
 
-    // 注册触发警报服务 (保持向后兼容)
-    this.serviceRegistry.registerInstance('TRIGGER_ALERT_SERVICE', triggerAlertService);
+      // Application Layer
+      SERVICE_IDENTIFIERS.PRICE_MONITOR_SERVICE,
+      SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE,
+      SERVICE_IDENTIFIERS.REALTIME_ALERT_SERVICE
+    ];
 
-    // 注册历史高价缓存服务
-    this.serviceRegistry.registerInstance('HISTORICAL_HIGH_CACHE', historicalHighCache);
+    const container = this.serviceRegistry.getContainer();
+    const missingServices: string[] = [];
 
-    // 注册实时市场数据缓存服务
-    this.serviceRegistry.registerInstance('REALTIME_MARKET_CACHE', realtimeMarketCache);
+    requiredServices.forEach(serviceId => {
+      if (!container.isRegistered(serviceId)) {
+        missingServices.push(serviceId.toString());
+      }
+    });
+
+    if (missingServices.length > 0) {
+      throw new Error(`Missing required services: ${missingServices.join(', ')}`);
+    }
+
+    log.info('✅ All 13 core services are registered', {
+      coreServices: requiredServices.length
+    });
+  }
+
+  /**
+   * 预热关键服务 - 确保核心服务正确初始化
+   */
+  private async preheatCriticalServices(): Promise<void> {
+    log.info('🔥 Preheating critical services');
+
+    try {
+      // 预热数据库连接
+      const dbInit = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.DATABASE_CONNECTION);
+      if (typeof dbInit === 'function') {
+        await dbInit();
+        log.info('✅ Database connection initialized');
+      }
+
+      // 预热Binance客户端（测试连接）
+      const binanceClient = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.BINANCE_CLIENT) as any;
+      try {
+        // 简单测试连接
+        if (binanceClient && typeof binanceClient.getPrice === 'function') {
+          await binanceClient.getPrice('BTCUSDT');
+          log.info('✅ Binance client connection verified');
+        }
+      } catch (error) {
+        log.warn('⚠️ Binance connection test failed, but continuing', { error: error instanceof Error ? error.message : String(error) });
+      }
+
+      // 预热历史高点缓存
+      const historicalHighCache = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE) as any;
+      if (historicalHighCache && typeof historicalHighCache.initialize === 'function') {
+        await historicalHighCache.initialize();
+        log.info('✅ Historical high cache initialized');
+      }
+
+      // 预热触发警报服务
+      const triggerAlertService = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE) as any;
+      if (triggerAlertService && typeof triggerAlertService.initialize === 'function') {
+        await triggerAlertService.initialize();
+        log.info('✅ Trigger alert service initialized');
+      }
+
+    } catch (error) {
+      log.error('❌ Failed to preheat critical services', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 注册额外的业务服务（非13个核心服务）
+   */
+  private registerAdditionalServices(): void {
+    log.debug('📝 Registering additional services');
 
     // 注册新的统一报警服务
     this.serviceRegistry.registerFactory('UNIFIED_ALERT_SERVICE', (container) => {
@@ -108,78 +190,9 @@ export class ApplicationBootstrap {
       return new PriceCommandHandler(messageFormatter, logger, binanceClient);
     });
 
-    // 注册价格监控服务工厂 (更新以使用新服务)
-    this.serviceRegistry.registerFactory('PRICE_MONITOR_SERVICE', (container) => {
-      // 懒加载以避免循环依赖
-      const { PriceMonitorService } = require('../services/priceMonitor');
-      const binanceClient = container.resolve(SERVICE_IDENTIFIERS.BINANCE_CLIENT);
-      const unifiedAlertService = container.resolve('UNIFIED_ALERT_SERVICE');
-      const telegramService = container.resolve('TELEGRAM_SERVICE');
-
-      return new PriceMonitorService(
-        binanceClient,
-        unifiedAlertService,
-        telegramService
-      );
-    });
-
-    log.debug('✅ Business services registered');
+    log.debug('✅ Additional services registered');
   }
 
-  /**
-   * 注册基础层服务 (Batch 1 DI Migration)
-   */
-  private registerFoundationServices(): void {
-    log.debug('📝 Registering foundation services (Batch 1)');
-
-    // 注册速率限制器
-    this.serviceRegistry.registerFactory('BINANCE_RATE_LIMITER', () => {
-      const { BinanceRateLimiter } = require('../utils/ratelimit');
-      return new BinanceRateLimiter();
-    });
-
-    // 注册缓存服务
-    this.serviceRegistry.registerFactory('PRICE_CACHE_SERVICE', () => {
-      const { PriceCacheService } = require('../utils/cache');
-      return new PriceCacheService();
-    });
-
-    this.serviceRegistry.registerFactory('MARKET_DATA_CACHE_SERVICE', () => {
-      const { MarketDataCacheService } = require('../utils/cache');
-      return new MarketDataCacheService();
-    });
-
-    this.serviceRegistry.registerFactory('OI_CACHE_SERVICE', () => {
-      const { OICacheService } = require('../utils/cache');
-      return new OICacheService();
-    });
-
-    this.serviceRegistry.registerFactory('FUNDING_CACHE_SERVICE', () => {
-      const { FundingCacheService } = require('../utils/cache');
-      return new FundingCacheService();
-    });
-
-    log.debug('✅ Foundation services registered (Batch 1)');
-  }
-
-  /**
-   * 注册核心API服务 (Batch 2 DI Migration)
-   */
-  private registerCoreApiServices(): void {
-    log.debug('📝 Registering core API services (Batch 2)');
-
-    // 注册BinanceClient
-    this.serviceRegistry.registerFactory('BINANCE_CLIENT_SERVICE', (container) => {
-      const { BinanceClient } = require('../services/binance');
-      const rateLimiter = container.resolve('BINANCE_RATE_LIMITER');
-      const oiCacheService = container.resolve('OI_CACHE_SERVICE');
-      const marketDataCacheService = container.resolve('MARKET_DATA_CACHE_SERVICE');
-
-      return new BinanceClient(rateLimiter, oiCacheService, marketDataCacheService);
-    });
-
-    log.debug('✅ Core API services registered (Batch 2)');
-  }
 
   /**
    * 配置服务依赖关系
@@ -273,7 +286,7 @@ export class BusinessServiceAdapter implements ILifecycleAware {
 }
 
 /**
- * 服务启动顺序管理器
+ * 服务启动顺序管理器 - 按依赖层级管理13个核心服务启动
  */
 export class ServiceStartupOrchestrator {
   private startupOrder: Array<{
@@ -282,54 +295,128 @@ export class ServiceStartupOrchestrator {
     dependencies: string[];
     critical: boolean; // 是否为关键服务，失败时应停止启动
   }> = [
+    // === FOUNDATION LAYER (基础层 - 无依赖) ===
     {
-      name: 'Database',
-      serviceId: 'DATABASE',
+      name: 'Database Connection',
+      serviceId: SERVICE_IDENTIFIERS.DATABASE_CONNECTION.toString(),
       dependencies: [],
       critical: true
     },
     {
+      name: 'Binance Rate Limiter',
+      serviceId: SERVICE_IDENTIFIERS.BINANCE_RATE_LIMITER.toString(),
+      dependencies: [],
+      critical: true
+    },
+    {
+      name: 'Price Cache',
+      serviceId: SERVICE_IDENTIFIERS.PRICE_CACHE.toString(),
+      dependencies: [],
+      critical: false
+    },
+    {
+      name: 'Market Data Cache',
+      serviceId: SERVICE_IDENTIFIERS.MARKET_DATA_CACHE.toString(),
+      dependencies: [],
+      critical: false
+    },
+    {
+      name: 'OI Cache',
+      serviceId: SERVICE_IDENTIFIERS.OI_CACHE.toString(),
+      dependencies: [],
+      critical: false
+    },
+    {
+      name: 'Funding Cache',
+      serviceId: SERVICE_IDENTIFIERS.FUNDING_CACHE.toString(),
+      dependencies: [],
+      critical: false
+    },
+    {
+      name: 'Volume Classifier',
+      serviceId: SERVICE_IDENTIFIERS.VOLUME_CLASSIFIER.toString(),
+      dependencies: [],
+      critical: false
+    },
+
+    // === DATA LAYER (数据层) ===
+    {
       name: 'Data Manager',
       serviceId: SERVICE_IDENTIFIERS.DATA_MANAGER.toString(),
-      dependencies: ['DATABASE'],
+      dependencies: [SERVICE_IDENTIFIERS.DATABASE_CONNECTION.toString()],
       critical: true
     },
     {
       name: 'Binance Client',
       serviceId: SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString(),
-      dependencies: [],
+      dependencies: [
+        SERVICE_IDENTIFIERS.BINANCE_RATE_LIMITER.toString(),
+        SERVICE_IDENTIFIERS.MARKET_DATA_CACHE.toString(),
+        SERVICE_IDENTIFIERS.OI_CACHE.toString()
+      ],
       critical: true
     },
     {
-      name: 'Trigger Alert Service',
-      serviceId: 'TRIGGER_ALERT_SERVICE',
-      dependencies: ['DATABASE'],
+      name: 'Tiered Data Manager',
+      serviceId: SERVICE_IDENTIFIERS.TIERED_DATA_MANAGER.toString(),
+      dependencies: [
+        SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString(),
+        SERVICE_IDENTIFIERS.VOLUME_CLASSIFIER.toString()
+      ],
       critical: true
+    },
+    {
+      name: 'Binance WebSocket Client',
+      serviceId: SERVICE_IDENTIFIERS.BINANCE_WEBSOCKET_CLIENT.toString(),
+      dependencies: [],
+      critical: true
+    },
+
+    // === BUSINESS LAYER (业务层 - 有依赖) ===
+    {
+      name: 'Realtime Market Cache',
+      serviceId: SERVICE_IDENTIFIERS.REALTIME_MARKET_CACHE.toString(),
+      dependencies: [SERVICE_IDENTIFIERS.BINANCE_WEBSOCKET_CLIENT.toString()],
+      critical: false
     },
     {
       name: 'Historical High Cache',
-      serviceId: 'HISTORICAL_HIGH_CACHE',
+      serviceId: SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE.toString(),
       dependencies: [SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString()],
       critical: false
     },
     {
-      name: 'Realtime Market Cache',
-      serviceId: 'REALTIME_MARKET_CACHE',
+      name: 'Ranking Analyzer',
+      serviceId: SERVICE_IDENTIFIERS.RANKING_ANALYZER.toString(),
       dependencies: [SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString()],
       critical: false
     },
+
+    // === APPLICATION LAYER (应用层 - 复合依赖) ===
     {
-      name: 'Telegram Bot',
-      serviceId: 'TELEGRAM_BOT_SERVICE',
-      dependencies: [],
+      name: 'Trigger Alert Service',
+      serviceId: SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE.toString(),
+      dependencies: [
+        SERVICE_IDENTIFIERS.DATABASE_CONNECTION.toString(),
+        SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString()
+      ],
       critical: true
     },
     {
-      name: 'Price Monitor',
-      serviceId: 'PRICE_MONITOR_SERVICE',
+      name: 'Realtime Alert Service',
+      serviceId: SERVICE_IDENTIFIERS.REALTIME_ALERT_SERVICE.toString(),
+      dependencies: [
+        SERVICE_IDENTIFIERS.REALTIME_MARKET_CACHE.toString(),
+        'TELEGRAM_BOT_SERVICE'
+      ],
+      critical: true
+    },
+    {
+      name: 'Price Monitor Service',
+      serviceId: SERVICE_IDENTIFIERS.PRICE_MONITOR_SERVICE.toString(),
       dependencies: [
         SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString(),
-        'TRIGGER_ALERT_SERVICE',
+        SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE.toString(),
         'TELEGRAM_BOT_SERVICE'
       ],
       critical: true

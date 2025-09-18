@@ -30,7 +30,7 @@ export class Application implements ILifecycleAware {
   constructor(config: Partial<ApplicationConfig> = {}) {
     this.config = {
       name: 'crypto-tgalert',
-      version: '2.1.6',
+      version: '2.4.0',
       environment: process.env.NODE_ENV as any || 'development',
       gracefulShutdownTimeout: 30000, // 30 seconds
       enableHealthCheck: true,

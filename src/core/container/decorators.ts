@@ -93,12 +93,33 @@ export const SERVICE_IDENTIFIERS = {
   // Core services
   LOGGER: Symbol('Logger'),
   CONFIG: Symbol('Config'),
+  DATABASE_CONNECTION: Symbol('DatabaseConnection'),
+
+  // Foundation Layer (基础层 - 无依赖)
+  BINANCE_RATE_LIMITER: Symbol('BinanceRateLimiter'),
+  PRICE_CACHE: Symbol('PriceCache'),
+  MARKET_DATA_CACHE: Symbol('MarketDataCache'),
+  OI_CACHE: Symbol('OICache'),
+  FUNDING_CACHE: Symbol('FundingCache'),
+  VOLUME_CLASSIFIER: Symbol('VolumeClassifier'),
 
   // Data services
   DATA_MANAGER: Symbol('DataManager'),
   BINANCE_CLIENT: Symbol('BinanceClient'),
+  TIERED_DATA_MANAGER: Symbol('TieredDataManager'),
+  BINANCE_WEBSOCKET_CLIENT: Symbol('BinanceWebSocketClient'),
 
-  // Business services
+  // Business Layer (业务层 - 有依赖)
+  REALTIME_MARKET_CACHE: Symbol('RealtimeMarketCache'),
+  HISTORICAL_HIGH_CACHE: Symbol('HistoricalHighCache'),
+  RANKING_ANALYZER: Symbol('RankingAnalyzer'),
+
+  // Application Layer (应用层 - 复合依赖)
+  PRICE_MONITOR_SERVICE: Symbol('PriceMonitorService'),
+  TRIGGER_ALERT_SERVICE: Symbol('TriggerAlertService'),
+  REALTIME_ALERT_SERVICE: Symbol('RealtimeAlertService'),
+
+  // Legacy service identifiers (保持兼容性)
   PRICE_ALERT_SERVICE: Symbol('PriceAlertService'),
   MARKET_DATA_SERVICE: Symbol('MarketDataService'),
   TELEGRAM_BOT_SERVICE: Symbol('TelegramBotService'),

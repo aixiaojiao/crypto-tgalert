@@ -9,7 +9,7 @@ import { config } from './config';
 async function main(): Promise<void> {
   try {
     log.info('🚀 Starting Crypto TG Alert Application', {
-      version: '2.1.6',
+      version: '2.4.0',
       environment: process.env.NODE_ENV || 'development',
       nodeVersion: process.version
     });
