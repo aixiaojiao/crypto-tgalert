@@ -1,5 +1,6 @@
 import { log } from './logger';
 import { getDatabase } from '../database/connection';
+import { businessMonitor } from './businessMonitor';
 
 export interface HealthStatus {
   status: 'healthy' | 'unhealthy';
@@ -12,6 +13,10 @@ export interface HealthStatus {
       healthy: boolean;
     };
     uptime: number;
+  };
+  businessMetrics?: {
+    lastHour: any;
+    failurePatterns: any[];
   };
 }
 
@@ -41,7 +46,7 @@ function checkMemory(): { usage: number; limit: number; healthy: boolean } {
 }
 
 // 获取系统健康状态
-export async function getHealthStatus(): Promise<HealthStatus> {
+export async function getHealthStatus(includeBusinessMetrics: boolean = false): Promise<HealthStatus> {
   const timestamp = new Date().toISOString();
   const uptime = Math.floor(process.uptime());
 
@@ -50,7 +55,7 @@ export async function getHealthStatus(): Promise<HealthStatus> {
 
   const allHealthy = databaseHealthy && memory.healthy;
 
-  return {
+  const status: HealthStatus = {
     status: allHealthy ? 'healthy' : 'unhealthy',
     timestamp,
     services: {
@@ -59,19 +64,44 @@ export async function getHealthStatus(): Promise<HealthStatus> {
       uptime
     }
   };
+
+  // 添加业务指标（如果请求）
+  if (includeBusinessMetrics) {
+    try {
+      const stats = businessMonitor.getAllStats(3600000); // 1小时内的统计
+      const patterns = businessMonitor.detectFailurePatterns(3600000);
+
+      status.businessMetrics = {
+        lastHour: stats,
+        failurePatterns: patterns
+      };
+    } catch (error) {
+      log.error('Failed to get business metrics for health status:', error);
+    }
+  }
+
+  return status;
 }
 
 // 定期健康检查
 export function startHealthMonitoring(intervalMs: number = 60000): NodeJS.Timeout {
   const interval = setInterval(async () => {
-    const health = await getHealthStatus();
+    const health = await getHealthStatus(true); // 包含业务指标
 
     if (health.status === 'unhealthy') {
       log.warn('系统健康检查异常:', health);
     } else {
       log.debug('系统健康检查正常', {
         memory: health.services.memory.usage + 'MB',
-        uptime: health.services.uptime + 's'
+        uptime: health.services.uptime + 's',
+        businessSummary: health.businessMetrics?.lastHour.summary
+      });
+    }
+
+    // 单独报告业务监控异常模式
+    if (health.businessMetrics?.failurePatterns && health.businessMetrics.failurePatterns.length > 0) {
+      log.warn('🚨 检测到业务异常模式:', {
+        patterns: health.businessMetrics.failurePatterns
       });
     }
   }, intervalMs);

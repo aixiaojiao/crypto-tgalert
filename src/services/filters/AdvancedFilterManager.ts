@@ -13,6 +13,7 @@ import {
   isTokenInList
 } from '../../config/tokenLists';
 import { log } from '../../utils/logger';
+import { recordBusinessOperation } from '../../utils/businessMonitor';
 
 export interface FilterResult {
   allowed: boolean;
@@ -84,7 +85,9 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
    * 统一过滤检查 - 核心方法
    */
   async checkFilter(userId: string, symbol: string): Promise<FilterResult> {
-    const cleanSymbol = symbol.replace(/(USDT|BUSD)$/i, '').toUpperCase();
+    // 首先标准化symbol格式
+    const normalizedSymbol = this.normalizeSymbolForFiltering(symbol);
+    const cleanSymbol = normalizedSymbol.replace(/(USDT|BUSD)$/i, '').toUpperCase();
 
     // 优先级1: 系统下架代币 (不可覆盖)
     if (isTokenInList(cleanSymbol, DELISTED_TOKENS)) {
@@ -109,10 +112,10 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
     }
 
     try {
-      // 优先级3: 用户黑名单
-      const userBlacklisted = await this.userFilterService.isBlacklisted(userId, symbol);
+      // 优先级3: 用户黑名单 (使用标准化的symbol)
+      const userBlacklisted = await this.userFilterService.isBlacklisted(userId, normalizedSymbol);
       if (userBlacklisted) {
-        const reason = await this.userFilterService.getFilterReason(userId, symbol);
+        const reason = await this.userFilterService.getFilterReason(userId, normalizedSymbol);
         return {
           allowed: false,
           reason: reason || '🔒 个人黑名单',
@@ -122,8 +125,8 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
         };
       }
 
-      // 优先级4: 用户临时屏蔽
-      const muteResult = await this.userFilterService.isMuted(userId, symbol);
+      // 优先级4: 用户临时屏蔽 (使用标准化的symbol)
+      const muteResult = await this.userFilterService.isMuted(userId, normalizedSymbol);
       if (muteResult.muted) {
         return {
           allowed: false,
@@ -135,7 +138,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       }
 
     } catch (error) {
-      log.error('Error checking user filters', { userId, symbol, error });
+      log.error('Error checking user filters', { userId, originalSymbol: symbol, normalizedSymbol, error });
       // 继续检查系统过滤，不因用户过滤错误而中断
     }
 
@@ -302,17 +305,35 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
    */
   async shouldSendAlert(userId: string, symbol: string, alertType: string): Promise<boolean> {
     try {
-      const filterResult = await this.checkFilter(userId, symbol);
+      // 标准化symbol格式以确保与存储的格式一致
+      const normalizedSymbol = this.normalizeSymbolForFiltering(symbol);
+      const filterResult = await this.checkFilter(userId, normalizedSymbol);
 
       if (filterResult.allowed) {
+        recordBusinessOperation('filter_check', true, {
+          userId,
+          symbol: normalizedSymbol,
+          alertType,
+          result: 'allowed'
+        });
         return true;
       }
 
-      // 记录过滤日志
+      // 记录过滤日志和业务监控
       log.debug('Alert filtered', {
         userId,
-        symbol,
+        originalSymbol: symbol,
+        normalizedSymbol,
         alertType,
+        reason: filterResult.reason,
+        source: filterResult.source
+      });
+
+      recordBusinessOperation('filter_check', true, {
+        userId,
+        symbol: normalizedSymbol,
+        alertType,
+        result: 'filtered',
         reason: filterResult.reason,
         source: filterResult.source
       });
@@ -321,9 +342,32 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
 
     } catch (error) {
       log.error('Error checking alert filter', { userId, symbol, alertType, error });
+
+      recordBusinessOperation('filter_check', false, {
+        userId,
+        symbol,
+        alertType
+      }, error instanceof Error ? error.message : String(error));
+
       // 发生错误时采用保守策略：不发送警报
       return false;
     }
+  }
+
+  /**
+   * 标准化symbol格式以确保过滤检查的一致性
+   * 处理不同的symbol输入格式 (如 "BULLA/USDT", "BULLA", "bulla" 等)
+   */
+  private normalizeSymbolForFiltering(symbol: string): string {
+    // 移除常见的分隔符和空格
+    let normalized = symbol.replace(/[\/\-_\s]/g, '').toUpperCase();
+
+    // 如果没有USDT或USD后缀，自动添加USDT
+    if (!normalized.endsWith('USDT') && !normalized.endsWith('USD')) {
+      normalized += 'USDT';
+    }
+
+    return normalized;
   }
 
   /**

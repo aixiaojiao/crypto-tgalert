@@ -5,6 +5,7 @@ import { log } from '../utils/logger';
 import { getTokenRiskLevel, getRiskIcon, filterTradingPairs, isRiskyToken } from '../config/tokenLists';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
 import { realtimeMarketCache } from './realtimeMarketCache';
+import { startBusinessOperation, endBusinessOperation, recordBusinessOperation } from '../utils/businessMonitor';
 
 export interface TriggerAlertStats {
   gainersEnabled: boolean;
@@ -205,10 +206,12 @@ export class TriggerAlertService {
     // Prevent concurrent execution to avoid race conditions
     if (this.gainersCheckInProgress) {
       log.debug('Gainers check already in progress, skipping...');
+      recordBusinessOperation('gainers_check', true, { result: 'skipped', reason: 'already_in_progress' });
       return;
     }
 
     this.gainersCheckInProgress = true;
+    const operationId = startBusinessOperation('gainers_check', {});
 
     try {
       log.debug('Checking gainers for changes...');
@@ -336,9 +339,16 @@ export class TriggerAlertService {
       await TriggerAlertModel.saveGainersRankings(currentRankings);
 
       log.debug(`Gainers check completed: ${significantChanges.length} significant changes detected`);
-      
+
+      endBusinessOperation(operationId, true, undefined, {
+        significantChanges: significantChanges.length,
+        dataSource,
+        rankingsCount: currentRankings.length
+      });
+
     } catch (error) {
       log.error('Failed to check gainers', error);
+      endBusinessOperation(operationId, false, error instanceof Error ? error.message : String(error));
     } finally {
       this.gainersCheckInProgress = false;
     }

@@ -19,6 +19,7 @@ import { volumeClassifier } from './utils/volumeClassifier';
 import { rankingAnalyzer } from './services/rankingAnalyzer';
 import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { realtimeAlertService } from './services/realtimeAlertService';
+import { startBusinessOperation, endBusinessOperation } from './utils/businessMonitor';
 import { log } from './utils/logger';
 import { NotificationService } from './services/alerts/NotificationService';
 import { PersistentAlertService } from './services/alerts/PersistentAlertService';
@@ -155,6 +156,53 @@ export class TelegramBot {
    * 设置错误处理
    */
   private setupErrorHandling(): void {
+    // 处理未知命令和文本消息
+    this.bot.on('text', async (ctx, next) => {
+      const text = ctx.message.text;
+
+      // 如果是以 / 开头的命令但没有被处理，说明是未知命令
+      if (text.startsWith('/')) {
+        const command = text.split(' ')[0].substring(1).toLowerCase();
+
+        // 记录未知命令使用情况
+        log.warn('Unknown command received', {
+          command,
+          fullText: text,
+          userId: ctx.from?.id
+        });
+
+        // 提供友好的错误提示
+        let helpMessage = `❓ **未知命令:** \`${command}\`
+
+🤖 **可用命令列表:**
+• \`/help\` - 查看完整帮助
+• \`/price <币种>\` - 查询价格
+• \`/rank\` - 查看排行榜
+• \`/oi\` - 查看持仓量
+• \`/alert\` - 管理警报
+• \`/signals <币种>\` - 技术分析
+• \`/status\` - 系统状态
+
+💡 **提示:**
+• 命令格式错误？请使用 \`/help\` 查看正确用法
+• 找不到想要的功能？输入 \`/debug 功能建议\` 反馈给我们
+
+🔍 **相似命令建议:**`;
+
+        // 简单的命令建议逻辑
+        const suggestions = this.getSimilarCommands(command);
+        if (suggestions.length > 0) {
+          helpMessage += '\n' + suggestions.map(cmd => `• \`/${cmd}\``).join('\n');
+        }
+
+        await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+        return;
+      }
+
+      // 对于非命令文本，继续处理
+      await next();
+    });
+
     this.bot.catch((err, ctx) => {
       console.error('Bot error:', err);
       this.status.errors++;
@@ -172,6 +220,50 @@ export class TelegramBot {
       console.error('Unhandled Rejection at:', promise, 'reason:', reason);
       this.status.errors++;
     });
+  }
+
+  /**
+   * 获取相似命令建议
+   */
+  private getSimilarCommands(unknownCommand: string): string[] {
+    const availableCommands = [
+      'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
+      'debug', 'blacklist', 'mute', 'filter', 'funding', 'cache_status'
+    ];
+
+    // 简单的相似度匹配
+    const suggestions: string[] = [];
+
+    for (const cmd of availableCommands) {
+      // 包含关系匹配
+      if (cmd.includes(unknownCommand) || unknownCommand.includes(cmd)) {
+        suggestions.push(cmd);
+      }
+      // 前缀匹配
+      else if (cmd.startsWith(unknownCommand.substring(0, 3)) && unknownCommand.length > 2) {
+        suggestions.push(cmd);
+      }
+    }
+
+    // 常见拼写错误修正
+    const corrections: Record<string, string> = {
+      'prise': 'price',
+      'pricd': 'price',
+      'pric': 'price',
+      'stat': 'status',
+      'statu': 'status',
+      'hep': 'help',
+      'halp': 'help',
+      'alrt': 'alert',
+      'aler': 'alert'
+    };
+
+    if (corrections[unknownCommand]) {
+      suggestions.unshift(corrections[unknownCommand]);
+    }
+
+    // 去重并限制数量
+    return [...new Set(suggestions)].slice(0, 3);
   }
 
   /**
@@ -290,9 +382,30 @@ export class TelegramBot {
   /**
    * 设置基础命令
    */
+  /**
+   * 带业务监控的命令处理包装器
+   */
+  private commandWithMonitoring(command: string, handler: (ctx: any) => Promise<void>) {
+    return async (ctx: any) => {
+      const operationId = startBusinessOperation('command_execution', {
+        command,
+        userId: ctx.from?.id,
+        username: ctx.from?.username
+      });
+
+      try {
+        await handler(ctx);
+        endBusinessOperation(operationId, true);
+      } catch (error) {
+        endBusinessOperation(operationId, false, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    };
+  }
+
   private setupCommands(): void {
     // 开始命令
-    this.bot.start(async (ctx) => {
+    this.bot.start(this.commandWithMonitoring('start', async (ctx) => {
       const user = ctx.from;
       const welcomeMessage = `
 🚀 *欢迎使用 Crypto Alert Bot!*
@@ -321,11 +434,11 @@ export class TelegramBot {
       `;
 
       await ctx.replyWithMarkdown(welcomeMessage);
-    });
+    }));
 
 
     // 显式帮助命令处理
-    this.bot.command('help', async (ctx) => {
+    this.bot.command('help', this.commandWithMonitoring('help', async (ctx) => {
       try {
         console.log('📖 处理/help命令...');
         const helpMessage = `📖 Crypto Alert Bot 完整功能指南
@@ -407,7 +520,7 @@ export class TelegramBot {
         console.error('❌ /help命令处理失败:', error);
         await ctx.reply('❌ 帮助信息加载失败，请稍后重试');
       }
-    });
+    }));
 
     // 价格查询命令 (默认查询合约)
     this.bot.command('price', async (ctx) => {
@@ -1595,17 +1708,19 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       // 按类型统计
       message += `🏷️ **按类型统计:**\n`;
       for (const [type, count] of Object.entries(stats.byType)) {
-        if (count > 0) {
-          message += `• ${this.getAlertTypeText(type)}: ${count}\n`;
+        const countNum = Number(count);
+        if (countNum > 0) {
+          message += `• ${this.getAlertTypeText(type)}: ${countNum}\n`;
         }
       }
 
       // 按优先级统计
       message += `\n🔔 **按优先级统计:**\n`;
       for (const [priority, count] of Object.entries(stats.byPriority)) {
-        if (count > 0) {
+        const countNum = Number(count);
+        if (countNum > 0) {
           const icon = this.getPriorityIcon(priority);
-          message += `• ${icon} ${priority}: ${count}\n`;
+          message += `• ${icon} ${priority}: ${countNum}\n`;
         }
       }
 

@@ -6,6 +6,7 @@ import { triggerAlertService } from './services/triggerAlerts';
 import { historicalHighCache } from './services/historicalHighCacheV2';
 import { binanceRateLimit } from './utils/ratelimit';
 import { getServiceRegistry } from './core/container';
+import { startHealthMonitoring as startHealthMonitoringUtil } from './utils/health';
 
 /**
  * 完整的应用程序类 - 集成所有组件
@@ -14,6 +15,7 @@ export class CryptoTgAlertApp {
   private telegramBot: TelegramBot;
   private binanceClient: BinanceClient;
   private priceMonitor: PriceMonitorService;
+  private healthMonitorInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.telegramBot = new TelegramBot();
@@ -70,12 +72,16 @@ export class CryptoTgAlertApp {
       console.log('📈 Initializing historical high cache...');
       await historicalHighCache.initialize();
 
+      // 9. 启动健康监控系统
+      console.log('🏥 Starting health monitoring system...');
+      await this.startHealthMonitoring();
+
       console.log('✅ All systems online!');
 
-      // 9. 发送启动通知（在启动Telegram机器人前）
+      // 10. 发送启动通知（在启动Telegram机器人前）
       await this.sendStartupNotification(btcPrice);
 
-      // 10. 启动Telegram机器人（这是阻塞操作，必须最后执行）
+      // 11. 启动Telegram机器人（这是阻塞操作，必须最后执行）
       console.log('🤖 Starting Telegram bot...');
       await this.telegramBot.start();
       
@@ -193,10 +199,31 @@ export class CryptoTgAlertApp {
   }
 
   /**
+   * 启动健康监控系统
+   */
+  private async startHealthMonitoring(): Promise<void> {
+    try {
+      // 启动健康监控，每60秒检查一次
+      this.healthMonitorInterval = startHealthMonitoringUtil(60000);
+      console.log('✅ Health monitoring system started');
+    } catch (error) {
+      console.error('❌ Failed to start health monitoring:', error);
+      // 健康监控失败不应该影响主应用启动
+    }
+  }
+
+  /**
    * 优雅停止
    */
   async stop(): Promise<void> {
     console.log('🛑 Stopping application...');
+
+    // 停止健康监控
+    if (this.healthMonitorInterval) {
+      clearInterval(this.healthMonitorInterval);
+      this.healthMonitorInterval = null;
+      console.log('🏥 Health monitoring stopped');
+    }
 
     await this.priceMonitor.stopMonitoring();
     triggerAlertService.stopAllMonitoring();

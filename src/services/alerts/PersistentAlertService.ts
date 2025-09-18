@@ -3,6 +3,7 @@ import { UnifiedAlertModel } from '../../models/UnifiedAlert';
 import { AlertConfig, AlertEvent, IAlertService } from './IAlertService';
 import { INotificationService } from './INotificationService';
 import { log } from '../../utils/logger';
+import { startBusinessOperation, endBusinessOperation } from '../../utils/businessMonitor';
 
 /**
  * 持久化警报服务，扩展UnifiedAlertService并添加数据库持久化功能
@@ -48,11 +49,26 @@ export class PersistentAlertService extends UnifiedAlertService implements IAler
    * 注册新警报（带持久化）
    */
   async registerAlert(config: AlertConfig): Promise<void> {
-    // 先保存到数据库
-    await UnifiedAlertModel.saveAlert(config);
+    const operationId = startBusinessOperation('alert_register', {
+      alertType: config.type,
+      symbol: config.symbol
+    });
 
-    // 然后添加到内存中
-    await super.registerAlert(config);
+    try {
+      // 先保存到数据库
+      await UnifiedAlertModel.saveAlert(config);
+
+      // 然后添加到内存中
+      await super.registerAlert(config);
+
+      endBusinessOperation(operationId, true, undefined, {
+        alertId: config.id,
+        alertType: config.type
+      });
+    } catch (error) {
+      endBusinessOperation(operationId, false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   /**
@@ -73,11 +89,20 @@ export class PersistentAlertService extends UnifiedAlertService implements IAler
    * 删除警报（带持久化）
    */
   async removeAlert(alertId: string): Promise<void> {
-    // 先从内存中删除
-    await super.removeAlert(alertId);
+    const operationId = startBusinessOperation('alert_remove', { alertId });
 
-    // 然后从数据库删除
-    await UnifiedAlertModel.deleteAlert(alertId);
+    try {
+      // 先从内存中删除
+      await super.removeAlert(alertId);
+
+      // 然后从数据库删除
+      await UnifiedAlertModel.deleteAlert(alertId);
+
+      endBusinessOperation(operationId, true);
+    } catch (error) {
+      endBusinessOperation(operationId, false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   /**
@@ -135,10 +160,85 @@ export class PersistentAlertService extends UnifiedAlertService implements IAler
    * 重写父类的handleTriggeredAlert方法以添加数据库事件保存
    */
   protected async handleTriggeredAlert(event: AlertEvent, alert: AlertConfig): Promise<void> {
-    // 调用父类方法处理内存操作和通知
-    await super['handleTriggeredAlert'](event, alert);
+    const operationId = startBusinessOperation('alert_trigger', {
+      alertId: alert.id,
+      alertType: alert.type,
+      symbol: alert.symbol,
+      eventType: event.type
+    });
 
-    // 额外保存事件到数据库
-    await this.saveAlertEvent(event);
+    try {
+      // 调用父类方法处理内存操作和通知
+      await super['handleTriggeredAlert'](event, alert);
+
+      // 额外保存事件到数据库
+      await this.saveAlertEvent(event);
+
+      endBusinessOperation(operationId, true, undefined, {
+        triggeredAt: event.triggeredAt,
+        priority: event.priority
+      });
+    } catch (error) {
+      endBusinessOperation(operationId, false, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  /**
+   * 重写统计方法，从数据库获取准确的历史数据
+   */
+  async getStatistics(): Promise<any> {
+    try {
+      const now = Date.now();
+      const oneDayAgo = now - 24 * 60 * 60 * 1000;
+      const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+      // 从数据库获取所有历史记录来计算统计信息
+      const allHistory = await UnifiedAlertModel.getAlertHistory(undefined, 10000);
+
+      const triggeredToday = allHistory.filter(
+        event => event.triggeredAt.getTime() > oneDayAgo
+      ).length;
+
+      const triggeredThisWeek = allHistory.filter(
+        event => event.triggeredAt.getTime() > oneWeekAgo
+      ).length;
+
+      const byType: Record<any, number> = {};
+      const byPriority: Record<any, number> = {};
+
+      for (const event of allHistory) {
+        byType[event.type] = (byType[event.type] || 0) + 1;
+        byPriority[event.priority] = (byPriority[event.priority] || 0) + 1;
+      }
+
+      // 获取当前警报信息（使用父类的公共方法）
+      const allAlerts = await super.getAlerts();
+      const totalAlerts = allAlerts.length;
+      const activeAlerts = allAlerts.filter(a => a.enabled).length;
+
+      this.logger.debug('Statistics calculated', {
+        totalAlerts,
+        activeAlerts,
+        triggeredToday,
+        triggeredThisWeek,
+        totalHistoryEvents: allHistory.length
+      });
+
+      return {
+        totalAlerts,
+        activeAlerts,
+        triggeredToday,
+        triggeredThisWeek,
+        byType,
+        byPriority,
+        avgResponseTime: 0, // TODO: 实现响应时间跟踪
+        successRate: 0.95 // TODO: 实现成功率跟踪
+      };
+    } catch (error) {
+      this.logger.error('Failed to calculate statistics from database:', error);
+      // 降级到父类方法（内存统计）
+      return super.getStatistics();
+    }
   }
 }
