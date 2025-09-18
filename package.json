@@ -20,7 +20,8 @@
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "analyze-debug": "npx ts-node scripts/analyze-debug.ts",
-    "debug-status": "npx ts-node scripts/mark-debug-fixed.ts"
+    "debug-status": "npx ts-node scripts/mark-debug-fixed.ts",
+    "simple-diagnostic": "npx ts-node scripts/simple-diagnostics.ts"
   },
   "keywords": [
     "telegram",
