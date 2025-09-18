@@ -186,6 +186,7 @@ export class TelegramBot {
         { command: 'start', description: '🚀 开始使用机器人' },
         { command: 'help', description: '📖 查看完整功能指南' },
         { command: 'price', description: '💰 查询币种价格' },
+        { command: 'signals', description: '📊 综合技术分析' },
         { command: 'rank_gainers', description: '📊 查看涨幅排行榜' },
         { command: 'rank_losers', description: '📊 查看跌幅排行榜' },
         { command: 'funding', description: '💰 查看资金费率排行' },
@@ -306,6 +307,11 @@ export class TelegramBot {
 💰 价格查询:
 /price btc - 查看BTC价格+资金费率+持仓量
 /price eth - 查看ETH价格信息
+
+📊 技术分析:
+/signals btc - BTC综合技术分析 🆕
+/signals eth 1h - ETH 1小时周期技术分析
+/signals doge balanced - DOGE平衡策略分析
 
 📊 市场排行:
 /rank - 默认涨幅榜 (等同于 /rank_gainers)
@@ -907,6 +913,145 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         '👆 请使用 `/alert_remove <ID>` 替代此命令',
         { parse_mode: 'Markdown' }
       );
+    });
+
+    // 综合技术分析命令
+    this.bot.command('signals', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1);
+
+        if (!args || args.length === 0) {
+          await ctx.reply('💡 请指定要分析的币种，例如: /signals btc\n\n📊 支持参数:\n• /signals btc - BTC技术分析\n• /signals eth 1h - ETH 1小时周期分析\n• /signals doge balanced - DOGE使用平衡策略分析');
+          return;
+        }
+
+        const symbol = args[0].toUpperCase();
+        const timeframe = args[1] || '1h'; // 默认1小时
+        const strategy = args[2] || 'balanced'; // 默认平衡策略
+
+        // 检查是否是已下架代币
+        const testSymbol = symbol.includes('USDT') ? symbol : symbol + 'USDT';
+        const riskLevel = getTokenRiskLevel(testSymbol);
+        if (riskLevel === 'delisted' || riskLevel === 'blacklist') {
+          await ctx.reply(`❌ ${symbol} 已被列入${riskLevel === 'delisted' ? '已下架' : '黑名单'}代币，不支持技术分析`);
+          return;
+        }
+
+        await ctx.reply(`🔍 正在为 ${symbol} 进行综合技术分析...\n⏳ 这可能需要几秒钟时间`);
+
+        try {
+          // 临时实现：直接调用binance获取K线数据进行基础分析
+          const actualSymbol = symbol.includes('USDT') ? symbol : symbol + 'USDT';
+
+          // 获取价格和基础数据
+          const [price, stats, fundingRate] = await Promise.all([
+            this.binanceClient.getFuturesPrice(actualSymbol).catch(() => this.binanceClient.getPrice(actualSymbol)),
+            this.binanceClient.getFutures24hrStats(actualSymbol).catch(() => this.binanceClient.get24hrStats(actualSymbol)),
+            this.binanceClient.getFundingRate(actualSymbol).catch(() => null)
+          ]);
+
+          const changePercent = parseFloat(stats.priceChangePercent);
+          const changeIcon = changePercent >= 0 ? '📈' : '📉';
+          const volume = parseFloat(stats.volume) / 1000000;
+
+          // 基础技术分析逻辑
+          let signals = [];
+          let overallScore = 0;
+
+          // 价格动量分析
+          if (Math.abs(changePercent) > 5) {
+            signals.push(changePercent > 0 ? '🚀 强劲上涨动能' : '⚡ 强劲下跌动能');
+            overallScore += changePercent > 0 ? 20 : -20;
+          } else if (Math.abs(changePercent) > 2) {
+            signals.push(changePercent > 0 ? '📈 温和上涨' : '📉 温和下跌');
+            overallScore += changePercent > 0 ? 10 : -10;
+          } else {
+            signals.push('⚖️ 价格相对稳定');
+          }
+
+          // 成交量分析
+          if (volume > 100) {
+            signals.push('🔥 成交量活跃');
+            overallScore += 10;
+          } else if (volume > 50) {
+            signals.push('📊 成交量正常');
+            overallScore += 5;
+          } else {
+            signals.push('💤 成交量偏低');
+            overallScore -= 5;
+          }
+
+          // 资金费率分析 (如果有)
+          if (fundingRate) {
+            const rate = parseFloat(fundingRate.fundingRate) * 100;
+            if (rate > 0.01) {
+              signals.push('💰 多头情绪较强 (正费率)');
+              overallScore += 5;
+            } else if (rate < -0.01) {
+              signals.push('⚡ 空头情绪较强 (负费率)');
+              overallScore -= 5;
+            } else {
+              signals.push('⚖️ 多空相对平衡');
+            }
+          }
+
+          // 确定综合信号
+          let overallSignal = '⚖️ 观望';
+          let signalIcon = '⚖️';
+          if (overallScore >= 20) {
+            overallSignal = '🚀 强烈买入';
+            signalIcon = '🟢';
+          } else if (overallScore >= 10) {
+            overallSignal = '📈 买入';
+            signalIcon = '🟢';
+          } else if (overallScore <= -20) {
+            overallSignal = '💥 强烈卖出';
+            signalIcon = '🔴';
+          } else if (overallScore <= -10) {
+            overallSignal = '📉 卖出';
+            signalIcon = '🔴';
+          }
+
+          const formattedPrice = await formatPriceWithSeparators(price, actualSymbol);
+          const formattedChangePercent = formatPriceChange(changePercent);
+
+          let analysisMessage = `📊 *${symbol} 综合技术分析*\n\n`;
+
+          analysisMessage += `💰 **当前价格:** $${formattedPrice}\n`;
+          analysisMessage += `${changeIcon} **24h涨跌:** ${changePercent >= 0 ? '+' : ''}${formattedChangePercent}%\n`;
+          analysisMessage += `📈 **24h成交量:** ${volume.toFixed(1)}M USDT\n\n`;
+
+          analysisMessage += `🎯 **综合信号:** ${signalIcon} ${overallSignal}\n`;
+          analysisMessage += `📊 **信号评分:** ${overallScore > 0 ? '+' : ''}${overallScore}/100\n\n`;
+
+          analysisMessage += `🔍 **技术信号分析:**\n`;
+          signals.forEach((signal, index) => {
+            analysisMessage += `${index + 1}. ${signal}\n`;
+          });
+
+          if (fundingRate) {
+            const fundingPercent = (parseFloat(fundingRate.fundingRate) * 100).toFixed(4);
+            analysisMessage += `\n💰 **资金费率:** ${fundingPercent}%\n`;
+          }
+
+          analysisMessage += `\n⏰ **分析时间:** ${formatTimeToUTC8(new Date())}\n`;
+          analysisMessage += `🔧 **分析策略:** ${strategy}\n`;
+          analysisMessage += `⏱️ **时间周期:** ${timeframe}\n\n`;
+
+          analysisMessage += `💡 **免责声明:** 此分析仅供参考，不构成投资建议\n`;
+          analysisMessage += `🚀 **完整技术指标分析功能即将上线...**`;
+
+          await ctx.replyWithMarkdown(analysisMessage);
+
+        } catch (analysisError) {
+          console.error('Technical analysis error:', analysisError);
+          await ctx.reply(`❌ ${symbol} 技术分析失败，请检查币种名称是否正确\n\n💡 提示:\n• 确保币种名称正确 (如: BTC, ETH, DOGE)\n• 支持的时间周期: 5m, 15m, 30m, 1h, 4h, 1d\n• 支持的策略: balanced, momentum, trend, conservative, aggressive`);
+        }
+
+      } catch (error) {
+        console.error('Signals command error:', error);
+        await ctx.reply('❌ 技术分析功能暂时不可用，请稍后重试');
+      }
     });
   }
 

@@ -130,7 +130,30 @@ export const SERVICE_IDENTIFIERS = {
 
   // External services
   NOTIFICATION_SERVICE: Symbol('NotificationService'),
-  WEBSOCKET_SERVICE: Symbol('WebSocketService')
+  WEBSOCKET_SERVICE: Symbol('WebSocketService'),
+
+  // Technical Indicators Engine (技术指标引擎)
+  TECHNICAL_INDICATOR_ENGINE: Symbol('TechnicalIndicatorEngine'),
+  INDICATOR_REGISTRY: Symbol('IndicatorRegistry'),
+  SIGNAL_ANALYZER: Symbol('SignalAnalyzer'),
+
+  // Technical Indicators Data Services (技术指标数据服务)
+  OHLCV_DATA_SERVICE: Symbol('OHLCVDataService'),
+  INDICATOR_CACHE_SERVICE: Symbol('IndicatorCacheService'),
+
+  // Core Technical Indicators (核心技术指标)
+  RSI_INDICATOR: Symbol('RSIIndicator'),
+  MACD_INDICATOR: Symbol('MACDIndicator'),
+  MA_INDICATOR: Symbol('MAIndicator'),
+  BOLLINGER_BANDS: Symbol('BollingerBands'),
+  KDJ_INDICATOR: Symbol('KDJIndicator'),
+  WILLIAMS_R_INDICATOR: Symbol('WilliamsRIndicator'),
+
+  // Advanced Technical Analysis (高级技术分析)
+  PATTERN_ANALYZER: Symbol('PatternAnalyzer'),
+  SUPPORT_RESISTANCE_ANALYZER: Symbol('SupportResistanceAnalyzer'),
+  DIVERGENCE_ANALYZER: Symbol('DivergenceAnalyzer'),
+  MULTI_TIMEFRAME_ANALYZER: Symbol('MultiTimeFrameAnalyzer')
 } as const;
 
 export type ServiceIdentifiers = typeof SERVICE_IDENTIFIERS;

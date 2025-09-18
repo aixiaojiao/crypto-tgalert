@@ -197,6 +197,51 @@ export class ServiceRegistry {
       },
       ServiceLifetime.SINGLETON
     );
+
+    // === TECHNICAL INDICATORS SERVICES ===
+
+    // OHLCV数据服务 - 需要Binance客户端
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.OHLCV_DATA_SERVICE,
+      (container) => {
+        const { OHLCVDataService } = require('../../indicators/services/OHLCVDataService');
+        const binanceClient = container.resolve(SERVICE_IDENTIFIERS.BINANCE_CLIENT);
+        return new OHLCVDataService(binanceClient);
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 指标缓存服务 - 无依赖
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.INDICATOR_CACHE_SERVICE,
+      (_container) => {
+        const { IndicatorCacheService } = require('../../indicators/services/IndicatorCacheService');
+        return new IndicatorCacheService();
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 技术指标引擎 - 无依赖
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.TECHNICAL_INDICATOR_ENGINE,
+      (_container) => {
+        const { TechnicalIndicatorEngine } = require('../../indicators/services/TechnicalIndicatorEngine');
+        return new TechnicalIndicatorEngine();
+      },
+      ServiceLifetime.SINGLETON
+    );
+
+    // 信号分析器 - 需要指标引擎和缓存服务
+    this.container.registerFactory(
+      SERVICE_IDENTIFIERS.SIGNAL_ANALYZER,
+      (container) => {
+        const { SignalAnalyzer } = require('../../indicators/services/SignalAnalyzer');
+        const indicatorEngine = container.resolve(SERVICE_IDENTIFIERS.TECHNICAL_INDICATOR_ENGINE);
+        const cacheService = container.resolve(SERVICE_IDENTIFIERS.INDICATOR_CACHE_SERVICE);
+        return new SignalAnalyzer(indicatorEngine, cacheService);
+      },
+      ServiceLifetime.SINGLETON
+    );
   }
 
   /**

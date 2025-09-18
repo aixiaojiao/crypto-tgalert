@@ -1,6 +1,6 @@
 {
   "name": "crypto-tgalert",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Personal crypto intelligence terminal via Telegram",
   "main": "dist/index.js",
   "scripts": {
@@ -34,7 +34,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/jest": "^29.0.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.17",
     "@types/sqlite3": "^3.1.11",
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
@@ -51,6 +51,7 @@
     "axios": "^1.6.0",
     "better-sqlite3": "^12.2.0",
     "dotenv": "^16.3.0",
+    "inversify": "^7.10.0",
     "reflect-metadata": "^0.2.2",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
