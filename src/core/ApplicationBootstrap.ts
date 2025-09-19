@@ -190,6 +190,14 @@ export class ApplicationBootstrap {
       return new PriceCommandHandler(messageFormatter, logger, binanceClient);
     });
 
+    this.serviceRegistry.registerFactory('HIGH_COMMAND_HANDLER', (container) => {
+      const { HighCommandHandler } = require('../services/telegram');
+      const messageFormatter = container.resolve('MESSAGE_FORMATTER');
+      const logger = container.resolve(SERVICE_IDENTIFIERS.LOGGER);
+      const historicalHighCache = container.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE);
+      return new HighCommandHandler(messageFormatter, logger, historicalHighCache);
+    });
+
     log.debug('✅ Additional services registered');
   }
 

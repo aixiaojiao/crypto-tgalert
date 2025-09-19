@@ -11,3 +11,4 @@ export { BaseCommandHandler } from './commands/BaseCommandHandler';
 
 // Specific command handlers
 export { PriceCommandHandler } from './commands/PriceCommandHandler';
+export { HighCommandHandler } from './commands/HighCommandHandler';

@@ -23,6 +23,7 @@ export interface RankingData {
   highTimestamp: number;
   distancePercent: number;
   neededGainPercent: number;
+  lastUpdated: number;
 }
 
 interface KlineData {
@@ -192,9 +193,10 @@ class HistoricalHighCacheV2 extends EventEmitter {
         }
       }
 
-      // 计算距离百分比
-      const distancePercent = ((currentPrice - highPrice) / highPrice) * 100;
-      const neededGainPercent = distancePercent >= 0 ? 0 : Math.abs(distancePercent);
+      // 计算当前价格需要涨多少百分比才能回到历史高点
+      const neededGainPercent = currentPrice >= highPrice ? 0 : ((highPrice - currentPrice) / currentPrice) * 100;
+      // 保持兼容性的距离百分比（负值表示低于高点）
+      const distancePercent = currentPrice >= highPrice ? 0 : -neededGainPercent;
 
       // 存入缓存
       const cacheKey = `${symbol}:${timeframe}`;
@@ -332,29 +334,34 @@ class HistoricalHighCacheV2 extends EventEmitter {
 
     // 筛选指定时间框架的数据
     for (const [key, data] of this.cache.entries()) {
-      if (key.endsWith(`:${timeframe}`)) {
+      if (key.endsWith(`:${timeframe}`) &&
+          data &&
+          data.currentPrice != null &&
+          data.highPrice != null &&
+          data.neededGainPercent != null) {
         results.push({
           symbol: data.symbol,
           currentPrice: data.currentPrice,
           highPrice: data.highPrice,
           highTimestamp: data.highTimestamp,
           distancePercent: data.distancePercent,
-          neededGainPercent: data.neededGainPercent
+          neededGainPercent: data.neededGainPercent,
+          lastUpdated: data.lastUpdated
         });
       }
     }
 
     log.info(`Found ${results.length} symbols for timeframe ${timeframe}`);
 
-    // 按距离历史新高排序
+    // 按需要涨幅排序（最接近历史高点的排在前面）
     const sortedResults = results.sort((a, b) =>
-      Math.abs(a.distancePercent) - Math.abs(b.distancePercent)
+      a.neededGainPercent - b.neededGainPercent
     );
 
     // 记录前几名用于调试
     const top5 = sortedResults.slice(0, 5);
     log.info(`Top 5 closest to ${timeframe} high: ${top5.map(r =>
-      `${r.symbol}(${r.distancePercent.toFixed(2)}%)`
+      `${r.symbol}(需涨${(r.neededGainPercent || 0).toFixed(2)}%)`
     ).join(', ')}`);
 
     return sortedResults.slice(0, limit);
@@ -493,6 +500,247 @@ class HistoricalHighCacheV2 extends EventEmitter {
 
     log.info(`🔄 Recollection completed: ${success.length} success, ${failed.length} failed`);
     return { success, failed };
+  }
+
+  /**
+   * 增量更新指定币种的当前价格和最新K线数据
+   */
+  async incrementalUpdateSymbol(symbol: string, daysBehind: number = 3): Promise<{ success: boolean; newHighFound: boolean; currentPrice: number }> {
+    if (!this.isInitialized) {
+      throw new Error('Cache not initialized');
+    }
+
+    try {
+      // 1. 获取最新价格
+      const currentPrice = await binanceClient.getFuturesPrice(symbol);
+
+      // 2. 获取最近N天的K线数据
+      const now = Date.now();
+      const startTime = now - (daysBehind * 24 * 60 * 60 * 1000);
+
+      const recentKlines = await binanceClient.getFuturesKlines({
+        symbol,
+        interval: '1h',
+        startTime,
+        endTime: now,
+        limit: 1000
+      });
+
+      // 3. 找出最近N天的最高价
+      let recentHighPrice = currentPrice;
+      let recentHighTimestamp = now;
+
+      for (const kline of recentKlines) {
+        const klineHigh = parseFloat(kline.high);
+        if (klineHigh > recentHighPrice) {
+          recentHighPrice = klineHigh;
+          recentHighTimestamp = kline.closeTime;
+        }
+      }
+
+      // 4. 更新所有时间框架
+      let newHighFound = false;
+      const timeframes = ['1w', '1m', '6m', '1y', 'all'];
+
+      for (const timeframe of timeframes) {
+        const cacheKey = `${symbol}:${timeframe}`;
+        const existingData = this.cache.get(cacheKey);
+
+        if (existingData) {
+          let newHighPrice = existingData.highPrice;
+          let newHighTimestamp = existingData.highTimestamp;
+
+          // 检查是否有新的历史最高价
+          if (recentHighPrice > existingData.highPrice) {
+            newHighPrice = recentHighPrice;
+            newHighTimestamp = recentHighTimestamp;
+            newHighFound = true;
+          }
+
+          // 重新计算百分比
+          const neededGainPercent = currentPrice >= newHighPrice ? 0 : ((newHighPrice - currentPrice) / currentPrice) * 100;
+          const distancePercent = currentPrice >= newHighPrice ? 0 : -neededGainPercent;
+
+          // 更新缓存
+          this.cache.set(cacheKey, {
+            symbol,
+            timeframe,
+            currentPrice,
+            highPrice: newHighPrice,
+            highTimestamp: newHighTimestamp,
+            distancePercent,
+            neededGainPercent,
+            lastUpdated: now
+          });
+        }
+      }
+
+      return { success: true, newHighFound, currentPrice };
+
+    } catch (error) {
+      log.error(`Failed to incrementally update ${symbol}:`, error);
+      return { success: false, newHighFound: false, currentPrice: 0 };
+    }
+  }
+
+  /**
+   * 批量增量更新多个币种
+   */
+  async batchIncrementalUpdate(symbols: string[], daysBehind: number = 3): Promise<{
+    success: string[];
+    failed: string[];
+    newHighs: string[];
+    totalUpdated: number;
+  }> {
+    if (!this.isInitialized) {
+      throw new Error('Cache not initialized');
+    }
+
+    const success: string[] = [];
+    const failed: string[] = [];
+    const newHighs: string[] = [];
+
+    log.info(`🔄 Starting batch incremental update for ${symbols.length} symbols (${daysBehind} days)`);
+
+    for (const symbol of symbols) {
+      try {
+        const result = await this.incrementalUpdateSymbol(symbol, daysBehind);
+
+        if (result.success) {
+          success.push(symbol);
+          if (result.newHighFound) {
+            newHighs.push(symbol);
+          }
+          log.debug(`✅ Updated ${symbol}: $${result.currentPrice.toFixed(6)} ${result.newHighFound ? '(New High!)' : ''}`);
+        } else {
+          failed.push(symbol);
+        }
+
+        // 延迟避免API限制
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+      } catch (error) {
+        failed.push(symbol);
+        log.error(`❌ Failed to update ${symbol}:`, error);
+      }
+    }
+
+    // 保存更新后的缓存
+    if (success.length > 0) {
+      await this.saveCacheToFile();
+      log.info(`💾 Updated cache saved with ${success.length} refreshed symbols`);
+    }
+
+    log.info(`🔄 Batch update completed: ${success.length} success, ${failed.length} failed, ${newHighs.length} new highs`);
+
+    return {
+      success,
+      failed,
+      newHighs,
+      totalUpdated: success.length
+    };
+  }
+
+  /**
+   * 获取缓存状态信息
+   */
+  getCacheStatus(): {
+    totalEntries: number;
+    oldestUpdate: number;
+    newestUpdate: number;
+    averageAge: number;
+    cacheHealthy: boolean;
+  } {
+    if (!this.isInitialized || this.cache.size === 0) {
+      return {
+        totalEntries: 0,
+        oldestUpdate: 0,
+        newestUpdate: 0,
+        averageAge: 0,
+        cacheHealthy: false
+      };
+    }
+
+    const now = Date.now();
+    const lastUpdatedTimes = Array.from(this.cache.values()).map(item => item.lastUpdated);
+
+    const oldestUpdate = Math.min(...lastUpdatedTimes);
+    const newestUpdate = Math.max(...lastUpdatedTimes);
+    const averageAge = now - (lastUpdatedTimes.reduce((sum, time) => sum + time, 0) / lastUpdatedTimes.length);
+
+    // 如果平均数据超过24小时认为不健康
+    const cacheHealthy = averageAge < (24 * 60 * 60 * 1000);
+
+    return {
+      totalEntries: this.cache.size,
+      oldestUpdate,
+      newestUpdate,
+      averageAge,
+      cacheHealthy
+    };
+  }
+
+  /**
+   * 手动触发增量更新所有过期数据
+   */
+  async triggerManualUpdate(hoursThreshold: number = 24): Promise<{
+    success: boolean;
+    message: string;
+    updateResult?: {
+      success: string[];
+      failed: string[];
+      newHighs: string[];
+      totalUpdated: number;
+    };
+  }> {
+    if (!this.isInitialized) {
+      return {
+        success: false,
+        message: '❌ 缓存未初始化'
+      };
+    }
+
+    try {
+      // 找出所有需要更新的代币（超过指定小时数的）
+      const now = Date.now();
+      const threshold = hoursThreshold * 60 * 60 * 1000; // 转换为毫秒
+      const outdatedSymbols: string[] = [];
+
+      for (const [key, data] of this.cache.entries()) {
+        if (now - data.lastUpdated > threshold) {
+          // 从缓存key中提取代币符号 (format: SYMBOL:timeframe)
+          const symbol = key.split(':')[0];
+          if (!outdatedSymbols.includes(symbol)) {
+            outdatedSymbols.push(symbol);
+          }
+        }
+      }
+
+      if (outdatedSymbols.length === 0) {
+        return {
+          success: true,
+          message: `✅ 所有缓存数据都是最新的 (${hoursThreshold}小时内)`
+        };
+      }
+
+      log.info(`🔄 Manual update triggered for ${outdatedSymbols.length} outdated symbols`);
+
+      // 执行批量增量更新
+      const updateResult = await this.batchIncrementalUpdate(outdatedSymbols, 3);
+
+      return {
+        success: true,
+        message: `✅ 手动更新完成：更新了 ${updateResult.totalUpdated} 个币种，失败 ${updateResult.failed.length} 个，发现新高 ${updateResult.newHighs.length} 个`,
+        updateResult
+      };
+
+    } catch (error) {
+      log.error('Manual cache update failed:', error);
+      return {
+        success: false,
+        message: `❌ 手动更新失败: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
   }
 
   /**
