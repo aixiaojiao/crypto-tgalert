@@ -145,7 +145,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
     // 优先级5: 系统黄名单 (可被用户管理覆盖)
     if (isTokenInList(cleanSymbol, YELLOWLIST_TOKENS)) {
       return {
-        allowed: false,
+        allowed: true,  // 🔧 FIX: 黄名单代币应该允许推送但加风险标识
         reason: '⚠️ 系统警告代币，谨慎交易',
         source: 'system_yellowlist',
         priority: FilterPriority.SYSTEM_YELLOWLIST,
