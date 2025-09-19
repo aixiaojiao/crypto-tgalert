@@ -300,13 +300,18 @@ export class TelegramBot {
         { command: 'funding', description: '💰 查看资金费率排行' },
         { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
         { command: 'alert_list', description: '⚡ 查看我的警报列表' },
+        { command: 'alert_bt', description: '🚀 历史突破警报' },
         { command: 'start_gainers_push', description: '🔔 开启涨幅推送' },
         { command: 'blacklist_add', description: '🛡️ 添加个人黑名单' },
+        { command: 'blacklist_remove', description: '🛡️ 移除黑名单' },
         { command: 'blacklist_list', description: '🛡️ 查看过滤规则' },
         { command: 'mute_add', description: '🔇 临时屏蔽代币' },
+        { command: 'mute_remove', description: '🔇 解除屏蔽' },
         { command: 'mute_list', description: '🔇 查看屏蔽列表' },
+        { command: 'mute_clear', description: '🔇 清空所有屏蔽' },
         { command: 'filter_settings', description: '⚙️ 过滤设置管理' },
         { command: 'filter_volume', description: '⚙️ 设置交易量阈值' },
+        { command: 'filter_auto', description: '⚙️ 启用/禁用自动过滤' },
         { command: 'status', description: '⚙️ 查看系统状态' }
       ];
 
@@ -428,8 +433,11 @@ export class TelegramBot {
 
 🛡️ *过滤管理:*
 /blacklist_add doge - 添加DOGE到黑名单
+/blacklist_remove doge - 从黑名单移除DOGE
 /mute_add shib 2h - 临时屏蔽SHIB 2小时
+/mute_list - 查看所有屏蔽列表
 /filter_settings - 查看过滤设置
+/filter_auto on - 启用自动过滤
 
 🤖 机器人已准备就绪！
       `;
@@ -442,79 +450,7 @@ export class TelegramBot {
     this.bot.command('help', this.commandWithMonitoring('help', async (ctx) => {
       try {
         console.log('📖 处理/help命令...');
-        const helpMessage = `📖 Crypto Alert Bot 完整功能指南
-
-💰 价格查询:
-/price btc - 查看BTC价格+资金费率+持仓量
-/price eth - 查看ETH价格信息
-
-📊 技术分析:
-/signals btc - BTC综合技术分析 🆕
-/signals eth 1h - ETH 1小时周期技术分析
-/signals doge balanced - DOGE平衡策略分析
-
-📊 市场排行:
-/rank - 默认涨幅榜 (等同于 /rank_gainers)
-/rank_gainers - 涨幅排行榜
-/rank_gainers 1h - 1小时涨幅榜
-/rank_losers - 跌幅排行榜
-/rank_losers 4h - 4小时跌幅榜
-/funding - 资金费率排行 (负费率=做空付费)
-/oi_24h, /oi_4h, /oi_1h - 持仓量增长榜
-
-⚡ 智能警报系统:
-🔸 价格警报:
-/alert btc > 50000 - BTC价格突破50000时提醒
-/alert eth < 3000 - ETH价格跌破3000时提醒
-/alert doge change 5% - DOGE价格变化超过5%时提醒
-
-🔸 急涨急跌警报 (核心功能):
-/alert_5m_gain_3_all - 5分钟涨3%全币监控
-/alert_1h_loss_5_btc - 1小时跌5%BTC监控
-/alert_15m_all_2_all - 15分钟涨跌2%全币监控
-格式: /alert_[时间]_[方向]_[百分比]_[币种]
-时间: 1m,5m,15m,30m,1h,4h,24h,3d
-方向: gain(涨),loss(跌),all(涨跌)
-币种: btc,eth,all(全部)等
-
-🔸 警报管理:
-/alert_list - 查看所有警报
-/alert_remove <ID> - 删除价格警报
-/alert_remove T<ID> - 删除急涨急跌警报
-/alert_toggle <ID> - 启用/禁用警报
-
-🔔 推送服务:
-/start_gainers_push - 开启涨幅推送(自动推送Top10)
-/start_funding_push - 开启费率推送
-/stop_all_push - 停止所有推送
-
-📈 历史分析:
-/high btc 1w - BTC一周高点
-/high near 1m - 接近月高点币种 🆕
-/high near - 接近历史高点币种 🆕
-
-🛡️ 过滤管理:
-/blacklist_add <symbol> - 添加个人黑名单
-/blacklist_remove <symbol> - 移除黑名单
-/blacklist_list - 查看过滤规则状态
-/mute_add <symbol> <duration> - 临时屏蔽代币
-/mute_remove <symbol> - 解除屏蔽
-/mute_list - 查看屏蔽列表
-/filter_settings - 查看过滤设置
-/filter_volume <amount> - 设置交易量阈值
-/filter_auto on/off - 启用/禁用自动过滤
-
-⚙️ 系统:
-/status - 系统状态
-/cache_status - 所有缓存系统状态
-/cache_update - 更新缓存数据 (管理员)
-/help - 显示帮助
-
-💡 使用提示:
-• 所有命令支持直接点击执行
-• 警报系统支持两种类型统一管理
-• 推送服务可独立开关
-• 支持多币种同时监控`;
+        const helpMessage = this.generateHelpContent();
 
         console.log('📤 发送/help消息...');
         await ctx.reply(helpMessage);
@@ -1073,7 +1009,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         '• `/alert_list` - 查看所有警报（等同于旧命令）\n' +
         '• `/alert` - 查看完整帮助和功能\n' +
         '• `/alert btc > 50000` - 创建价格警报\n' +
-        '• `/alert_remove <ID>` - 删除警报\n\n' +
+        '• `/alert_remove &lt;ID&gt;` - 删除警报\n\n' +
         '✨ *新功能:* 统一界面，支持更多警报类型，更强大的管理功能\n\n' +
         '👆 请使用 `/alert_list` 替代此命令',
         { parse_mode: 'Markdown' }
@@ -1085,11 +1021,11 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         '🔄 *命令已优化升级*\n\n' +
         '`/remove_alert` 命令已整合到新的 `/alert` 命令中！\n\n' +
         '📊 *新用法:*\n' +
-        '• `/alert_remove <ID>` - 删除指定警报\n' +
+        '• `/alert_remove &lt;ID&gt;` - 删除指定警报\n' +
         '• `/alert_list` - 查看所有警报和ID\n' +
-        '• `/alert_toggle <ID>` - 启用/禁用警报\n\n' +
+        '• `/alert_toggle &lt;ID&gt;` - 启用/禁用警报\n\n' +
         '✨ *新功能:* 更直观的ID管理，支持批量操作\n\n' +
-        '👆 请使用 `/alert_remove <ID>` 替代此命令',
+        '👆 请使用 `/alert_remove &lt;ID&gt;` 替代此命令',
         { parse_mode: 'Markdown' }
       );
     });
@@ -1387,13 +1323,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       '🔸 **涨跌幅警报**\n' +
       '• `/alert btc change 5% 1h` - BTC在1小时内涨跌超过5%时提醒\n' +
       '• `/alert eth change 10% 24h` - ETH在24小时内涨跌超过10%时提醒\n\n' +
+      '🔸 **历史突破警报 (重要功能)** 🚀\n' +
+      '• `/alert_bt` - 全币种历史新高突破 (默认)\n' +
+      '• `/alert_bt btc` - BTC历史新高突破\n' +
+      '• `/alert_bt eth 1w` - ETH一周高点突破\n' +
+      '• `/alert_bt all 1m` - 全币种一月高点突破\n' +
+      '• 支持时间框架: 1w, 1m, 6m, 1y, all(历史)\n' +
+      '• 缺省值: symbol=all(全币种), timeframe=all(历史)\n\n' +
       '🔸 **排行榜推送**\n' +
       '• `/alert gainers push` - 开启涨幅榜推送通知\n' +
       '• `/alert funding push` - 开启资金费率推送通知\n\n' +
       '⚙️ *管理命令:*\n' +
       '• `/alert_list` - 查看所有警报\n' +
-      '• `/alert_remove <ID>` - 删除指定警报\n' +
-      '• `/alert_toggle <ID>` - 启用/禁用警报\n' +
+      '• `/alert_remove &lt;ID&gt;` - 删除指定警报\n' +
+      '• `/alert_toggle &lt;ID&gt;` - 启用/禁用警报\n' +
       '• `/alert_history` - 查看触发历史\n' +
       '• `/alert_stats` - 查看统计信息\n\n' +
       '💡 *时间框架:* 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d, 1w\n' +
@@ -1453,9 +1396,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
 
       message += `💡 操作指南:\n`;
-      message += `• 删除价格警报: /alert_remove <ID>\n`;
-      message += `• 删除急涨急跌警报: /alert_remove T<ID>\n`;
-      message += `• 切换: /alert_toggle <ID>\n`;
+      message += `• 删除价格警报: /alert_remove &lt;ID&gt;\n`;
+      message += `• 删除急涨急跌警报: /alert_remove T&lt;ID&gt;\n`;
+      message += `• 切换: /alert_toggle &lt;ID&gt;\n`;
       message += `• 历史: /alert_history [ID]\n`;
       message += `• 统计: /alert_stats`;
 
@@ -1775,17 +1718,124 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       case 'funding_rate': return '资金费率';
       case 'open_interest': return '持仓量';
       case 'technical_indicator': return '技术指标';
+      case 'breakthrough': return '历史突破警报';
+      case 'multi_breakthrough': return '全币种突破警报';
       case 'custom': return '自定义';
       default: return type;
     }
   }
 
   /**
+   * HTML转义函数，防止特殊字符破坏HTML格式
+   */
+  private escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;');
+  }
+
+  /**
+   * 生成帮助内容（统一的help文档）
+   */
+  public generateHelpContent(): string {
+    return `📖 Crypto Alert Bot 完整功能指南
+
+💰 价格查询:
+/price btc - 查看BTC价格+资金费率+持仓量
+/price eth - 查看ETH价格信息
+
+📊 技术分析:
+/signals btc - BTC综合技术分析 🆕
+/signals eth 1h - ETH 1小时周期技术分析
+/signals doge balanced - DOGE平衡策略分析
+
+📊 市场排行:
+/rank - 默认涨幅榜 (等同于 /rank_gainers)
+/rank_gainers - 涨幅排行榜
+/rank_gainers 1h - 1小时涨幅榜
+/rank_losers - 跌幅排行榜
+/rank_losers 4h - 4小时跌幅榜
+/funding - 资金费率排行 (负费率=做空付费)
+/oi_24h, /oi_4h, /oi_1h - 持仓量增长榜
+
+⚡ 智能警报系统:
+🔸 价格警报:
+/alert btc &gt; 50000 - BTC价格突破50000时提醒
+/alert eth &lt; 3000 - ETH价格跌破3000时提醒
+/alert doge change 5% - DOGE价格变化超过5%时提醒
+
+🔸 突破警报 (重要功能) 🚀:
+/alert_bt - 全币种历史新高突破 (默认)
+/alert_bt btc - BTC历史新高突破
+/alert_bt eth 1w - ETH一周高点突破
+/alert_bt all 1m - 全币种一月高点突破
+
+🔸 急涨急跌警报 (核心功能):
+/alert_5m_gain_3_all - 5分钟涨3%全币监控
+/alert_1h_loss_5_btc - 1小时跌5%BTC监控
+/alert_15m_all_2_all - 15分钟涨跌2%全币监控
+格式: /alert_[时间]_[方向]_[百分比]_[币种]
+时间: 1m,5m,15m,30m,1h,4h,24h,3d
+方向: gain(涨),loss(跌),all(涨跌)
+币种: btc,eth,all(全部)等
+
+🔸 警报管理:
+/alert_list - 查看所有警报
+/alert_remove &lt;ID&gt; - 删除价格警报
+/alert_remove T&lt;ID&gt; - 删除急涨急跌警报
+/alert_toggle &lt;ID&gt; - 启用/禁用警报
+
+🔔 推送服务:
+/start_gainers_push - 开启涨幅推送(自动推送Top10)
+/start_funding_push - 开启费率推送
+/stop_all_push - 停止所有推送
+
+📈 历史分析:
+/high btc 1w - BTC一周高点
+/high near 1m - 接近月高点币种 🆕
+/high near - 接近历史高点币种 🆕
+
+🛡️ 过滤管理:
+/blacklist_add &lt;symbol&gt; - 添加个人黑名单
+/blacklist_remove &lt;symbol&gt; - 移除黑名单
+/blacklist_list - 查看过滤规则状态
+/mute_add &lt;symbol&gt; &lt;duration&gt; - 临时屏蔽代币
+/mute_remove &lt;symbol&gt; - 解除屏蔽
+/mute_list - 查看屏蔽列表
+/mute_clear - 清空所有屏蔽
+/filter_settings - 查看过滤设置
+/filter_volume &lt;amount&gt; - 设置交易量阈值
+/filter_auto on/off - 启用/禁用自动过滤
+
+⚙️ 系统:
+/status - 系统状态
+/cache_status - 所有缓存系统状态
+/cache_update - 更新缓存数据 (管理员)
+/help - 显示帮助
+
+💡 使用提示:
+• 所有命令支持直接点击执行
+• 警报系统支持两种类型统一管理
+• 推送服务可独立开关
+• 支持多币种同时监控`;
+  }
+
+  /**
    * 处理警报创建
    */
   private async handleAlertCreate(ctx: any, args: string[]): Promise<void> {
-    if (!args || args.length < 3) {
-      await ctx.reply('❌ 警报参数不足\n\n💡 示例: /alert btc > 50000');
+    if (!args || args.length < 2) {
+      await ctx.reply('❌ 警报参数不足\n\n💡 示例:\n• /alert btc > 50000\n• /alert breakthrough btc 1w\n• /alert bt all 1m');
+      return;
+    }
+
+    // 检查是否为突破警报，需要特殊处理参数数量
+    const isBreakthroughAlert = args[0].toLowerCase() === 'breakthrough' || args[0].toLowerCase() === 'bt';
+    if (!isBreakthroughAlert && args.length < 3) {
+      await ctx.reply('❌ 价格警报参数不足\n\n💡 示例: /alert btc > 50000');
       return;
     }
 
@@ -1810,13 +1860,13 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
       await ctx.reply(
         `✅ 警报创建成功！\n\n` +
-        `🎯 **警报详情:**\n` +
-        `📄 描述: ${description}\n` +
-        `🆔 ID: ${alertConfig.id}\n` +
+        `🎯 <b>警报详情:</b>\n` +
+        `📄 描述: ${this.escapeHtml(description)}\n` +
+        `🆔 ID: <code>${this.escapeHtml(alertConfig.id)}</code>\n` +
         `⏰ 冷却时间: ${alertConfig.cooldownMs / 1000}秒\n` +
         `🔔 优先级: ${alertConfig.priority}\n\n` +
         `💡 使用 /alert_list 查看所有警报`,
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'HTML' }
       );
 
     } catch (error) {
@@ -1824,31 +1874,65 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       await ctx.reply(`❌ 创建警报失败: ${errorMessage}`);
     }
+  }
 
-    // Filter management commands
-    this.bot.command('blacklist', async (ctx) => {
-      const args = ctx.message?.text.split(' ').slice(1) || [];
-      const result = await this.blacklistCommandHandler.handle(ctx, args);
-      if (result.shouldReply && result.message) {
-        await ctx.reply(result.message, { parse_mode: 'Markdown' });
-      }
-    });
+  /**
+   * 处理突破警报创建
+   */
+  private async handleBreakthroughAlert(ctx: any, args: string[]): Promise<void> {
+    try {
+      // 设置缺省值：symbol = 'all', timeframe = 'all'
+      let symbol = 'all';
+      let timeframe = 'all';
 
-    this.bot.command('mute', async (ctx) => {
-      const args = ctx.message?.text.split(' ').slice(1) || [];
-      const result = await this.muteCommandHandler.handle(ctx, args);
-      if (result.shouldReply && result.message) {
-        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      // 解析参数
+      if (args && args.length >= 1) {
+        symbol = args[0];
+        if (args.length >= 2) {
+          timeframe = args[1];
+        }
       }
-    });
 
-    this.bot.command('filter', async (ctx) => {
-      const args = ctx.message?.text.split(' ').slice(1) || [];
-      const result = await this.filterCommandHandler.handle(ctx, args);
-      if (result.shouldReply && result.message) {
-        await ctx.reply(result.message, { parse_mode: 'Markdown' });
-      }
-    });
+      await ctx.reply(`⚡ 正在创建突破警报: ${symbol} ${timeframe}...`);
+
+      // 构造breakthrough格式的参数
+      const breakthroughArgs = ['breakthrough', symbol, timeframe];
+
+      // 解析警报命令
+      const parsed = AlertCommandParser.parseAlertCommand(breakthroughArgs);
+      const userId = ctx.from?.id?.toString() || '';
+      const chatId = ctx.chat?.id || 0;
+
+      // 生成警报配置
+      const alertConfig = AlertCommandParser.toAlertConfig(parsed, userId, chatId);
+
+      // 注册警报
+      await this.unifiedAlertService.registerAlert(alertConfig);
+
+      // 生成描述
+      const description = AlertCommandParser.generateAlertDescription(alertConfig);
+
+      await ctx.reply(
+        `✅ 突破警报创建成功！\n\n` +
+        `🎯 <b>警报详情:</b>\n` +
+        `📄 描述: ${this.escapeHtml(description)}\n` +
+        `🆔 ID: <code>${this.escapeHtml(alertConfig.id)}</code>\n` +
+        `⏰ 冷却时间: ${alertConfig.cooldownMs / 1000}秒\n` +
+        `🔔 优先级: ${alertConfig.priority}\n\n` +
+        `💡 使用 /alert_list 查看所有警报\n\n` +
+        `🚀 <b>使用说明:</b>\n` +
+        `• /alert_bt - 全币种历史突破 (默认)\n` +
+        `• /alert_bt btc - BTC历史突破\n` +
+        `• /alert_bt eth 1w - ETH一周突破\n` +
+        `• /alert_bt all 1m - 全币种一个月突破`,
+        { parse_mode: 'HTML' }
+      );
+
+    } catch (error) {
+      log.error('Failed to create breakthrough alert:', error);
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      await ctx.reply(`❌ 创建突破警报失败: ${errorMessage}`);
+    }
   }
 
   /**
@@ -1885,6 +1969,17 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
     this.bot.command('alert_stats', async (ctx) => {
       await this.handleAlertStats(ctx);
+    });
+
+    // 突破警报下划线命令
+    this.bot.command('alert_bt', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+      await this.handleBreakthroughAlert(ctx, args);
+    });
+
+    this.bot.command('alert_breakthrough', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1);
+      await this.handleBreakthroughAlert(ctx, args);
     });
 
     // OI相关下划线命令
@@ -2162,7 +2257,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     this.bot.command('blacklist_add', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /blacklist_add <symbol> [reason]\n示例: /blacklist_add SHIB 垃圾币');
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /blacklist_add &lt;symbol&gt; [reason]\n示例: /blacklist_add SHIB 垃圾币');
         return;
       }
       const result = await this.blacklistCommandHandler.handle(ctx, ['add', ...args]);
@@ -2174,7 +2269,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     this.bot.command('blacklist_remove', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /blacklist_remove <symbol>\n示例: /blacklist_remove DOGE');
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /blacklist_remove &lt;symbol&gt;\n示例: /blacklist_remove DOGE');
         return;
       }
       const result = await this.blacklistCommandHandler.handle(ctx, ['remove', ...args]);
@@ -2200,7 +2295,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     this.bot.command('mute_add', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length < 2) {
-        await ctx.reply('❌ 参数不足\n用法: /mute_add <symbol> <duration> [reason]\n示例: /mute_add DOGE 2h 波动太大\n\n时间格式: 30m, 2h, 1d, 1w');
+        await ctx.reply('❌ 参数不足\n用法: /mute_add &lt;symbol&gt; &lt;duration&gt; [reason]\n示例: /mute_add DOGE 2h 波动太大\n\n时间格式: 30m, 2h, 1d, 1w');
         return;
       }
       const result = await this.muteCommandHandler.handle(ctx, args);
@@ -2212,7 +2307,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     this.bot.command('mute_remove', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要解除屏蔽的代币符号\n用法: /mute_remove <symbol>\n示例: /mute_remove BTC');
+        await ctx.reply('❌ 请指定要解除屏蔽的代币符号\n用法: /mute_remove &lt;symbol&gt;\n示例: /mute_remove BTC');
         return;
       }
       const result = await this.muteCommandHandler.handle(ctx, ['remove', ...args]);
@@ -2245,7 +2340,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     this.bot.command('filter_volume', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定交易量阈值\n用法: /filter_volume <amount>\n示例: /filter_volume 10 (表示10M USDT)');
+        await ctx.reply('❌ 请指定交易量阈值\n用法: /filter_volume &lt;amount&gt;\n示例: /filter_volume 10 (表示10M USDT)');
         return;
       }
       const result = await this.filterCommandHandler.handle(ctx, ['volume', ...args]);
