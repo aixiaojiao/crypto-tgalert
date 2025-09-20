@@ -1,4 +1,4 @@
-import { AlertType, AlertCondition, AlertConfig, AlertPriority, NotificationChannel } from '../services/alerts/IAlertService';
+import { AlertType, AlertCondition, AlertConfig, AlertPriority, NotificationChannel, BreakthroughAlertMetadata } from '../services/alerts/IAlertService';
 
 export interface ParsedAlertCommand {
   symbol: string;
@@ -6,6 +6,8 @@ export interface ParsedAlertCommand {
   value: number;
   type: AlertType;
   priority?: AlertPriority;
+  timeframe?: string; // For breakthrough alerts
+  watchAllSymbols?: boolean; // For multi-breakthrough alerts
 }
 
 export class AlertCommandParser {
@@ -29,9 +31,23 @@ export class AlertCommandParser {
    * - /alert DOGE = 0.1
    * - /alert BTC change 5%
    * - /alert ETH crosses above 3500
+   * - /alert breakthrough BTC 1w
+   * - /alert bt ETH all
+   * - /alert breakthrough all 1m
    */
   static parseAlertCommand(args: string[]): ParsedAlertCommand {
-    if (!args || args.length < 3) {
+    if (!args || args.length < 2) {
+      throw new Error('警报参数不足。格式: /alert <symbol> <condition> <value> 或 /alert breakthrough <symbol> <timeframe>');
+    }
+
+    // 检查是否为breakthrough命令
+    const firstArg = args[0].toLowerCase();
+    if (firstArg === 'breakthrough' || firstArg === 'bt') {
+      return this.parseBreakthroughCommand(args.slice(1));
+    }
+
+    // 传统警报命令解析
+    if (args.length < 3) {
       throw new Error('警报参数不足。格式: /alert <symbol> <condition> <value>');
     }
 
@@ -65,17 +81,21 @@ export class AlertCommandParser {
   ): AlertConfig {
     const id = `${userId}-${parsed.symbol}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    return {
+    // Breakthrough警报的特殊配置
+    const isBreakthroughAlert = parsed.type === AlertType.BREAKTHROUGH || parsed.type === AlertType.MULTI_BREAKTHROUGH;
+
+    const baseConfig: AlertConfig = {
       id,
       symbol: parsed.symbol,
       type: parsed.type,
       condition: parsed.condition,
       thresholds: {
-        value: parsed.value
+        value: parsed.value,
+        ...(parsed.timeframe && { timeframe: parsed.timeframe })
       },
       enabled: true,
       notificationChannels: [NotificationChannel.TELEGRAM],
-      cooldownMs: 5 * 60 * 1000, // 5分钟冷却时间
+      cooldownMs: isBreakthroughAlert ? this.calculateDynamicCooldown(parsed.timeframe) : 5 * 60 * 1000,
       maxRetries: 3,
       priority: parsed.priority || AlertPriority.MEDIUM,
       metadata: {
@@ -84,6 +104,22 @@ export class AlertCommandParser {
         createdAt: new Date().toISOString()
       }
     };
+
+    // 为breakthrough警报添加特殊元数据
+    if (isBreakthroughAlert && parsed.timeframe) {
+      const breakthroughMetadata: BreakthroughAlertMetadata = {
+        timeframe: parsed.timeframe as any,
+        watchAllSymbols: parsed.watchAllSymbols || false,
+        triggeredSymbols: []
+      };
+
+      baseConfig.metadata = {
+        ...baseConfig.metadata,
+        ...breakthroughMetadata
+      };
+    }
+
+    return baseConfig;
   }
 
   private static extractSymbol(firstArg: string): string {
@@ -153,6 +189,97 @@ export class AlertCommandParser {
     }
   }
 
+  // 预定义的视觉标识池（颜色+形状组合）
+  private static readonly VISUAL_ICONS = [
+    '🟢⭕', '🔴⭕', '🔵⭕', '🟡⭕', '🟠⭕', '🟣⭕', // 圆形
+    '🟢⬜', '🔴⬜', '🔵⬜', '🟡⬜', '🟠⬜', '🟣⬜', // 方形
+    '🟢🔺', '🔴🔺', '🔵🔺', '🟡🔺', '🟠🔺', '🟣🔺', // 三角形
+    '🟢🔶', '🔴🔶', '🔵🔶', '🟡🔶', '🟠🔶', '🟣🔶', // 菱形
+    '🟢⬟', '🔴⬟', '🔵⬟', '🟡⬟', '🟠⬟', '🟣⬟', // 六边形
+    '🟢⬢', '🔴⬢', '🔵⬢', '🟡⬢', '🟠⬢', '🟣⬢'  // 六边形变体
+  ];
+
+  // 静态映射：警报ID -> 视觉标识索引
+  private static alertIconMapping = new Map<string, number>();
+  private static usedIndices = new Set<number>();
+
+  /**
+   * 为警报分配视觉标识
+   * @param alertId 警报ID
+   * @param isGain 是否为上涨方向
+   * @returns 完整的视觉标识（图标 + 方向箭头）
+   */
+  static getAlertVisualIcon(alertId: string, isGain: boolean): string {
+    // 获取该警报的视觉标识
+    const baseIcon = this.getAlertBaseIcon(alertId);
+
+    // 添加方向箭头
+    const directionArrow = isGain ? '⬆️' : '⬇️';
+
+    return `${baseIcon}${directionArrow}`;
+  }
+
+  /**
+   * 获取警报的基础视觉标识（不含方向）
+   */
+  private static getAlertBaseIcon(alertId: string): string {
+    // 如果已经分配过，直接返回
+    if (this.alertIconMapping.has(alertId)) {
+      const index = this.alertIconMapping.get(alertId)!;
+      return this.VISUAL_ICONS[index];
+    }
+
+    // 为新警报分配标识
+    return this.allocateNewIcon(alertId);
+  }
+
+  /**
+   * 为新警报分配视觉标识
+   */
+  private static allocateNewIcon(alertId: string): string {
+    // 找到第一个未使用的索引
+    let availableIndex = -1;
+    for (let i = 0; i < this.VISUAL_ICONS.length; i++) {
+      if (!this.usedIndices.has(i)) {
+        availableIndex = i;
+        break;
+      }
+    }
+
+    // 如果所有标识都被使用，从头开始循环
+    if (availableIndex === -1) {
+      availableIndex = this.alertIconMapping.size % this.VISUAL_ICONS.length;
+    }
+
+    // 分配标识
+    this.alertIconMapping.set(alertId, availableIndex);
+    this.usedIndices.add(availableIndex);
+
+    return this.VISUAL_ICONS[availableIndex];
+  }
+
+  /**
+   * 释放警报的视觉标识（当警报被删除时调用）
+   */
+  static releaseAlertIcon(alertId: string): void {
+    const index = this.alertIconMapping.get(alertId);
+    if (index !== undefined) {
+      this.alertIconMapping.delete(alertId);
+      this.usedIndices.delete(index);
+    }
+  }
+
+  /**
+   * 获取当前分配状态（用于调试）
+   */
+  static getIconAllocationStatus(): { total: number; used: number; available: number } {
+    return {
+      total: this.VISUAL_ICONS.length,
+      used: this.usedIndices.size,
+      available: this.VISUAL_ICONS.length - this.usedIndices.size
+    };
+  }
+
   /**
    * 生成警报描述
    */
@@ -168,9 +295,29 @@ export class AlertCommandParser {
       case AlertType.PRICE_CHANGE:
         return `${symbol} 价格变化 ${conditionText} ${thresholds.value}%`;
 
+      case AlertType.BREAKTHROUGH:
+        const timeframeName = this.getTimeframeName(thresholds.timeframe);
+        return `${symbol} ${conditionText} (${timeframeName})`;
+
+      case AlertType.MULTI_BREAKTHROUGH:
+        const multiTimeframeName = this.getTimeframeName(thresholds.timeframe);
+        return `全币种 ${conditionText} (${multiTimeframeName})`;
+
       default:
         return `${symbol} ${conditionText} ${thresholds.value}`;
     }
+  }
+
+  private static getTimeframeName(timeframe?: string): string {
+    const timeframeNames: Record<string, string> = {
+      '1w': '1周',
+      '1m': '1个月',
+      '6m': '6个月',
+      '1y': '1年',
+      'all': '历史'
+    };
+
+    return timeframeNames[timeframe || 'all'] || timeframe || '未知';
   }
 
   private static getConditionText(condition: AlertCondition): string {
@@ -187,8 +334,94 @@ export class AlertCommandParser {
         return '突破上方';
       case AlertCondition.CROSSES_BELOW:
         return '跌破下方';
+      case AlertCondition.BREAKS_HIGH:
+        return '突破历史高点';
+      case AlertCondition.BREAKS_TIMEFRAME_HIGH:
+        return '突破时间框架高点';
       default:
         return '满足条件';
     }
+  }
+
+  /**
+   * 根据时间框架计算动态冷却时间
+   * 策略：确保及时通知，避免垃圾信息
+   */
+  private static calculateDynamicCooldown(timeframe?: string): number {
+    if (!timeframe) return 30 * 60 * 1000; // 默认30分钟
+
+    // 解析时间框架为分钟数
+    const timeframeMinutes = this.parseTimeframeToMinutes(timeframe);
+
+    if (timeframeMinutes <= 10) {
+      // 10分钟以下：1分钟冷却
+      return 1 * 60 * 1000;
+    } else if (timeframeMinutes <= 60) {
+      // 10分钟到1小时：5分钟冷却
+      return 5 * 60 * 1000;
+    } else {
+      // 1小时以上：30分钟冷却
+      return 30 * 60 * 1000;
+    }
+  }
+
+  /**
+   * 将时间框架字符串转换为分钟数
+   */
+  private static parseTimeframeToMinutes(timeframe: string): number {
+    switch (timeframe) {
+      case '1w': return 7 * 24 * 60;      // 1周 = 10080分钟
+      case '1m': return 30 * 24 * 60;     // 1月 = 43200分钟
+      case '6m': return 180 * 24 * 60;    // 6月 = 259200分钟
+      case '1y': return 365 * 24 * 60;    // 1年 = 525600分钟
+      case 'all': return 365 * 24 * 60;   // 历史 = 按1年计算
+      default: return 60;                 // 未知时间框架按1小时计算
+    }
+  }
+
+  /**
+   * 解析breakthrough命令
+   * 支持的格式:
+   * - breakthrough BTC 1w
+   * - breakthrough ETH all
+   * - breakthrough all 1m (全币种监控)
+   */
+  private static parseBreakthroughCommand(args: string[]): ParsedAlertCommand {
+    if (!args || args.length < 2) {
+      throw new Error('突破警报参数不足。\n\n格式: /alert breakthrough <symbol> <timeframe>\n\n示例:\n• /alert breakthrough btc 1w\n• /alert breakthrough all 1m\n• /alert bt eth all\n\n支持时间框架: 1w, 1m, 6m, 1y, all');
+    }
+
+    const symbol = args[0].toLowerCase();
+    const timeframe = args[1].toLowerCase();
+
+    // 验证时间框架
+    const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
+    if (!validTimeframes.includes(timeframe)) {
+      throw new Error(`无效的时间框架: ${timeframe}。支持: ${validTimeframes.join(', ')}`);
+    }
+
+    // 检查是否为全币种监控
+    const watchAllSymbols = symbol === 'all';
+
+    if (!watchAllSymbols) {
+      // 验证单个币种符号
+      if (!this.SYMBOL_PATTERN.test(symbol)) {
+        throw new Error(`无效的交易对符号: ${symbol}`);
+      }
+    }
+
+    // 确定警报类型
+    const alertType = watchAllSymbols ? AlertType.MULTI_BREAKTHROUGH : AlertType.BREAKTHROUGH;
+    const condition = timeframe === 'all' ? AlertCondition.BREAKS_HIGH : AlertCondition.BREAKS_TIMEFRAME_HIGH;
+
+    return {
+      symbol: watchAllSymbols ? 'ALL' : symbol.toUpperCase(),
+      condition,
+      value: 0, // breakthrough不需要具体数值
+      type: alertType,
+      priority: AlertPriority.CRITICAL, // 突破警报默认为关键级别
+      timeframe,
+      watchAllSymbols
+    };
   }
 }

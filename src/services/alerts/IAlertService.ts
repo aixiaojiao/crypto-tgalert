@@ -20,6 +20,8 @@ export enum AlertType {
   FUNDING_RATE = 'funding_rate',
   OPEN_INTEREST = 'open_interest',
   TECHNICAL_INDICATOR = 'technical_indicator',
+  BREAKTHROUGH = 'breakthrough',
+  MULTI_BREAKTHROUGH = 'multi_breakthrough',
   CUSTOM = 'custom'
 }
 
@@ -30,7 +32,9 @@ export enum AlertCondition {
   PERCENTAGE_CHANGE = 'pct_change',
   ABSOLUTE_CHANGE = 'abs_change',
   CROSSES_ABOVE = 'crosses_above',
-  CROSSES_BELOW = 'crosses_below'
+  CROSSES_BELOW = 'crosses_below',
+  BREAKS_HIGH = 'breaks_high',
+  BREAKS_TIMEFRAME_HIGH = 'breaks_timeframe_high'
 }
 
 export interface AlertThreshold {
@@ -38,6 +42,7 @@ export interface AlertThreshold {
   timeframeMs?: number;
   referencePrice?: number;
   percentage?: number;
+  timeframe?: string; // For breakthrough alerts: '1w', '1m', '6m', '1y', 'all'
 }
 
 export enum NotificationChannel {
@@ -162,4 +167,24 @@ export interface AlertStatistics {
   byPriority: Record<AlertPriority, number>;
   avgResponseTime: number;
   successRate: number;
+}
+
+// Breakthrough Alert specific interfaces
+export interface BreakthroughAlertMetadata {
+  timeframe: '1w' | '1m' | '6m' | '1y' | 'all';
+  watchAllSymbols: boolean;
+  lastTriggeredHigh?: number;
+  lastTriggeredTime?: string;
+  triggeredSymbols?: string[];
+  lastCheckPrice?: number; // For deduplication
+}
+
+export interface BreakthroughCheckResult {
+  symbol: string;
+  currentPrice: number;
+  timeframeHigh: number;
+  highTimestamp: number;
+  isBreakthrough: boolean;
+  breakAmount: number; // How much above the high
+  breakPercentage: number; // Percentage above the high
 }

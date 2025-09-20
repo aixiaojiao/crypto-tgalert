@@ -4,6 +4,9 @@ import { PriceAlertModel, PriceAlertConfig } from '../models/priceAlertModel';
 import { TelegramBot } from '../bot';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
 import { getTokenRiskLevel, getRiskIcon } from '../config/tokenLists';
+import { resolve } from '../core/container';
+import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
+import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 
 export interface PriceSnapshot {
   symbol: string;
@@ -41,6 +44,7 @@ export class PriceAlertService extends EventEmitter {
   private telegramBot: TelegramBot | null = null;
   private isEnabled: boolean = false;
   private alertConfigs: Map<number, PriceAlertConfig> = new Map();
+  private filterManager: IAdvancedFilterManager | null = null;
 
   // 多时间周期数据存储
   private timeframes: Map<string, TimeframeData> = new Map();
@@ -51,6 +55,13 @@ export class PriceAlertService extends EventEmitter {
   constructor() {
     super();
     this.initializeTimeframes();
+
+    // Initialize filter manager
+    try {
+      this.filterManager = resolve(SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER) as IAdvancedFilterManager;
+    } catch (error) {
+      log.warn('Failed to initialize filter manager in PriceAlertService', { error });
+    }
   }
 
   /**
@@ -326,6 +337,24 @@ export class PriceAlertService extends EventEmitter {
     if (!this.telegramBot) return;
 
     try {
+      // 检查是否应该发送警报（过滤检查）
+      if (this.filterManager) {
+        const shouldSend = await this.filterManager.shouldSendAlert(
+          config.userId,
+          symbol,
+          'price_alert'
+        );
+
+        if (!shouldSend) {
+          log.info('Price alert filtered out', {
+            userId: config.userId,
+            symbol,
+            timeframe: alertData.timeframe,
+            reason: 'User filter applied'
+          });
+          return;
+        }
+      }
       const cleanSymbol = symbol.replace('USDT', '');
       const changeSign = alertData.changePercent >= 0 ? '+' : '';
       const changeText = alertData.changePercent >= 0 ? '上涨' : '下跌';
@@ -368,7 +397,15 @@ export class PriceAlertService extends EventEmitter {
       const alertTypeText = config.alertType === 'gain' ? '涨幅' :
                            config.alertType === 'loss' ? '跌幅' : '变动';
 
-      const message = `🚨 *价格急变报警*
+      // 根据警报ID和涨跌方向获取视觉标识
+      const isGain = alertData.changePercent >= 0;
+      const visualIcon = (await import('../utils/alertParser')).AlertCommandParser.getAlertVisualIcon(
+        config.id?.toString() || 'unknown',
+        isGain
+      );
+      const alertTitle = isGain ? '拉涨报警' : '下跌报警';
+
+      const message = `${visualIcon} *${alertTitle}*
 
 ${riskPrefix}**${cleanSymbol}/USDT**
 ${timeframeName}内${changeText} ${changeSign}${formattedChange}%
@@ -408,7 +445,25 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
         }
       }
 
-      log.info(`Loaded ${this.alertConfigs.size} enabled price alert configs`);
+      // 详细记录加载的警报配置，特别关注下跌警报
+      const alertTypeCounts = {
+        gain: 0,
+        loss: 0,
+        both: 0
+      };
+
+      for (const config of this.alertConfigs.values()) {
+        if (config.alertType in alertTypeCounts) {
+          alertTypeCounts[config.alertType as keyof typeof alertTypeCounts]++;
+        }
+      }
+
+      log.info(`Loaded ${this.alertConfigs.size} enabled price alert configs`, {
+        gain: alertTypeCounts.gain,
+        loss: alertTypeCounts.loss,
+        both: alertTypeCounts.both,
+        total: this.alertConfigs.size
+      });
     } catch (error) {
       log.error('Failed to load alert configs', error);
     }

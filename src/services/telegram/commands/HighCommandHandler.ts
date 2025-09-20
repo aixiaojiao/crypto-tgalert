@@ -1,6 +1,7 @@
 import { BaseCommandHandler } from './BaseCommandHandler';
 import { BotContext, CommandResult } from '../ICommandHandler';
 import { HistoricalHighCacheV2 } from '../../historicalHighCacheV2';
+import { binanceClient } from '../../binance';
 
 export class HighCommandHandler extends BaseCommandHandler {
   readonly command = 'high';
@@ -53,10 +54,10 @@ export class HighCommandHandler extends BaseCommandHandler {
     // 标准化代币符号
     const normalizedSymbol = this.normalizeSymbol(symbol);
 
-    // 查询历史高价数据
-    const data = this.historicalHighCache.queryHistoricalHigh(normalizedSymbol, timeframe);
+    // 查询历史高价数据（仅用于获取历史高点，不使用缓存的当前价格）
+    const cachedData = this.historicalHighCache.queryHistoricalHigh(normalizedSymbol, timeframe);
 
-    if (!data) {
+    if (!cachedData) {
       return {
         success: false,
         message: `❌ 未找到 ${normalizedSymbol} 的历史高价数据 (${timeframe})`,
@@ -64,14 +65,49 @@ export class HighCommandHandler extends BaseCommandHandler {
       };
     }
 
-    // 格式化响应消息
-    const message = this.formatHistoricalHighMessage(data);
+    try {
+      // 获取实时当前价格
+      const realTimePrice = await binanceClient.getFuturesPrice(normalizedSymbol);
 
-    return {
-      success: true,
-      message,
-      shouldReply: true
-    };
+      // 基于实时价格重新计算距离和涨幅
+      const highPrice = cachedData.highPrice;
+      const highTimestamp = cachedData.highTimestamp;
+
+      // 重新计算距离百分比和需要涨幅
+      const neededGainPercent = realTimePrice >= highPrice ? 0 : ((highPrice - realTimePrice) / realTimePrice) * 100;
+      const distancePercent = realTimePrice >= highPrice ? -((realTimePrice - highPrice) / highPrice) * 100 : neededGainPercent;
+
+      // 构建实时数据对象
+      const realTimeData = {
+        symbol: cachedData.symbol,
+        timeframe: cachedData.timeframe,
+        currentPrice: realTimePrice, // 使用实时价格
+        highPrice: highPrice,        // 使用缓存的历史高价
+        highTimestamp: highTimestamp, // 使用缓存的时间戳
+        distancePercent: distancePercent,
+        neededGainPercent: neededGainPercent
+      };
+
+      // 格式化响应消息
+      const message = this.formatHistoricalHighMessage(realTimeData);
+
+      return {
+        success: true,
+        message,
+        shouldReply: true
+      };
+
+    } catch (error) {
+      // 如果获取实时价格失败，回退到缓存数据并记录警告
+      console.warn(`Failed to get real-time price for ${normalizedSymbol}, using cached data:`, error);
+
+      const message = this.formatHistoricalHighMessage(cachedData);
+      return {
+        success: true,
+        message: message + '\n\n⚠️ *注意: 使用缓存价格数据*',
+        shouldReply: true
+      };
+    }
   }
 
   private async handleRankingCommand(symbol: string): Promise<CommandResult> {
@@ -87,25 +123,60 @@ export class HighCommandHandler extends BaseCommandHandler {
       };
     }
 
-    // 获取排名数据（限制前20个）
-    const rankings = this.historicalHighCache.getRankingByProximityToHigh(timeframe, 20);
+    try {
+      // 先获取初始排名数据
+      const initialRankings = this.historicalHighCache.getRankingByProximityToHigh(timeframe, 20);
 
-    if (rankings.length === 0) {
+      if (initialRankings.length === 0) {
+        return {
+          success: false,
+          message: `❌ 时间框架 ${timeframe} 暂无排名数据`,
+          shouldReply: true
+        };
+      }
+
+      // 批量更新前20个币种的实时价格
+      const symbolsToUpdate = initialRankings.slice(0, 20).map(r => r.symbol);
+
+      try {
+        console.log(`🔄 Updating real-time prices for ${symbolsToUpdate.length} top symbols...`);
+
+        const updateResult = await this.historicalHighCache.batchIncrementalUpdate(symbolsToUpdate, 1);
+
+        console.log(`✅ Updated ${updateResult.success.length} symbols, failed ${updateResult.failed.length}`);
+
+        // 重新获取更新后的排名数据
+        const updatedRankings = this.historicalHighCache.getRankingByProximityToHigh(timeframe, 20);
+
+        const message = this.formatRankingMessage(updatedRankings, timeframe);
+        const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+        return {
+          success: true,
+          message: message + `\n\n⚡ *数据时间*: ${now} (实时价格更新)`,
+          shouldReply: true
+        };
+
+      } catch (updateError) {
+        // 如果实时更新失败，回退到缓存数据
+        console.warn('Failed to update real-time prices, using cached data:', updateError);
+
+        const message = this.formatRankingMessage(initialRankings, timeframe);
+
+        return {
+          success: true,
+          message: message + '\n\n⚠️ *注意: 实时更新失败，使用缓存价格*',
+          shouldReply: true
+        };
+      }
+
+    } catch (error) {
       return {
         success: false,
-        message: `❌ 时间框架 ${timeframe} 暂无排名数据`,
+        message: `❌ 查询排名数据时发生错误: ${error instanceof Error ? error.message : String(error)}`,
         shouldReply: true
       };
     }
-
-    // 格式化排名消息
-    const message = this.formatRankingMessage(rankings, timeframe);
-
-    return {
-      success: true,
-      message,
-      shouldReply: true
-    };
   }
 
   private formatHistoricalHighMessage(data: any): string {
@@ -130,9 +201,10 @@ export class HighCommandHandler extends BaseCommandHandler {
     const highDate = new Date(highTimestamp).toLocaleDateString('zh-CN');
     const distanceDirection = distancePercent < 0 ? '已超过' : '距离';
     const distanceEmoji = distancePercent < 0 ? '🚀' : '📊';
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
     let message = `${distanceEmoji} **${symbol} - ${timeframeNames[timeframe]}历史高价分析**\n\n`;
-    message += `💰 **当前价格**: $${currentPrice.toFixed(6)}\n`;
+    message += `💰 **当前价格**: $${currentPrice.toFixed(6)} ⚡\n`;
     message += `🎯 **历史最高**: $${highPrice.toFixed(6)} (${highDate})\n`;
     message += `📏 **${distanceDirection}高价**: ${Math.abs(distancePercent).toFixed(2)}%\n`;
 
@@ -141,6 +213,8 @@ export class HighCommandHandler extends BaseCommandHandler {
     } else {
       message += `🎉 **已创新高**: 超过历史最高 ${Math.abs(distancePercent).toFixed(2)}%\n`;
     }
+
+    message += `\n⏰ **数据时间**: ${now} (实时价格)`;
 
     return message;
   }

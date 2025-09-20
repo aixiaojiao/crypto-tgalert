@@ -25,7 +25,15 @@ All notable changes to this project will be documented in this file.
 - **导入优化**: 清理了不必要的模块导入
 - **类型安全**: 确保TypeScript编译无错误
 
-**🎯 优化成果**: 过滤命令系统更加简洁明确，避免了功能重复，用户体验更加一致。
+#### **🚨 CRITICAL FIX - 黄名单代币推送修复**
+- **重大Bug发现**: 黄名单代币(UB, DAM等15个)完全无法推送
+- **根本原因**: AdvancedFilterManager中错误设置`allowed: false`
+- **影响范围**: YELLOWLIST_TOKENS中所有15个代币无法收到推送通知
+- **修复方案**: 将黄名单代币的allowed从false改为true
+- **修复结果**: 黄名单代币现在可以正常推送，但显示⚠️风险标识
+- **受影响代币**: UB, DAM, YALA, GPS, ZORA, PTB, Q, AIO, AVNT, SAPIEN, JELLYJELLY, F, BB, ACE, PUMPBTC
+
+**🎯 优化成果**: 过滤命令系统更加简洁明确，避免了功能重复，用户体验更加一致。关键推送功能恢复正常。
 
 ## [2.6.1] - 2025-09-19
 

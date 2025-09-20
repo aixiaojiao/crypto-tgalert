@@ -280,24 +280,37 @@ export class RealtimeAlertService {
       // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
       let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
 
-      // 显示完整TOP10榜单（过滤被屏蔽的代币）
+      // 应用用户过滤设置 - 涨幅榜只过滤下架/系统黑名单，mute/黄名单代币加标识显示
       let filteredRankings = currentRankings;
+      const symbolFilterStatus = new Map<string, {allowed: boolean, source: string}>();
 
-      // 应用用户过滤设置
       if (this.filterManager) {
         try {
           const userId = authorizedUserId.toString();
-          const filteredSymbols = await this.filterManager.filterSymbolList(
-            userId,
-            currentRankings.map(r => r.symbol.replace('USDT', ''))
-          );
 
-          filteredRankings = currentRankings.filter(ranking =>
-            filteredSymbols.includes(ranking.symbol.replace('USDT', ''))
-          );
+          // 逐个检查每个代币的过滤状态
+          for (const ranking of currentRankings) {
+            const cleanSymbol = ranking.symbol.replace('USDT', '');
+            const filterResult = await this.filterManager.checkFilter(userId, cleanSymbol);
+
+            // 涨幅榜只过滤掉真正不应该显示的代币（下架、系统黑名单）
+            const shouldExclude = !filterResult.allowed &&
+              (filterResult.source === 'system_delisted' || filterResult.source === 'system_blacklist');
+
+            symbolFilterStatus.set(ranking.symbol, {
+              allowed: !shouldExclude,
+              source: filterResult.source
+            });
+          }
+
+          // 只过滤掉真正不应该显示的代币
+          filteredRankings = currentRankings.filter(ranking => {
+            const status = symbolFilterStatus.get(ranking.symbol);
+            return status?.allowed !== false;
+          });
 
           if (filteredRankings.length < currentRankings.length) {
-            log.info('Some symbols filtered from ranking push', {
+            log.info('Some symbols excluded from ranking (delisted/system blacklist)', {
               originalCount: currentRankings.length,
               filteredCount: filteredRankings.length,
               userId
@@ -315,7 +328,27 @@ export class RealtimeAlertService {
         const formattedPrice = await formatPriceWithSeparators(ranking.price.toString(), ranking.symbol);
         const riskLevel = getTokenRiskLevel(ranking.symbol);
         const riskIcon = getRiskIcon(riskLevel);
-        const prefix = riskIcon ? `${riskIcon}` : '';
+
+        // 根据过滤状态添加标识
+        const filterStatus = symbolFilterStatus.get(ranking.symbol);
+        let prefixIcon = riskIcon || '';
+
+        if (filterStatus) {
+          switch (filterStatus.source) {
+            case 'user_mute':
+              prefixIcon = '🔇'; // mute代币显示静音图标
+              break;
+            case 'system_yellowlist':
+              prefixIcon = '⚠️'; // 黄名单代币显示警告图标
+              break;
+            case 'user_blacklist':
+              prefixIcon = '🔒'; // 用户黑名单显示锁定图标
+              break;
+            // system_delisted 和 system_blacklist 已经被过滤掉了
+          }
+        }
+
+        const prefix = prefixIcon ? `${prefixIcon}` : '';
         const sign = ranking.priceChangePercent >= 0 ? '+' : '';
         return `${index + 1}. ${prefix}**${symbol}** ${sign}${changePercent}% ($${formattedPrice})\n`;
       });
@@ -325,33 +358,49 @@ export class RealtimeAlertService {
         message += entry;
       });
 
-      // 添加变化提示（也需要过滤）
+      // 添加变化提示（只过滤真正不应该显示的代币）
       let filteredNewEntries = changes.filter(c => c.changeType === 'new_entry');
       let filteredPositionChanges = changes.filter(c => c.changeType === 'position_change');
 
-      // 对变化提示也应用过滤
+      // 对变化提示也应用相同的过滤逻辑
       if (this.filterManager) {
         try {
           const userId = authorizedUserId.toString();
 
+          // 过滤新进入的代币（只过滤下架/系统黑名单）
           if (filteredNewEntries.length > 0) {
-            const newEntrySymbols = await this.filterManager.filterSymbolList(
-              userId,
-              filteredNewEntries.map(c => c.symbol.replace('USDT', ''))
-            );
-            filteredNewEntries = filteredNewEntries.filter(change =>
-              newEntrySymbols.includes(change.symbol.replace('USDT', ''))
-            );
+            const allowedNewEntries = [];
+            for (const change of filteredNewEntries) {
+              const cleanSymbol = change.symbol.replace('USDT', '');
+              const filterResult = await this.filterManager.checkFilter(userId, cleanSymbol);
+
+              // 只过滤掉真正不应该显示的代币
+              const shouldExclude = !filterResult.allowed &&
+                (filterResult.source === 'system_delisted' || filterResult.source === 'system_blacklist');
+
+              if (!shouldExclude) {
+                allowedNewEntries.push(change);
+              }
+            }
+            filteredNewEntries = allowedNewEntries;
           }
 
+          // 过滤排名变化的代币（只过滤下架/系统黑名单）
           if (filteredPositionChanges.length > 0) {
-            const positionChangeSymbols = await this.filterManager.filterSymbolList(
-              userId,
-              filteredPositionChanges.map(c => c.symbol.replace('USDT', ''))
-            );
-            filteredPositionChanges = filteredPositionChanges.filter(change =>
-              positionChangeSymbols.includes(change.symbol.replace('USDT', ''))
-            );
+            const allowedPositionChanges = [];
+            for (const change of filteredPositionChanges) {
+              const cleanSymbol = change.symbol.replace('USDT', '');
+              const filterResult = await this.filterManager.checkFilter(userId, cleanSymbol);
+
+              // 只过滤掉真正不应该显示的代币
+              const shouldExclude = !filterResult.allowed &&
+                (filterResult.source === 'system_delisted' || filterResult.source === 'system_blacklist');
+
+              if (!shouldExclude) {
+                allowedPositionChanges.push(change);
+              }
+            }
+            filteredPositionChanges = allowedPositionChanges;
           }
         } catch (filterError) {
           log.error('Error applying filters to ranking changes', { filterError });
@@ -365,7 +414,26 @@ export class RealtimeAlertService {
         if (filteredNewEntries.length > 0) {
           for (const change of filteredNewEntries.slice(0, 2)) {
             const symbol = change.symbol.replace('USDT', '');
-            message += `• 🆕 **${symbol}** 新进入#${change.currentPosition}\n`;
+
+            // 添加过滤状态标识
+            const filterStatus = symbolFilterStatus.get(change.symbol);
+            let prefixIcon = '';
+            if (filterStatus) {
+              switch (filterStatus.source) {
+                case 'user_mute':
+                  prefixIcon = '🔇';
+                  break;
+                case 'system_yellowlist':
+                  prefixIcon = '⚠️';
+                  break;
+                case 'user_blacklist':
+                  prefixIcon = '🔒';
+                  break;
+              }
+            }
+
+            const prefix = prefixIcon ? `${prefixIcon}` : '';
+            message += `• 🆕 ${prefix}**${symbol}** 新进入#${change.currentPosition}\n`;
           }
         }
 
@@ -373,9 +441,28 @@ export class RealtimeAlertService {
         if (filteredPositionChanges.length > 0) {
           for (const change of filteredPositionChanges.slice(0, 2)) {
             const symbol = change.symbol.replace('USDT', '');
+
+            // 添加过滤状态标识
+            const filterStatus = symbolFilterStatus.get(change.symbol);
+            let prefixIcon = '';
+            if (filterStatus) {
+              switch (filterStatus.source) {
+                case 'user_mute':
+                  prefixIcon = '🔇';
+                  break;
+                case 'system_yellowlist':
+                  prefixIcon = '⚠️';
+                  break;
+                case 'user_blacklist':
+                  prefixIcon = '🔒';
+                  break;
+              }
+            }
+
+            const prefix = prefixIcon ? `${prefixIcon}` : '';
             const moveDirection = change.changeValue > 0 ? '⬆️' : '⬇️';
             const moveText = change.changeValue > 0 ? '上升' : '下降';
-            message += `• ${moveDirection} **${symbol}** ${moveText}${Math.abs(change.changeValue)}位 (#${change.previousPosition}→#${change.currentPosition})\n`;
+            message += `• ${moveDirection} ${prefix}**${symbol}** ${moveText}${Math.abs(change.changeValue)}位 (#${change.previousPosition}→#${change.currentPosition})\n`;
           }
         }
       }

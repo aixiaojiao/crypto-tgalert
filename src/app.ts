@@ -97,47 +97,19 @@ export class CryptoTgAlertApp {
   private async sendStartupNotification(btcPrice: number): Promise<void> {
     try {
       console.log('📤 准备发送启动通知消息...');
-      const helloMessage = `👋 <b>Hello! 欢迎使用 Crypto Alert Bot</b> 🤖\n\n` +
+
+      // 系统启动状态信息
+      const startupHeader = `👋 <b>Hello! 欢迎使用 Crypto Alert Bot</b> 🤖\n\n` +
         `🎉 <b>系统已成功启动并准备就绪！</b>\n` +
         `⏰ 启动时间: ${new Date().toLocaleString('zh-CN')}\n` +
         `💰 当前 BTC 价格: $${btcPrice.toLocaleString()}\n` +
-        `✅ 所有系统运行正常\n\n` +
-        `🚀 <b>快速开始指南:</b>\n\n` +
-        `💰 <b>价格查询</b>\n` +
-        `• /price btc - 查看BTC价格信息\n` +
-        `• /price eth - 查看ETH价格信息\n\n` +
-        `📊 <b>市场排行</b>\n` +
-        `• /rank - 查看涨幅排行榜\n` +
-        `• /rank_gainers - 查看涨幅排行榜\n` +
-        `• /rank_losers - 查看跌幅排行榜\n` +
-        `• /funding - 查看资金费率排行\n` +
-        `• /oi_24h - 查看24h持仓量变化\n\n` +
-        `⚡ <b>智能警报系统 (双重功能)</b>\n` +
-        `🔸 <b>价格警报:</b>\n` +
-        `• /alert btc &gt; 50000 - 价格突破警报\n` +
-        `• /alert eth &lt; 3000 - 价格跌破警报\n` +
-        `• /alert doge change 5% - 价格变化警报\n\n` +
-        `🔸 <b>急涨急跌警报:</b>\n` +
-        `• /alert_5m_gain_3_all - 5分钟涨3%全币监控\n` +
-        `• /alert_1h_loss_5_btc - 1小时跌5%BTC监控\n` +
-        `• /alert_15m_all_2_all - 15分钟涨跌2%全币\n\n` +
-        `🔸 <b>警报管理:</b>\n` +
-        `• /alert_list - 查看所有警报\n` +
-        `• /alert_remove &lt;ID&gt; - 删除价格警报\n` +
-        `• /alert_remove T&lt;ID&gt; - 删除急涨急跌警报\n\n` +
-        `📈 <b>历史分析</b>\n` +
-        `• /high btc 1w - 查看BTC一周高点\n` +
-        `• /high near 1m - 接近月高点的币种 🆕\n` +
-        `• /high near - 接近历史高点的币种 🆕\n\n` +
-        `🔔 <b>推送服务</b>\n` +
-        `• /start_gainers_push - 开启涨幅推送\n` +
-        `• /start_funding_push - 开启费率推送\n\n` +
-        `💡 <b>获取帮助</b>\n` +
-        `• /help - 查看完整命令列表\n` +
-        `• /status - 查看系统状态\n` +
-        `• /cache_status - 查看所有缓存状态\n\n` +
-        `🎯 <b>使用提示:</b> 所有命令都支持直接点击执行，无需手动输入！\n` +
-        `📱 <b>新功能:</b> 统一警报界面，支持两种警报类型一键管理！`;
+        `✅ 所有系统运行正常\n\n`;
+
+      // 获取统一的帮助内容
+      const helpContent = this.telegramBot.generateHelpContent();
+
+      // 组合完整消息
+      const helloMessage = startupHeader + helpContent;
 
       console.log('📨 调用telegramBot.sendToAuthorizedUser...');
       await this.telegramBot.sendToAuthorizedUser(helloMessage, {

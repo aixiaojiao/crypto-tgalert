@@ -8,9 +8,11 @@ import {
   AlertCondition,
   AlertPriority,
   MarketData,
-  AlertStatistics
+  AlertStatistics,
+  BreakthroughAlertMetadata
 } from './IAlertService';
 import { INotificationService, NotificationContext } from './INotificationService';
+import { breakthroughDetectionService } from './BreakthroughDetectionService';
 import { log } from '../../utils/logger';
 export class UnifiedAlertService implements IAlertService {
   private alerts = new Map<string, AlertConfig>();
@@ -58,6 +60,10 @@ export class UnifiedAlertService implements IAlertService {
     // 清理相关数据
     this.lastTriggerTimes.delete(alertId);
     this.cooldownMap.delete(alertId);
+
+    // 释放视觉标识
+    const { AlertCommandParser } = require('../../utils/alertParser');
+    AlertCommandParser.releaseAlertIcon(alertId);
 
     this.logger.info('Alert removed', { alertId });
   }
@@ -214,7 +220,12 @@ export class UnifiedAlertService implements IAlertService {
       };
     }
 
-    // 评估触发条件
+    // 特殊处理breakthrough警报
+    if (alert.type === AlertType.BREAKTHROUGH || alert.type === AlertType.MULTI_BREAKTHROUGH) {
+      return await this.checkBreakthroughAlert(alert, marketData);
+    }
+
+    // 评估传统触发条件
     const shouldTrigger = this.evaluateCondition(alert, marketData);
 
     if (!shouldTrigger) {
@@ -297,6 +308,76 @@ export class UnifiedAlertService implements IAlertService {
     return lastTrigger ? lastTrigger + cooldownMs : Date.now();
   }
 
+  /**
+   * 检查breakthrough警报
+   */
+  private async checkBreakthroughAlert(alert: AlertConfig, marketData: MarketData): Promise<AlertTriggerResult> {
+    try {
+      // 检查是否应该跳过（基于冷却时间）
+      if (breakthroughDetectionService.shouldSkipCheck(alert)) {
+        return {
+          triggered: false,
+          reason: 'Breakthrough alert in cooldown period'
+        };
+      }
+
+      // 使用breakthrough检测服务
+      const breakthroughResult = await breakthroughDetectionService.checkAlertBreakthrough(alert, marketData);
+
+      if (!breakthroughResult) {
+        // 更新最后检查价格（用于去重）
+        const updatedAlert = breakthroughDetectionService.updateLastCheckPrice(alert, marketData.price);
+        this.alerts.set(alert.id, updatedAlert);
+
+        return {
+          triggered: false,
+          reason: 'No breakthrough detected'
+        };
+      }
+
+      // 检测到突破，创建警报事件
+      const metadata = alert.metadata as BreakthroughAlertMetadata & Record<string, any>;
+      const event: AlertEvent = {
+        id: `${alert.id}-${Date.now()}`,
+        alertId: alert.id,
+        symbol: breakthroughResult.symbol,
+        type: alert.type,
+        triggeredAt: new Date(),
+        currentValue: breakthroughResult.currentPrice,
+        thresholdValue: breakthroughResult.timeframeHigh,
+        condition: alert.condition,
+        priority: alert.priority,
+        message: breakthroughDetectionService.generateBreakthroughMessage(
+          breakthroughResult,
+          metadata.timeframe,
+          alert.type === AlertType.MULTI_BREAKTHROUGH
+        ),
+        metadata: {
+          marketData,
+          breakthroughResult,
+          timeframe: metadata.timeframe,
+          breakPercentage: breakthroughResult.breakPercentage
+        }
+      };
+
+      // 更新警报的最后检查价格和触发时间
+      const updatedAlert = breakthroughDetectionService.updateLastCheckPrice(alert, marketData.price);
+      this.alerts.set(alert.id, updatedAlert);
+
+      return {
+        triggered: true,
+        event
+      };
+
+    } catch (error) {
+      this.logger.error('Error checking breakthrough alert:', error);
+      return {
+        triggered: false,
+        reason: `Breakthrough check failed: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  }
+
   private evaluateCondition(alert: AlertConfig, marketData: MarketData): boolean {
     const { condition, thresholds } = alert;
     const currentValue = this.extractValue(alert.type, marketData);
@@ -329,6 +410,11 @@ export class UnifiedAlertService implements IAlertService {
         // TODO: 实现交叉逻辑，需要历史数据
         return currentValue < thresholds.value;
 
+      case AlertCondition.BREAKS_HIGH:
+      case AlertCondition.BREAKS_TIMEFRAME_HIGH:
+        // Breakthrough条件通过专门的服务检测
+        return true; // 在checkSingleAlert中会进行真正的检测
+
       default:
         return false;
     }
@@ -346,6 +432,10 @@ export class UnifiedAlertService implements IAlertService {
       case AlertType.VOLUME_SPIKE:
         return marketData.volume24h || 0;
 
+      case AlertType.BREAKTHROUGH:
+      case AlertType.MULTI_BREAKTHROUGH:
+        return marketData.price;
+
       default:
         return marketData.price;
     }
@@ -357,20 +447,41 @@ export class UnifiedAlertService implements IAlertService {
 
     switch (alert.type) {
       case AlertType.PRICE_ABOVE:
-        return `🚨 ${symbol} price is above ${alert.thresholds.value}! Current: ${currentValue}`;
+        const aboveIcon = this.getVisualIcon(alert.id, true);
+        return `${aboveIcon} ${symbol} 价格突破上方 ${alert.thresholds.value}! 当前: ${currentValue}`;
 
       case AlertType.PRICE_BELOW:
-        return `🚨 ${symbol} price is below ${alert.thresholds.value}! Current: ${currentValue}`;
+        const belowIcon = this.getVisualIcon(alert.id, false);
+        return `${belowIcon} ${symbol} 价格跌破下方 ${alert.thresholds.value}! 当前: ${currentValue}`;
 
       case AlertType.PRICE_CHANGE:
-        return `🚨 ${symbol} price changed by ${currentValue}% in 24h! Threshold: ${alert.thresholds.value}%`;
+        const isGain = currentValue >= 0;
+        const changeIcon = this.getVisualIcon(alert.id, isGain);
+        const changeText = isGain ? '上涨' : '下跌';
+        return `${changeIcon} ${symbol} 24小时${changeText} ${Math.abs(currentValue)}%! 阈值: ${alert.thresholds.value}%`;
 
       case AlertType.VOLUME_SPIKE:
-        return `🚨 ${symbol} volume spike detected! Current: ${currentValue}, Threshold: ${alert.thresholds.value}`;
+        const volumeIcon = this.getVisualIcon(alert.id, true);
+        return `${volumeIcon} ${symbol} 交易量异常! 当前: ${currentValue}, 阈值: ${alert.thresholds.value}`;
+
+      case AlertType.BREAKTHROUGH:
+        const breakthroughIcon = this.getVisualIcon(alert.id, true);
+        return `${breakthroughIcon} ${symbol} 突破警报已触发! 当前价格: ${currentValue}`;
+
+      case AlertType.MULTI_BREAKTHROUGH:
+        const multiBreakthroughIcon = this.getVisualIcon(alert.id, true);
+        return `${multiBreakthroughIcon} ${symbol} 突破警报已触发! 当前价格: ${currentValue}`;
 
       default:
-        return `🚨 ${symbol} alert triggered! Current value: ${currentValue}`;
+        const defaultIcon = this.getVisualIcon(alert.id, true);
+        return `${defaultIcon} ${symbol} 警报触发! 当前值: ${currentValue}`;
     }
+  }
+
+  private getVisualIcon(alertId: string, isGain: boolean): string {
+    // 动态导入来避免循环依赖
+    const { AlertCommandParser } = require('../../utils/alertParser');
+    return AlertCommandParser.getAlertVisualIcon(alertId, isGain);
   }
 
   private validateAlertConfig(config: AlertConfig): void {

@@ -543,6 +543,39 @@ export class TelegramBot {
         const formattedLowPrice = await formatPriceWithSeparators(stats.lowPrice, actualSymbol);
         const formattedChangePercent = formatPriceChange(changePercent);
 
+        // 获取多时间框架数据
+        const timeframes = ['5m', '1h', '4h', '1d', '1w'];
+        const timeframeData: { [key: string]: any } = {};
+
+        try {
+          // 获取多时间框架K线数据
+          for (const tf of timeframes) {
+            try {
+              const interval = tf === '5m' ? '5m' : tf === '1h' ? '1h' : tf === '4h' ? '4h' : tf === '1d' ? '1d' : '1w';
+              const klines = await this.binanceClient.getKlines({
+                symbol: actualSymbol,
+                interval: interval as any,
+                limit: 2
+              });
+              if (klines && klines.length >= 2) {
+                const prevClose = parseFloat(klines[0].close); // 前一根K线收盘价
+                const currentPrice = price || parseFloat(klines[1].close); // 当前价格或最新收盘价
+                const changePercent = ((currentPrice - prevClose) / prevClose) * 100;
+                timeframeData[tf] = {
+                  change: changePercent,
+                  icon: changePercent >= 0 ? '📈' : '📉',
+                  sign: changePercent >= 0 ? '+' : ''
+                };
+              }
+            } catch (tfError: any) {
+              // 单个时间框架失败不影响其他
+              console.log(`Failed to get ${tf} data for ${actualSymbol}:`, tfError?.message || tfError);
+            }
+          }
+        } catch (multiFrameError: any) {
+          console.log('Multi-timeframe data collection failed:', multiFrameError?.message || multiFrameError);
+        }
+
         let priceMessage = `
 💰 *${symbol} ${isContract ? '合约' : '现货'}价格*
 
@@ -551,6 +584,20 @@ ${changeIcon} 24小时涨跌: ${changeColor}${formattedChangePercent}%
 📊 24小时交易量: ${(parseFloat(stats.volume) / 1000000).toFixed(2)}M USDT
 🔺 24小时最高: $${formattedHighPrice}
 🔻 24小时最低: $${formattedLowPrice}`;
+
+        // 添加多时间框架数据
+        if (Object.keys(timeframeData).length > 0) {
+          priceMessage += `\n\n📊 *多时间框架涨跌:*\n`;
+          const timeframeLabels = { '5m': '5分钟', '1h': '1小时', '4h': '4小时', '1d': '1天', '1w': '1周' };
+
+          for (const tf of timeframes) {
+            if (timeframeData[tf]) {
+              const data = timeframeData[tf];
+              const label = timeframeLabels[tf as keyof typeof timeframeLabels] || tf;
+              priceMessage += `${data.icon} ${label}: ${data.sign}${formatPriceChange(Math.abs(data.change))}%\n`;
+            }
+          }
+        }
 
         if (isContract && fundingRate && openInterest) {
           const fundingRatePercent = (parseFloat(fundingRate.fundingRate) * 100).toFixed(4);
@@ -2448,7 +2495,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     this.bot.command('cache_update', async (ctx) => {
       try {
         const userId = ctx.from?.id?.toString();
-        if (!userId || userId !== process.env.ADMIN_USER_ID) {
+        if (!userId || userId !== process.env.TELEGRAM_USER_ID) {
           await ctx.reply('❌ 您没有权限执行此命令');
           return;
         }
@@ -2536,11 +2583,27 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       await ctx.reply(`📈 正在查询接近${timeframeNames[timeframe]}高点的币种...`);
 
       // 获取排名数据
-      const rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 100);
+      let rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 100);
 
       if (rankings.length === 0) {
         await ctx.reply(`❌ 时间框架 ${timeframe} 暂无数据`);
         return;
+      }
+
+      // 批量更新前20个币种的实时价格
+      try {
+        await ctx.reply('📈 正在获取实时价格...');
+
+        const symbolsToUpdate = rankings.slice(0, 20).map(r => r.symbol);
+        console.log(`🔄 Updating real-time prices for near-high command: ${symbolsToUpdate.length} symbols`);
+
+        const updateResult = await historicalHighCache.batchIncrementalUpdate(symbolsToUpdate, 1);
+        console.log(`✅ Updated ${updateResult.success.length} symbols for near-high command`);
+
+        // 重新获取更新后的排名
+        rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 100);
+      } catch (updateError) {
+        console.warn('Failed to update prices for near-high command, using cached data:', updateError);
       }
 
       // 筛选接近高点的币种（需要涨幅小于20%）
@@ -2582,11 +2645,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       message += `📊 **距离统计**\n`;
       message += `🔥 5%以内: ${veryClose}个  ⚡ 10%以内: ${close}个\n\n`;
 
-      // 添加缓存时间显示 - 取第一个代币的缓存时间作为代表
-      if (nearHighCoins.length > 0 && nearHighCoins[0].lastUpdated) {
-        const cacheUpdateTime = new Date(nearHighCoins[0].lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-        message += `🕒 **数据时间**: ${cacheUpdateTime}`;
-      }
+      // 显示实时更新时间
+      const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+      message += `🕒 **数据时间**: ${now} ⚡`;
 
       await ctx.replyWithMarkdown(message);
 
