@@ -231,7 +231,7 @@ export class TelegramBot {
   private getSimilarCommands(unknownCommand: string): string[] {
     const availableCommands = [
       'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
-      'debug', 'blacklist', 'mute', 'filter', 'funding', 'cache_status', 'cache_update', 'high'
+      'debug', 'blacklist_list', 'mute_list', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high'
     ];
 
     // 简单的相似度匹配
@@ -258,7 +258,12 @@ export class TelegramBot {
       'hep': 'help',
       'halp': 'help',
       'alrt': 'alert',
-      'aler': 'alert'
+      'aler': 'alert',
+      'blacklistlist': 'blacklist_list',
+      'mutelist': 'mute_list',
+      'blacklist': 'blacklist_list',
+      'mute': 'mute_list',
+      'filter': 'filter_settings'
     };
 
     if (corrections[unknownCommand]) {
@@ -349,10 +354,16 @@ export class TelegramBot {
    */
   async sendMessage(chatId: string | number, message: string, options?: any): Promise<void> {
     try {
-      await this.bot.telegram.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
-        ...options
-      });
+      const sendOptions: any = { ...options };
+      // 只有在没有明确设置parse_mode时才使用默认的Markdown
+      if (!options?.hasOwnProperty('parse_mode')) {
+        sendOptions.parse_mode = 'Markdown';
+      } else if (sendOptions.parse_mode === null) {
+        // 明确设置为null时删除parse_mode
+        delete sendOptions.parse_mode;
+      }
+
+      await this.bot.telegram.sendMessage(chatId, message, sendOptions);
     } catch (error) {
       log.error('Failed to send message:', error);
       throw error;
