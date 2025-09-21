@@ -7,6 +7,7 @@ import { getTokenRiskLevel, getRiskIcon } from '../config/tokenLists';
 import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
+import { realtimeMarketCache } from './realtimeMarketCache';
 
 export interface PriceSnapshot {
   symbol: string;
@@ -367,18 +368,14 @@ export class PriceAlertService extends EventEmitter {
       const riskIcon = getRiskIcon(riskLevel);
       const riskPrefix = riskIcon ? `${riskIcon} ` : '';
 
-      // 获取24h涨幅作为背景信息 (如果有的话)
+      // 获取24h涨幅作为背景信息 (使用与/rank命令相同的实时缓存数据)
       let backgroundInfo = '';
-      const dailyData = this.timeframes.get('24h');
-      if (dailyData) {
-        const dailySnapshots = dailyData.snapshots.get(symbol);
-        if (dailySnapshots && dailySnapshots.length >= 2) {
-          const dailyStart = dailySnapshots[0];
-          const dailyChange = ((alertData.toPrice - dailyStart.price) / dailyStart.price) * 100;
-          const dailyChangeText = formatPriceChange(Math.abs(dailyChange));
-          const dailySign = dailyChange >= 0 ? '+' : '';
-          backgroundInfo = `\n24h涨幅: ${dailySign}${dailyChangeText}%`;
-        }
+      const tickerData = realtimeMarketCache.getTickerData(symbol);
+      if (tickerData && tickerData.priceChangePercent !== undefined) {
+        const dailyChange = tickerData.priceChangePercent;
+        const dailyChangeText = formatPriceChange(Math.abs(dailyChange));
+        const dailySign = dailyChange >= 0 ? '+' : '';
+        backgroundInfo = `\n24h涨幅: ${dailySign}${dailyChangeText}%`;
       }
 
       // 时间周期显示名称

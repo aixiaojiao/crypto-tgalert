@@ -15,10 +15,10 @@
 - ⏳ **待进行测试**: 技术指标准确性、用户过滤系统、长期稳定性
 
 ### **问题发现统计**
-- 🔴 **严重问题**: 5个 (功能声称与实际不符、系统架构缺陷、数据时效性问题、核心警报失效、跌幅功能失效)
+- 🔴 **严重问题**: 6个 (功能声称与实际不符、系统架构缺陷、数据时效性问题、核心警报失效、跌幅功能失效、急涨急跌24h数据错误)
 - 🟡 **中等问题**: 8个 (功能不完整、用户体验不足、操作界面问题、数据不一致、功能发现性、推送逻辑缺陷、视觉识别问题、统计系统缺陷、连接稳定性问题)
 - 🟢 **轻微问题**: 0个
-- ✅ **已修复问题**: 2个 (警报管理用户体验缺陷、24h涨幅数据不一致)
+- ✅ **已修复问题**: 3个 (警报管理用户体验缺陷、24h涨幅数据不一致、/price命令API不一致)
 - ✅ **正常功能**: 6个核心功能验证通过
 
 ---
@@ -1567,6 +1567,157 @@ function validatePriceData(symbol: string, alertData: number, apiData: number) {
 
 ---
 
+### **问题 #16: 急涨急跌报警24h涨幅数据错误** 🔴 **NEW**
+
+#### **🔍 问题描述**
+急涨急跌报警系统中显示的24h涨幅数据严重错误，实际显示的是监控开始以来的总涨幅，而非真正的24小时涨幅。
+
+#### **📊 实例证明**
+**HEMI/USDT案例** (2025/09/21 18:00):
+```bash
+急涨急跌报警显示:
+🟢⭕⬆️ 拉涨报警
+HEMI/USDT
+5分钟内上涨 +3.924%
+$0.0911880 → $0.0947660
+24h涨幅: +3.924%                    ← 错误：与5分钟涨幅完全相同
+
+/price命令查询:
+💰 HEMI 合约价格
+💵 当前价格: $0.0928650
+📈 24小时涨跌: +62.52%              ← 正确：真正的24小时涨幅
+
+数据差异: 15.9倍错误！
+```
+
+#### **🔧 根本原因分析**
+**错误代码位置**: `src/services/priceAlertService.ts:370-382`
+
+**错误逻辑**:
+```typescript
+// 获取24h涨幅作为背景信息 (如果有的话)
+const dailyData = this.timeframes.get('24h');
+if (dailyData) {
+  const dailySnapshots = dailyData.snapshots.get(symbol);
+  if (dailySnapshots && dailySnapshots.length >= 2) {
+    const dailyStart = dailySnapshots[0]; // ❌ 错误：这不是24小时前的数据
+    const dailyChange = ((alertData.toPrice - dailyStart.price) / dailyStart.price) * 100;
+    // ... 显示为"24h涨幅"
+  }
+}
+```
+
+**错误假设**: `dailySnapshots[0]`是24小时前的价格
+**实际情况**: `dailySnapshots[0]`是系统监控该代币的最早价格快照
+
+#### **💥 影响评估**
+- **严重程度**: 🔴 **严重**
+- **数据误导**: 用户看到完全错误的24h涨幅数据
+- **决策影响**: 可能导致基于错误数据的交易决策
+- **系统可信度**: 严重影响用户对急涨急跌报警的信任
+
+#### **🎯 与问题#15的区别**
+- **问题#15**: 字段名不匹配，已修复
+- **问题#16**: 时间范围计算错误，未修复
+- **影响范围**: 急涨急跌报警系统独有问题
+
+#### **📝 相关文件**
+- **主要文件**: `src/services/priceAlertService.ts:370-382`
+- **对比文件**: `src/services/telegram/commands/PriceCommandHandler.ts` (正确实现)
+- **依赖注入**: 需要BinanceClient访问真实24h数据
+
+#### **🔧 修复方案**
+**方案1: 使用Binance API (推荐)**
+- 注入BinanceClient到PriceAlertService
+- 调用`get24hrStats()`获取真实24h数据
+- 与PriceCommandHandler保持一致
+
+**方案2: 修正本地缓存逻辑**
+- 查找最接近24小时前的快照
+- 验证时间范围准确性
+- 增加数据有效性检查
+
+#### **📋 用户反馈**
+```
+"hemi刚报警我就用/price命令查询价格，查询到的24h涨幅才是正确的"
+"急涨急跌报警里面的24h涨幅不对，记录该问题并查找原因"
+```
+
+### **问题 #17: /price命令多时间框架API不一致** ✅ **FIXED**
+
+#### **🔍 问题描述**
+`/price`命令对于仅期货交易的代币（如0G、FARTCOIN、PUMPBTC等）无法显示多时间框架涨跌数据，而有现货+期货的代币（如BTC、AVNT等）可以正常显示。
+
+#### **📊 实例证明**
+**测试对比** (2025/09/21 19:21):
+```bash
+✅ BTC (有现货+期货):
+📊 多时间框架涨跌:
+📉 5分钟: 0.029%
+📈 1小时: +0.065%
+📉 4小时: 0.189%
+📉 1天: 0.077%
+📈 1周: +0.285%
+
+❌ 0G (仅期货):
+💰 0G 合约价格
+💵 当前价格: $3.1030000
+📈 24小时涨跌: +14.84%
+[缺少多时间框架数据显示]
+
+❌ FARTCOIN (仅期货):
+[同样缺少多时间框架数据显示]
+```
+
+#### **🔧 根本原因分析**
+**错误代码位置**: `src/bot.ts:568`
+**API不一致**:
+```typescript
+// 其他数据使用期货API
+stats = await tieredDataManager.getTicker24hr(actualSymbol);     // ✅ 期货API
+fundingRate = await tieredDataManager.getFundingRate(actualSymbol); // ✅ 期货API
+openInterest = await this.binanceClient.getOpenInterest(actualSymbol); // ✅ 期货API
+
+// 多时间框架错误使用现货API
+const klines = await this.binanceClient.getKlines({              // ❌ 现货API
+  symbol: actualSymbol,
+  interval: interval as any,
+  limit: 2
+});
+```
+
+**错误逻辑**: 项目完全基于期货数据，但K线数据查询使用了现货API
+**问题根源**: 2025-09-20提交521cad02添加多时间框架功能时API选择错误
+
+#### **💥 影响评估**
+- **严重程度**: 🟡 **中等**
+- **功能缺失**: 仅期货代币用户无法获得完整价格分析信息
+- **用户体验**: 数据显示不一致，影响专业性
+- **数据完整性**: 违背项目"全部使用期货数据"的设计原则
+
+#### **✅ 修复方案**
+**实施的修复** (2025/09/21 19:27):
+```typescript
+// 修复前：错误使用现货API
+const klines = await this.binanceClient.getKlines({
+
+// 修复后：正确使用期货API
+const klines = await this.binanceClient.getFuturesKlines({
+```
+
+#### **🎯 修复验证**
+**修复效果**: 所有代币现在都能显示完整的多时间框架数据
+**API一致性**: ticker、funding rate、open interest、klines全部使用期货API
+**功能完整性**: 0G、FARTCOIN等代币现在显示与BTC相同格式的完整信息
+
+#### **📋 修复记录**
+- **发现时间**: 2025-09-21 19:13 (用户测试报告)
+- **修复时间**: 2025-09-21 19:27
+- **修复提交**: 即将提交
+- **验证状态**: ✅ 已验证修复成功
+
+---
+
 **文档创建时间**: 2025-09-20 11:37
-**下次更新**: 随测试进展实时更新
+**最新更新**: 2025-09-21 19:30 (新增问题#17并标记修复)
 **状态**: 🔄 活跃维护中

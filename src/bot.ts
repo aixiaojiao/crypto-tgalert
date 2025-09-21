@@ -565,7 +565,7 @@ export class TelegramBot {
           for (const tf of timeframes) {
             try {
               const interval = tf === '5m' ? '5m' : tf === '1h' ? '1h' : tf === '4h' ? '4h' : tf === '1d' ? '1d' : '1w';
-              const klines = await this.binanceClient.getKlines({
+              const klines = await this.binanceClient.getFuturesKlines({
                 symbol: actualSymbol,
                 interval: interval as any,
                 limit: 2
