@@ -92,8 +92,8 @@ export abstract class BaseCommandHandler implements ICommandHandler {
   }
 
   protected isValidSymbol(symbol: string): boolean {
-    // 基本的符号验证：支持2-10个字母，可选USDT/USD后缀
-    return /^[A-Z]{2,10}(USDT|USD)?$/.test(symbol.toUpperCase());
+    // 基本的符号验证：支持2-10个字母和数字，可选USDT/USD后缀
+    return /^[A-Z0-9]{2,10}(USDT|USD)?$/.test(symbol.toUpperCase());
   }
 
   protected normalizeSymbol(symbol: string): string {
