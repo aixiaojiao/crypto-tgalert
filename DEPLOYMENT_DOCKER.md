@@ -33,7 +33,7 @@ mkdir -p logs
 ./scripts/setup-cron.sh
 
 # 6. 立即部署v2.6.6
-./scripts/docker-deploy.sh deploy-v2.6.6
+./scripts/docker-deploy.sh deploy-v2.6.7
 ```
 
 ### 全新安装（如果是新服务器）
@@ -60,7 +60,7 @@ EOF
 chmod +x scripts/*.sh
 mkdir -p logs
 ./scripts/setup-cron.sh
-./scripts/docker-deploy.sh deploy-v2.6.6
+./scripts/docker-deploy.sh deploy-v2.6.7
 ```
 
 ## 系统架构
