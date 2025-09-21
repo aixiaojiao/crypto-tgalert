@@ -19,12 +19,14 @@ RUN npm ci && npm cache clean --force
 # Copy source code and config
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 
 # Build the application
 RUN npm run build
 
-# Create data directories
+# Create data directories and set script permissions
 RUN mkdir -p data logs && \
+    chmod +x scripts/*.sh && \
     chown -R tgalert:nodejs /app
 
 # Switch to non-root user

@@ -32,8 +32,8 @@ mkdir -p logs
 # 5. 安装并启动定时任务
 ./scripts/setup-cron.sh
 
-# 6. 立即部署v2.0.7
-./scripts/docker-deploy.sh deploy-v2.0.7
+# 6. 立即部署v2.6.6
+./scripts/docker-deploy.sh deploy-v2.6.6
 ```
 
 ### 全新安装（如果是新服务器）
@@ -60,7 +60,7 @@ EOF
 chmod +x scripts/*.sh
 mkdir -p logs
 ./scripts/setup-cron.sh
-./scripts/docker-deploy.sh deploy-v2.0.7
+./scripts/docker-deploy.sh deploy-v2.6.6
 ```
 
 ## 系统架构
@@ -99,8 +99,8 @@ git commit -m "feat: 新功能"
 git push origin master
 
 # 2. 创建部署标签
-git tag deploy-v2.0.8
-git push origin deploy-v2.0.8
+git tag deploy-v2.6.7
+git push origin deploy-v2.6.7
 ```
 
 ### 自动部署
@@ -161,7 +161,7 @@ docker run -d --name crypto-tgalert --restart unless-stopped \
   -v /home/ubuntu/crypto-tgalert-data/data:/app/data \
   -v /home/ubuntu/crypto-tgalert-data/logs:/app/logs \
   --env-file /home/ubuntu/crypto-tgalert/.env \
-  crypto-tgalert:deploy-v2.0.6
+  crypto-tgalert:deploy-v2.6.5
 ```
 
 ## 故障排查
