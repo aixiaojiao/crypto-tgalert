@@ -195,7 +195,8 @@ export class ApplicationBootstrap {
       const messageFormatter = container.resolve('MESSAGE_FORMATTER');
       const logger = container.resolve(SERVICE_IDENTIFIERS.LOGGER);
       const historicalHighCache = container.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE);
-      return new HighCommandHandler(messageFormatter, logger, historicalHighCache);
+      const tieredDataManager = container.resolve(SERVICE_IDENTIFIERS.TIERED_DATA_MANAGER);
+      return new HighCommandHandler(messageFormatter, logger, historicalHighCache, tieredDataManager);
     });
 
     log.debug('✅ Additional services registered');

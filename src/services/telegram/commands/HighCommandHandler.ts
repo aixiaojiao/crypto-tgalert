@@ -2,6 +2,7 @@ import { BaseCommandHandler } from './BaseCommandHandler';
 import { BotContext, CommandResult } from '../ICommandHandler';
 import { HistoricalHighCacheV2 } from '../../historicalHighCacheV2';
 import { binanceClient } from '../../binance';
+import { TieredDataManager } from '../../tieredDataManager';
 
 export class HighCommandHandler extends BaseCommandHandler {
   readonly command = 'high';
@@ -11,7 +12,8 @@ export class HighCommandHandler extends BaseCommandHandler {
   constructor(
     formatter: any,
     logger: any,
-    private historicalHighCache: HistoricalHighCacheV2
+    private historicalHighCache: HistoricalHighCacheV2,
+    private tieredDataManager: TieredDataManager
   ) {
     super(formatter, logger);
   }
@@ -124,10 +126,10 @@ export class HighCommandHandler extends BaseCommandHandler {
     }
 
     try {
-      // 先获取初始排名数据
-      const initialRankings = this.historicalHighCache.getRankingByProximityToHigh(timeframe, 20);
+      // 获取所有历史高价数据（不限制数量）
+      const allHistoricalData = this.historicalHighCache.getRankingByProximityToHigh(timeframe, 200);
 
-      if (initialRankings.length === 0) {
+      if (allHistoricalData.length === 0) {
         return {
           success: false,
           message: `❌ 时间框架 ${timeframe} 暂无排名数据`,
@@ -135,37 +137,74 @@ export class HighCommandHandler extends BaseCommandHandler {
         };
       }
 
-      // 批量更新前20个币种的实时价格
-      const symbolsToUpdate = initialRankings.slice(0, 20).map(r => r.symbol);
+      // 提取所有代币符号
+      const allSymbols = allHistoricalData.map(r => r.symbol);
 
       try {
-        console.log(`🔄 Updating real-time prices for ${symbolsToUpdate.length} top symbols...`);
+        console.log(`🔄 Getting real-time prices for ${allSymbols.length} symbols using tiered system...`);
 
-        const updateResult = await this.historicalHighCache.batchIncrementalUpdate(symbolsToUpdate, 1);
+        // 使用分层系统批量获取实时价格
+        const realTimePrices = await this.tieredDataManager.getBatchTickers(allSymbols);
 
-        console.log(`✅ Updated ${updateResult.success.length} symbols, failed ${updateResult.failed.length}`);
+        console.log(`✅ Retrieved ${realTimePrices.size} real-time prices from tiered system`);
 
-        // 重新获取更新后的排名数据
-        const updatedRankings = this.historicalHighCache.getRankingByProximityToHigh(timeframe, 20);
+        // 重新计算所有代币的距离百分比
+        const updatedRankings = allHistoricalData.map(item => {
+          const realTimePrice = realTimePrices.get(item.symbol);
+          if (!realTimePrice) {
+            // 如果没有实时价格，保持原始数据
+            return item;
+          }
 
-        const message = this.formatRankingMessage(updatedRankings, timeframe);
+          const currentPrice = parseFloat(realTimePrice.lastPrice);
+          const highPrice = item.highPrice;
+
+          // 重新计算距离百分比
+          const distancePercent = currentPrice >= highPrice
+            ? -((currentPrice - highPrice) / highPrice) * 100
+            : ((highPrice - currentPrice) / currentPrice) * 100;
+
+          const neededGainPercent = currentPrice >= highPrice
+            ? 0
+            : ((highPrice - currentPrice) / currentPrice) * 100;
+
+          return {
+            ...item,
+            currentPrice,
+            distancePercent,
+            neededGainPercent
+          };
+        });
+
+        // 按距离百分比重新排序（由近到远）
+        updatedRankings.sort((a, b) => {
+          if (a.distancePercent < 0 && b.distancePercent >= 0) return -1;
+          if (a.distancePercent >= 0 && b.distancePercent < 0) return 1;
+          return Math.abs(a.distancePercent) - Math.abs(b.distancePercent);
+        });
+
+        // 取前20个
+        const top20Rankings = updatedRankings.slice(0, 20);
+
+        const message = this.formatRankingMessage(top20Rankings, timeframe);
         const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
         return {
           success: true,
-          message: message + `\n\n⚡ *数据时间*: ${now} (实时价格更新)`,
+          message: message + `\n\n⚡ *数据时间*: ${now} (分层系统实时价格)`,
           shouldReply: true
         };
 
       } catch (updateError) {
         // 如果实时更新失败，回退到缓存数据
-        console.warn('Failed to update real-time prices, using cached data:', updateError);
+        console.warn('Failed to get real-time prices from tiered system, using cached data:', updateError);
 
-        const message = this.formatRankingMessage(initialRankings, timeframe);
+        const top20Initial = allHistoricalData.slice(0, 20);
+        const message = this.formatRankingMessage(top20Initial, timeframe);
 
         return {
           success: true,
-          message: message + '\n\n⚠️ *注意: 实时更新失败，使用缓存价格*',
+          message: message + '\n\n⚠️ *注意: 分层系统更新失败，使用缓存价格*',
           shouldReply: true
         };
       }

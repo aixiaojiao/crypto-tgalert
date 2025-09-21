@@ -1,4 +1,5 @@
 import { AlertType, AlertCondition, AlertConfig, AlertPriority, NotificationChannel, BreakthroughAlertMetadata } from '../services/alerts/IAlertService';
+import { AlertIdManager } from '../services/alerts/AlertIdManager';
 
 export interface ParsedAlertCommand {
   symbol: string;
@@ -74,12 +75,14 @@ export class AlertCommandParser {
   /**
    * 将解析结果转换为AlertConfig
    */
-  static toAlertConfig(
+  static async toAlertConfig(
     parsed: ParsedAlertCommand,
     userId: string,
     chatId: number
-  ): AlertConfig {
-    const id = `${userId}-${parsed.symbol}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  ): Promise<AlertConfig> {
+    // 使用新的统一ID生成系统
+    const idType = AlertIdManager.getIdTypeFromAlertType(parsed.type);
+    const id = await AlertIdManager.generateId(idType, userId);
 
     // Breakthrough警报的特殊配置
     const isBreakthroughAlert = parsed.type === AlertType.BREAKTHROUGH || parsed.type === AlertType.MULTI_BREAKTHROUGH;

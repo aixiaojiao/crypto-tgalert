@@ -41,7 +41,7 @@ export class PriceCommandHandler extends BaseCommandHandler {
         const marketData = {
           symbol,
           price: parseFloat(stats.lastPrice),
-          priceChange24h: parseFloat(stats.priceChangePercent),
+          priceChangePercent24h: parseFloat(stats.priceChangePercent),
           volume24h: parseFloat(stats.volume),
           high24h: parseFloat(stats.highPrice),
           low24h: parseFloat(stats.lowPrice)

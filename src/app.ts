@@ -91,6 +91,7 @@ export class CryptoTgAlertApp {
     }
   }
 
+
   /**
    * 发送启动通知
    */
@@ -99,13 +100,13 @@ export class CryptoTgAlertApp {
       console.log('📤 准备发送启动通知消息...');
 
       // 系统启动状态信息
-      const startupHeader = `👋 <b>Hello! 欢迎使用 Crypto Alert Bot</b> 🤖\n\n` +
-        `🎉 <b>系统已成功启动并准备就绪！</b>\n` +
+      const startupHeader = `👋 *Hello! 欢迎使用 Crypto Alert Bot* 🤖\n\n` +
+        `🎉 *系统已成功启动并准备就绪！*\n` +
         `⏰ 启动时间: ${new Date().toLocaleString('zh-CN')}\n` +
         `💰 当前 BTC 价格: $${btcPrice.toLocaleString()}\n` +
         `✅ 所有系统运行正常\n\n`;
 
-      // 获取统一的帮助内容
+      // 获取统一的帮助内容（不需要转义，使用Markdown模式）
       const helpContent = this.telegramBot.generateHelpContent();
 
       // 组合完整消息
@@ -113,7 +114,7 @@ export class CryptoTgAlertApp {
 
       console.log('📨 调用telegramBot.sendToAuthorizedUser...');
       await this.telegramBot.sendToAuthorizedUser(helloMessage, {
-        parse_mode: 'HTML'
+        parse_mode: 'Markdown'
       });
       console.log('✅ 启动通知消息发送成功！');
     } catch (error) {
