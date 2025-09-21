@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.6] - 2025-09-21
+
+### 🛠️ **黄名单数据库约束修复**
+
+#### **🔧 修复SQLite CHECK约束错误**
+- **问题描述**: 黄名单命令失败，报错"CHECK constraint failed: filter_type IN ('blacklist', 'mute')"
+- **根本原因**: 现有数据库表保留旧约束，不包含'yellowlist'值
+- **解决方案**: 创建数据库迁移脚本安全更新表结构
+
+#### **📋 技术实现**
+- **迁移脚本**: `scripts/migrate-yellowlist.ts`
+- **约束更新**: 将CHECK约束改为`filter_type IN ('blacklist', 'mute', 'yellowlist')`
+- **数据安全**: 完整备份和恢复现有过滤规则
+- **外键处理**: 临时禁用约束确保迁移成功
+
+#### **✅ 修复状态**
+- 黄名单管理命令现已正常工作
+- 数据库迁移已完成并验证
+- 所有现有过滤规则保持不变
+
 ## [2.6.5] - 2025-09-21
 
 ### ✨ **黄名单管理功能实现**
