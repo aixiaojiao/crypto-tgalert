@@ -584,7 +584,7 @@ export class TelegramBot {
                 timeframeData[tf] = {
                   change: changePercent,
                   icon: changePercent >= 0 ? '📈' : '📉',
-                  sign: changePercent >= 0 ? '+' : ''
+                  sign: changePercent >= 0 ? '+' : '-'
                 };
               }
             } catch (tfError: any) {
@@ -596,8 +596,33 @@ export class TelegramBot {
           console.log('Multi-timeframe data collection failed:', multiFrameError?.message || multiFrameError);
         }
 
+        // 检查完整的风险状态（系统级 + 个人级）
+        const userId = ctx.from?.id?.toString();
+        let riskIcon = '';
+        if (userId) {
+          try {
+            // 检查系统级风险
+            const systemRiskLevel = getTokenRiskLevel(actualSymbol);
+            const systemRiskIcon = getRiskIcon(systemRiskLevel);
+
+            // 检查个人黄名单
+            const filterManager = resolve(SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER) as any;
+            const userYellowlist = await filterManager?.getUserFilters(userId, 'yellowlist') || [];
+            const isInUserYellowlist = userYellowlist.some((filter: any) => filter.symbol === actualSymbol);
+
+            // 优先级：系统级风险 > 个人黄名单
+            if (systemRiskIcon) {
+              riskIcon = systemRiskIcon + ' ';
+            } else if (isInUserYellowlist) {
+              riskIcon = '⚠️ ';
+            }
+          } catch (riskError: any) {
+            console.log('Risk check failed:', riskError?.message || riskError);
+          }
+        }
+
         let priceMessage = `
-💰 *${symbol} ${isContract ? '合约' : '现货'}价格*
+💰 *${riskIcon}${symbol} ${isContract ? '合约' : '现货'}价格*
 
 💵 当前价格: $${formattedPrice}
 ${changeIcon} 24小时涨跌: ${changeColor}${formattedChangePercent}%

@@ -1,19 +1,24 @@
 import { IMessageFormatter } from './ICommandHandler';
+import { getTokenRiskLevel, getRiskIcon } from '../../config/tokenLists';
 export class MessageFormatter implements IMessageFormatter {
 
-  formatPrice(symbol: string, price: number, change?: number): string {
+  formatPrice(symbol: string, price: number, change?: number, includeRisk: boolean = true): string {
     const formattedPrice = this.formatNumber(price);
     const changeText = change !== undefined ? this.formatPriceChange(change) : '';
 
-    return `💰 ${symbol}: $${formattedPrice}${changeText}`;
+    // 添加风险标记
+    const riskPrefix = includeRisk ? this.getRiskPrefix(symbol) : '';
+
+    return `💰 ${riskPrefix}${symbol}: $${formattedPrice}${changeText}`;
   }
 
   formatAlert(alertData: any): string {
     const { symbol, type, currentValue, thresholdValue, triggeredAt } = alertData;
+    const riskPrefix = this.getRiskPrefix(symbol);
 
     return `🚨 *Alert Triggered*
 
-📊 Symbol: *${symbol}*
+📊 Symbol: *${riskPrefix}${symbol}*
 📈 Type: ${type.replace('_', ' ').toUpperCase()}
 💰 Current: ${this.formatNumber(currentValue)}
 🎯 Threshold: ${this.formatNumber(thresholdValue)}
@@ -22,8 +27,9 @@ export class MessageFormatter implements IMessageFormatter {
 
   formatMarketData(data: any): string {
     const { symbol, price, priceChange24h, volume24h, high24h, low24h } = data;
+    const riskPrefix = this.getRiskPrefix(symbol);
 
-    return `📊 *${symbol}* Market Data
+    return `📊 *${riskPrefix}${symbol}* Market Data
 
 💰 Price: $${this.formatNumber(price)}
 📈 24h Change: ${this.formatPriceChange(priceChange24h)}
@@ -90,8 +96,9 @@ ${commandList}
     const marketList = markets.map((market, index) => {
       const { symbol, price, priceChangePercent24h } = market;
       const changeIcon = priceChangePercent24h >= 0 ? '🟢' : '🔴';
+      const riskPrefix = this.getRiskPrefix(symbol);
 
-      return `${index + 1}. ${changeIcon} *${symbol}*
+      return `${index + 1}. ${changeIcon} *${riskPrefix}${symbol}*
    💰 $${this.formatNumber(price)}
    📈 ${this.formatPriceChange(priceChangePercent24h)}`;
     }).join('\n\n');
@@ -112,8 +119,9 @@ ${commandList}
     const alertList = alerts.map((alert, index) => {
       const { id, symbol, type, thresholds, enabled } = alert;
       const statusIcon = enabled ? '🟢' : '🔴';
+      const riskPrefix = this.getRiskPrefix(symbol);
 
-      return `${index + 1}. ${statusIcon} *${symbol}* ${type.replace('_', ' ')}
+      return `${index + 1}. ${statusIcon} *${riskPrefix}${symbol}* ${type.replace('_', ' ')}
    🎯 Threshold: ${this.formatNumber(thresholds.value)}
    🆔 ID: \`${id}\``;
     }).join('\n\n');
@@ -124,8 +132,9 @@ ${commandList}
   // 格式化历史数据
   formatHistoricalHigh(data: any): string {
     const { symbol, timeframe, high, timestamp, daysSince } = data;
+    const riskPrefix = this.getRiskPrefix(symbol);
 
-    return `📈 *${symbol}* Historical High (${timeframe})
+    return `📈 *${riskPrefix}${symbol}* Historical High (${timeframe})
 
 🏆 Highest Price: $${this.formatNumber(high)}
 📅 Date: ${this.formatDateTime(timestamp)}
@@ -133,6 +142,12 @@ ${commandList}
   }
 
   // Private helper methods
+
+  private getRiskPrefix(symbol: string): string {
+    const riskLevel = getTokenRiskLevel(symbol);
+    const riskIcon = getRiskIcon(riskLevel);
+    return riskIcon ? `${riskIcon} ` : '';
+  }
 
   private formatNumber(num: number): string {
     if (num >= 1000000000) {
