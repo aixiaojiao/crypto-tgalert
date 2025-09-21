@@ -315,6 +315,10 @@ export class TelegramBot {
         { command: 'blacklist_add', description: '🛡️ 添加个人黑名单' },
         { command: 'blacklist_remove', description: '🛡️ 移除黑名单' },
         { command: 'blacklist_list', description: '🛡️ 查看过滤规则' },
+        { command: 'yellowlist_add', description: '⚠️ 添加个人黄名单' },
+        { command: 'yellowlist_remove', description: '⚠️ 移除黄名单' },
+        { command: 'yellowlist_list', description: '⚠️ 查看黄名单规则' },
+        { command: 'yellowlist_clear', description: '⚠️ 清空黄名单' },
         { command: 'mute_add', description: '🔇 临时屏蔽代币' },
         { command: 'mute_remove', description: '🔇 解除屏蔽' },
         { command: 'mute_list', description: '🔇 查看屏蔽列表' },
@@ -449,9 +453,9 @@ export class TelegramBot {
 
 🛡️ *过滤管理:*
 /blacklist_add doge - 添加DOGE到黑名单
-/blacklist_remove doge - 从黑名单移除DOGE
+/yellowlist_add doge - 添加DOGE到黄名单(谨慎交易)
 /mute_add shib 2h - 临时屏蔽SHIB 2小时
-/mute_list - 查看所有屏蔽列表
+/blacklist_list - 查看所有过滤规则
 /filter_settings - 查看过滤设置
 /filter_auto on - 启用自动过滤
 
@@ -1966,13 +1970,24 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 /high near - 接近历史高点币种 🆕
 
 🛡️ 过滤管理:
+🔒 黑名单(完全屏蔽):
 /blacklist_add <symbol> - 添加个人黑名单
 /blacklist_remove <symbol> - 移除黑名单
 /blacklist_list - 查看过滤规则状态
+
+⚠️ 黄名单(警告标记):
+/yellowlist_add <symbol> [reason] - 添加个人黄名单
+/yellowlist_remove <symbol> - 移除黄名单
+/yellowlist_list - 查看黄名单规则状态
+/yellowlist_clear - 清空个人黄名单
+
+🔇 临时屏蔽(定时解除):
 /mute_add <symbol> <duration> - 临时屏蔽代币
 /mute_remove <symbol> - 解除屏蔽
 /mute_list - 查看屏蔽列表
 /mute_clear - 清空所有屏蔽
+
+⚙️ 过滤设置:
 /filter_settings - 查看过滤设置
 /filter_volume <amount> - 设置交易量阈值
 /filter_auto on/off - 启用/禁用自动过滤
