@@ -15,7 +15,7 @@ import { injectable } from 'inversify';
 export interface FilterRule {
   id: number;
   symbol: string;
-  filter_type: 'blacklist' | 'mute';
+  filter_type: 'blacklist' | 'mute' | 'yellowlist';
   expires_at: number | null;
   reason: string | null;
   created_at: number;
@@ -25,6 +25,7 @@ export interface FilterRule {
 export interface FilterStats {
   blacklistCount: number;
   muteCount: number;
+  yellowlistCount: number;
   totalFiltered: number;
   expiringSoon: FilterRule[];
 }
@@ -42,6 +43,12 @@ export interface IUserFilterService {
   getMuteList(userId: string): Promise<FilterRule[]>;
   isMuted(userId: string, symbol: string): Promise<{ muted: boolean; remainingTime?: string }>;
 
+  // 黄名单管理 (新增功能)
+  addYellowlist(userId: string, symbol: string, reason?: string): Promise<void>;
+  removeYellowlist(userId: string, symbol: string): Promise<void>;
+  getYellowlist(userId: string): Promise<FilterRule[]>;
+  isYellowlisted(userId: string, symbol: string): Promise<boolean>;
+
   // 过滤检查
   isFiltered(userId: string, symbol: string): Promise<boolean>;
   getFilterReason(userId: string, symbol: string): Promise<string | null>;
@@ -53,7 +60,7 @@ export interface IUserFilterService {
   // 统计和清理
   getFilterStats(userId: string): Promise<FilterStats>;
   cleanupExpiredMutes(): Promise<number>;
-  clearAll(userId: string, filterType?: 'blacklist' | 'mute'): Promise<number>;
+  clearAll(userId: string, filterType?: 'blacklist' | 'mute' | 'yellowlist'): Promise<number>;
 }
 
 @injectable()
@@ -384,9 +391,10 @@ export class UserFilterService implements IUserFilterService {
     const db = await getDatabase();
 
     try {
-      const [blacklistRows, muteRows] = await Promise.all([
+      const [blacklistRows, muteRows, yellowlistRows] = await Promise.all([
         db.all(`SELECT * FROM user_filters WHERE user_id = ? AND filter_type = ?`, [userId, 'blacklist']),
-        db.all(`SELECT * FROM user_filters WHERE user_id = ? AND filter_type = ?`, [userId, 'mute'])
+        db.all(`SELECT * FROM user_filters WHERE user_id = ? AND filter_type = ?`, [userId, 'mute']),
+        db.all(`SELECT * FROM user_filters WHERE user_id = ? AND filter_type = ?`, [userId, 'yellowlist'])
       ]);
 
       const activeMutes = muteRows.filter(row => !TimeParser.isExpired(row.expires_at));
@@ -405,7 +413,8 @@ export class UserFilterService implements IUserFilterService {
       return {
         blacklistCount: blacklistRows.length,
         muteCount: activeMutes.length,
-        totalFiltered: blacklistRows.length + activeMutes.length,
+        yellowlistCount: yellowlistRows.length,
+        totalFiltered: blacklistRows.length + activeMutes.length + yellowlistRows.length,
         expiringSoon
       };
     } catch (error) {
@@ -440,7 +449,7 @@ export class UserFilterService implements IUserFilterService {
   /**
    * 清空所有过滤规则
    */
-  async clearAll(userId: string, filterType?: 'blacklist' | 'mute'): Promise<number> {
+  async clearAll(userId: string, filterType?: 'blacklist' | 'mute' | 'yellowlist'): Promise<number> {
     const db = await getDatabase();
 
     try {
@@ -459,6 +468,100 @@ export class UserFilterService implements IUserFilterService {
     } catch (error) {
       log.error(`Failed to clear user filters`, { userId, filterType, error });
       throw error;
+    }
+  }
+
+  // ========================
+  // 黄名单管理方法 (新增功能)
+  // ========================
+
+  /**
+   * 添加黄名单
+   */
+  async addYellowlist(userId: string, symbol: string, reason?: string): Promise<void> {
+    const db = await getDatabase();
+    const now = Date.now();
+
+    try {
+      await db.run(`
+        INSERT OR REPLACE INTO user_filters
+        (user_id, symbol, filter_type, expires_at, reason, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [userId, symbol.toUpperCase(), 'yellowlist', null, reason || null, now, now]);
+
+      log.info(`Added yellowlist rule`, { userId, symbol, reason });
+    } catch (error) {
+      log.error(`Failed to add yellowlist rule`, { userId, symbol, error });
+      throw error;
+    }
+  }
+
+  /**
+   * 移除黄名单
+   */
+  async removeYellowlist(userId: string, symbol: string): Promise<void> {
+    const db = await getDatabase();
+
+    try {
+      const result = await db.run(`
+        DELETE FROM user_filters
+        WHERE user_id = ? AND symbol = ? AND filter_type = ?
+      `, [userId, symbol.toUpperCase(), 'yellowlist']);
+
+      if (result.changes === 0) {
+        throw new Error(`${symbol} 不在黄名单中`);
+      }
+
+      log.info(`Removed yellowlist rule`, { userId, symbol });
+    } catch (error) {
+      log.error(`Failed to remove yellowlist rule`, { userId, symbol, error });
+      throw error;
+    }
+  }
+
+  /**
+   * 获取黄名单
+   */
+  async getYellowlist(userId: string): Promise<FilterRule[]> {
+    const db = await getDatabase();
+
+    try {
+      const rows = await db.all(`
+        SELECT * FROM user_filters
+        WHERE user_id = ? AND filter_type = ?
+        ORDER BY created_at DESC
+      `, [userId, 'yellowlist']);
+
+      return rows.map(row => ({
+        id: row.id,
+        symbol: row.symbol,
+        filter_type: row.filter_type,
+        expires_at: row.expires_at,
+        reason: row.reason,
+        created_at: row.created_at
+      }));
+    } catch (error) {
+      log.error(`Failed to get yellowlist`, { userId, error });
+      throw error;
+    }
+  }
+
+  /**
+   * 检查是否在黄名单中
+   */
+  async isYellowlisted(userId: string, symbol: string): Promise<boolean> {
+    const db = await getDatabase();
+
+    try {
+      const row = await db.get(`
+        SELECT id FROM user_filters
+        WHERE user_id = ? AND symbol = ? AND filter_type = ?
+      `, [userId, symbol.toUpperCase(), 'yellowlist']);
+
+      return !!row;
+    } catch (error) {
+      log.error(`Failed to check yellowlist`, { userId, symbol, error });
+      return false;
     }
   }
 }

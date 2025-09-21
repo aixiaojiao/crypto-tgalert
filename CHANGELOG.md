@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [2.6.5] - 2025-09-21
 
+### ✨ **黄名单管理功能实现**
+
+#### **🎯 完善三级过滤系统**
+- **功能描述**: 实现用户级黄名单管理命令，完善三级过滤体系（黑名单/黄名单/静音）
+- **实现范围**: 完整的CRUD操作和用户界面集成
+- **状态**: 🧪 已实现，等待用户测试验证
+
+#### **🔧 技术实现方案**
+- **数据库扩展**: 扩展user_filters表支持'yellowlist'过滤类型
+- **服务层**: 扩展UserFilterService和AdvancedFilterManager添加黄名单支持
+- **命令接口**: 新建YellowlistCommandHandler提供完整管理界面
+- **系统集成**: 在bot.ts中注册所有黄名单命令
+
+#### **📋 可用命令**
+```bash
+/yellowlist_add <symbol> [reason]    # 添加代币到个人黄名单
+/yellowlist_remove <symbol>          # 从个人黄名单移除代币
+/yellowlist_list                     # 查看所有过滤规则状态
+/yellowlist_clear                    # 清空个人黄名单
+```
+
+#### **🎨 功能特点**
+- **智能过滤**: 黄名单代币允许通知但带有⚠️警告标记
+- **优先级管理**: 用户黄名单可被用户黑名单覆盖
+- **统计集成**: 在过滤统计中正确显示黄名单计数
+- **兼容性**: 完全不影响现有黑名单和静音功能
+
+#### **🔄 修改文件列表**
+- `src/database/schema.ts` - 数据库schema扩展
+- `src/services/filters/UserFilterService.ts` - 服务层扩展
+- `src/services/filters/AdvancedFilterManager.ts` - 管理器扩展
+- `src/services/telegram/commands/YellowlistCommandHandler.ts` - 命令处理器（新建）
+- `src/bot.ts` - 命令注册
+- `TEST_ISSUES_REPORT.md` - 测试报告更新
+
 ### 🐛 **价格查询API修复**
 
 #### **✅ 修复/price命令多时间框架数据显示问题**

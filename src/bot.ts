@@ -29,6 +29,7 @@ import { DebugService } from './services/debugService';
 import { resolve } from './core/container';
 import { SERVICE_IDENTIFIERS } from './core/container/decorators';
 import { BlacklistCommandHandler } from './services/telegram/commands/BlacklistCommandHandler';
+import { YellowlistCommandHandler } from './services/telegram/commands/YellowlistCommandHandler';
 import { MuteCommandHandler } from './services/telegram/commands/MuteCommandHandler';
 import { FilterCommandHandler } from './services/telegram/commands/FilterCommandHandler';
 import { historicalHighCache } from './services/historicalHighCacheV2';
@@ -41,6 +42,7 @@ export class TelegramBot {
   private unifiedAlertService: PersistentAlertService;
   private debugService: DebugService;
   private blacklistCommandHandler: BlacklistCommandHandler;
+  private yellowlistCommandHandler: YellowlistCommandHandler;
   private muteCommandHandler: MuteCommandHandler;
   private filterCommandHandler: FilterCommandHandler;
 
@@ -63,6 +65,7 @@ export class TelegramBot {
     const filterManager = resolve(SERVICE_IDENTIFIERS.ADVANCED_FILTER_MANAGER) as any;
     const userFilterService = resolve(SERVICE_IDENTIFIERS.USER_FILTER_SERVICE) as any;
     this.blacklistCommandHandler = new BlacklistCommandHandler(null, log, filterManager, userFilterService);
+    this.yellowlistCommandHandler = new YellowlistCommandHandler(null, log, filterManager, userFilterService);
     this.muteCommandHandler = new MuteCommandHandler(null, log, filterManager, userFilterService);
     this.filterCommandHandler = new FilterCommandHandler(null, log, filterManager, userFilterService);
 
@@ -2451,6 +2454,44 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
     this.bot.command('blacklist_clear', async (ctx) => {
       const result = await this.blacklistCommandHandler.handle(ctx, ['clear']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('yellowlist_add', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /yellowlist_add &lt;symbol&gt; [reason]\n示例: /yellowlist_add DOGE 高波动性代币');
+        return;
+      }
+      const result = await this.yellowlistCommandHandler.handle(ctx, ['add', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('yellowlist_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /yellowlist_remove &lt;symbol&gt;\n示例: /yellowlist_remove DOGE');
+        return;
+      }
+      const result = await this.yellowlistCommandHandler.handle(ctx, ['remove', ...args]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('yellowlist_list', async (ctx) => {
+      const result = await this.yellowlistCommandHandler.handle(ctx, ['list']);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+    });
+
+    this.bot.command('yellowlist_clear', async (ctx) => {
+      const result = await this.yellowlistCommandHandler.handle(ctx, ['clear']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }

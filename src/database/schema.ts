@@ -29,7 +29,7 @@ export interface UserFilter {
   id: number;
   user_id: string;
   symbol: string;
-  filter_type: 'blacklist' | 'mute';
+  filter_type: 'blacklist' | 'mute' | 'yellowlist';
   expires_at: number | null;
   reason: string | null;
   created_at: number;
@@ -77,7 +77,7 @@ export const createTables = `
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
-    filter_type TEXT NOT NULL CHECK (filter_type IN ('blacklist', 'mute')),
+    filter_type TEXT NOT NULL CHECK (filter_type IN ('blacklist', 'mute', 'yellowlist')),
     expires_at INTEGER NULL,
     reason TEXT,
     created_at INTEGER NOT NULL,

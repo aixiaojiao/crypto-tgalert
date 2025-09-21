@@ -18,7 +18,7 @@ import { recordBusinessOperation } from '../../utils/businessMonitor';
 export interface FilterResult {
   allowed: boolean;
   reason: string;
-  source: 'system_delisted' | 'system_blacklist' | 'system_yellowlist' | 'user_blacklist' | 'user_mute';
+  source: 'system_delisted' | 'system_blacklist' | 'system_yellowlist' | 'user_blacklist' | 'user_mute' | 'user_yellowlist';
   priority: number;
   canOverride: boolean;
 }
@@ -32,6 +32,7 @@ export interface FilterSummary {
   userFilters: {
     blacklist: number;
     mute: number;
+    yellowlist: number;
   };
   totalFiltered: number;
   recentlyFiltered: number;
@@ -49,6 +50,7 @@ enum FilterPriority {
   USER_BLACKLIST = 3,     // 🔒 用户永久屏蔽
   USER_MUTE = 4,          // 🔇 用户临时屏蔽
   SYSTEM_YELLOWLIST = 5,  // ⚠️ 系统警告 - 可用户屏蔽
+  USER_YELLOWLIST = 6,    // ⚠️ 用户警告 - 可覆盖
 }
 
 export interface IAdvancedFilterManager {
@@ -58,6 +60,8 @@ export interface IAdvancedFilterManager {
   // 用户操作 (安全检查)
   addUserBlacklist(userId: string, symbol: string, reason?: string): Promise<{success: boolean, message: string}>;
   removeUserBlacklist(userId: string, symbol: string): Promise<{success: boolean, message: string}>;
+  addUserYellowlist(userId: string, symbol: string, reason?: string): Promise<{success: boolean, message: string}>;
+  removeUserYellowlist(userId: string, symbol: string): Promise<{success: boolean, message: string}>;
 
   // 查询功能
   getFilterSummary(userId: string): Promise<FilterSummary>;
@@ -133,6 +137,19 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
           reason: `🔇 临时屏蔽 (${muteResult.remainingTime})`,
           source: 'user_mute',
           priority: FilterPriority.USER_MUTE,
+          canOverride: true
+        };
+      }
+
+      // 优先级6: 用户黄名单 (使用标准化的symbol)
+      const userYellowlisted = await this.userFilterService.isYellowlisted(userId, normalizedSymbol);
+      if (userYellowlisted) {
+        const reason = await this.userFilterService.getFilterReason(userId, normalizedSymbol);
+        return {
+          allowed: true,
+          reason: reason || '⚠️ 个人黄名单，谨慎交易',
+          source: 'user_yellowlist',
+          priority: FilterPriority.USER_YELLOWLIST,
           canOverride: true
         };
       }
@@ -242,6 +259,76 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
   }
 
   /**
+   * 安全的用户黄名单添加
+   */
+  async addUserYellowlist(userId: string, symbol: string, reason?: string): Promise<{success: boolean, message: string}> {
+    try {
+      const filterResult = await this.checkFilter(userId, symbol);
+
+      // 检查是否为系统不可覆盖的代币
+      if (!filterResult.allowed && !filterResult.canOverride) {
+        return {
+          success: false,
+          message: `❌ 无法添加 ${symbol}：${filterResult.reason.replace(/^[🚫⛔⚠️🔒🔇]\s*/, '')}`
+        };
+      }
+
+      // 检查是否已在用户黑名单中
+      const isBlacklisted = await this.userFilterService.isBlacklisted(userId, symbol);
+      if (isBlacklisted) {
+        return {
+          success: false,
+          message: `❌ ${symbol} 已在个人黑名单中，无法添加到黄名单`
+        };
+      }
+
+      await this.userFilterService.addYellowlist(userId, symbol, reason);
+
+      return {
+        success: true,
+        message: `✅ 已将 ${symbol} 添加到个人黄名单`
+      };
+
+    } catch (error) {
+      log.error('Failed to add user yellowlist', { userId, symbol, error });
+      return {
+        success: false,
+        message: `❌ 添加失败：${error instanceof Error ? error.message : '未知错误'}`
+      };
+    }
+  }
+
+  /**
+   * 安全的用户黄名单移除
+   */
+  async removeUserYellowlist(userId: string, symbol: string): Promise<{success: boolean, message: string}> {
+    try {
+      const isYellowlisted = await this.userFilterService.isYellowlisted(userId, symbol);
+
+      if (!isYellowlisted) {
+        return {
+          success: false,
+          message: `❌ ${symbol} 不在个人黄名单中`
+        };
+      }
+
+      await this.userFilterService.removeYellowlist(userId, symbol);
+
+      return {
+        success: true,
+        message: `✅ 已将 ${symbol} 从个人黄名单移除`
+      };
+
+    } catch (error) {
+      log.error('Failed to remove user yellowlist', { userId, symbol, error });
+      return {
+        success: false,
+        message: `❌ 移除失败：${error instanceof Error ? error.message : '未知错误'}`
+      };
+    }
+  }
+
+  /**
    * 获取过滤汇总
    */
   async getFilterSummary(userId: string): Promise<FilterSummary> {
@@ -256,7 +343,8 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
         },
         userFilters: {
           blacklist: userStats.blacklistCount,
-          mute: userStats.muteCount
+          mute: userStats.muteCount,
+          yellowlist: userStats.yellowlistCount
         },
         totalFiltered: DELISTED_TOKENS.length + BLACKLIST_TOKENS.length + userStats.totalFiltered,
         recentlyFiltered: userStats.expiringSoon.length
@@ -389,7 +477,8 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       // 用户级过滤
       report += '🔒 **个人过滤:**\n';
       report += `   • 永久黑名单: ${summary.userFilters.blacklist}个\n`;
-      report += `   • 临时屏蔽: ${summary.userFilters.mute}个\n\n`;
+      report += `   • 临时屏蔽: ${summary.userFilters.mute}个\n`;
+      report += `   • 警告标记: ${summary.userFilters.yellowlist}个\n\n`;
 
       // 即将过期的屏蔽
       if (userStats.expiringSoon.length > 0) {
@@ -404,7 +493,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       report += '📈 **总体统计:**\n';
       report += `   • 总过滤规则: ${summary.totalFiltered}个\n`;
       report += `   • 系统保护: ${summary.systemFilters.delisted + summary.systemFilters.blacklist}个\n`;
-      report += `   • 用户自定义: ${summary.userFilters.blacklist + summary.userFilters.mute}个\n`;
+      report += `   • 用户自定义: ${summary.userFilters.blacklist + summary.userFilters.mute + summary.userFilters.yellowlist}个\n`;
 
       return report;
 
