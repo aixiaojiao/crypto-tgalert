@@ -248,12 +248,17 @@ export class PriceAlertService extends EventEmitter {
       if (shouldTrigger) {
         // 1分钟内防重复通知检查
 
-        // 简化规则: 1分钟内同一币种+时间周期只通知1次
+        // 动态冷却规则: 根据时间框架计算冷却时间
         const globalKey = `${symbol}:${config.timeframe}`;
         const globalRecent = this.recentTriggers.get(globalKey);
 
-        if (globalRecent && now - globalRecent.timestamp < 60 * 1000) {
-          log.info(`🚫 1分钟内重复通知 ${symbol} ${config.timeframe}: 距离上次通知 ${Math.floor((now - globalRecent.timestamp)/1000)}秒`);
+        // 计算动态冷却时间
+        const cooldownMs = this.calculateCooldownMs(config.timeframe);
+        const cooldownMinutes = Math.floor(cooldownMs / (60 * 1000)); // 转换为分钟显示
+
+        if (globalRecent && now - globalRecent.timestamp < cooldownMs) {
+          const passedSeconds = Math.floor((now - globalRecent.timestamp) / 1000);
+          log.info(`🚫 ${cooldownMinutes}分钟内重复通知 ${symbol} ${config.timeframe}: 距离上次通知 ${passedSeconds}秒`);
           continue;
         }
 
@@ -277,6 +282,33 @@ export class PriceAlertService extends EventEmitter {
         log.info(`✅ Alert triggered for ${symbol} ${config.timeframe}: ${changePercent.toFixed(2)}% change`);
       }
     }
+  }
+
+  /**
+   * 计算基于时间框架的动态冷却时间
+   * 规则：冷却时间 = 时间框架 ÷ 2
+   * 限制：最低1分钟，最高2小时
+   */
+  private calculateCooldownMs(timeframe: string): number {
+    const timeframeMap: Record<string, number> = {
+      '1m': 1 * 60 * 1000,      // 1分钟 → 30秒冷却
+      '5m': 5 * 60 * 1000,      // 5分钟 → 2.5分钟冷却
+      '15m': 15 * 60 * 1000,    // 15分钟 → 7.5分钟冷却
+      '30m': 30 * 60 * 1000,    // 30分钟 → 15分钟冷却
+      '1h': 60 * 60 * 1000,     // 1小时 → 30分钟冷却
+      '4h': 4 * 60 * 60 * 1000, // 4小时 → 2小时冷却
+      '24h': 24 * 60 * 60 * 1000, // 24小时 → 12小时冷却（超过上限）
+      '3d': 3 * 24 * 60 * 60 * 1000 // 3天 → 36小时冷却（超过上限）
+    };
+
+    const timeframeMs = timeframeMap[timeframe] || (5 * 60 * 1000); // 默认5分钟
+    const cooldownMs = timeframeMs / 2; // 除以2
+
+    // 限制：最低1分钟(60000ms)，最高2小时(7200000ms)
+    const MIN_COOLDOWN = 1 * 60 * 1000;
+    const MAX_COOLDOWN = 2 * 60 * 60 * 1000;
+
+    return Math.max(MIN_COOLDOWN, Math.min(MAX_COOLDOWN, cooldownMs));
   }
 
   /**

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.8] - 2025-09-22
+
+### 🔧 **动态报警冷却机制实现**
+
+#### **🚫 修复报警垃圾信息轰炸问题 (Issue #4)**
+- **问题描述**: 冷却时间与时间框架不匹配，导致短时间框架警报产生垃圾信息轰炸
+- **具体问题**: 5m涨3%和1h涨10%报警都使用固定1分钟冷却，造成频繁重复推送
+- **根本原因**: 硬编码1分钟冷却时间不适应多时间框架复杂性
+
+#### **📋 技术实现**
+**修复位置**: `src/services/priceAlertService.ts`
+
+**新增动态冷却计算函数**:
+```typescript
+private calculateCooldownMs(timeframe: string): number {
+  // 规则：冷却时间 = 时间框架 ÷ 2
+  // 限制：最低1分钟，最高2小时
+}
+```
+
+**冷却逻辑修改**:
+```typescript
+// 修复前: if (globalRecent && now - globalRecent.timestamp < 60 * 1000)
+// 修复后: const cooldownMs = this.calculateCooldownMs(config.timeframe);
+//        if (globalRecent && now - globalRecent.timestamp < cooldownMs)
+```
+
+**日志信息优化**:
+```typescript
+// 修复前: log.info(`🚫 1分钟内重复通知 ${symbol} ${config.timeframe}`)
+// 修复后: log.info(`🚫 ${cooldownMinutes}分钟内重复通知 ${symbol} ${config.timeframe}`)
+```
+
+#### **✅ 修复效果**
+- **5m涨3%报警**: 冷却时间 1分钟 → 2.5分钟 (减少60%垃圾信息)
+- **1h涨10%报警**: 冷却时间 1分钟 → 30分钟 (减少97%垃圾信息)
+- **4h突破报警**: 冷却时间 1分钟 → 2小时 (减少99%+垃圾信息)
+- **系统稳定性**: 大幅减少无意义重复报警，提升用户体验
+
+#### **🎯 冷却时间映射表**
+| 时间框架 | 原冷却时间 | 新冷却时间 | 效果 |
+|---------|----------|----------|------|
+| 1m | 1分钟 | 1分钟 | 保持不变 |
+| 5m | 1分钟 | 2.5分钟 | 减少60% |
+| 15m | 1分钟 | 7.5分钟 | 减少87% |
+| 30m | 1分钟 | 15分钟 | 减少93% |
+| 1h | 1分钟 | 30分钟 | 减少97% |
+| 4h | 1分钟 | 2小时 | 减少99%+ |
+
 ## [2.6.6] - 2025-09-21
 
 ### 🛠️ **黄名单数据库约束修复**
