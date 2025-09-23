@@ -147,14 +147,27 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
       const blacklist = await this.userFilterService.getBlacklist(userId);
       const muteList = await this.userFilterService.getMuteList(userId);
       const yellowlist = await this.userFilterService.getYellowlist(userId);
+      const systemFilters = await this.filterManager.getSystemFilters();
 
       let message = '📋 **过滤规则状态**\n\n';
 
       // 系统级过滤
       message += '🚫 **系统级过滤 (不可修改):**\n';
-      message += `   • 已下架代币: ${summary.systemFilters.delisted}个\n`;
-      message += `   • 风险代币: ${summary.systemFilters.blacklist}个\n`;
-      message += `   • 警告代币: ${summary.systemFilters.yellowlist}个\n\n`;
+      if (systemFilters.delisted.length > 0) {
+        message += `   • 已下架代币: ${systemFilters.delisted.join(', ')}\n`;
+      } else {
+        message += `   • 已下架代币: 无\n`;
+      }
+      if (systemFilters.blacklist.length > 0) {
+        message += `   • 风险代币: ${systemFilters.blacklist.join(', ')}\n`;
+      } else {
+        message += `   • 风险代币: 无\n`;
+      }
+      if (systemFilters.yellowlist.length > 0) {
+        message += `   • 警告代币: ${systemFilters.yellowlist.join(', ')}\n\n`;
+      } else {
+        message += `   • 警告代币: 无\n\n`;
+      }
 
       // 个人黑名单
       if (blacklist.length > 0) {

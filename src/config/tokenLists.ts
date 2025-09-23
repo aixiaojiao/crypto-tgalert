@@ -10,12 +10,12 @@ export const DELISTED_TOKENS = [
 
 // 坚决不买黑名单 - 风险极高
 export const BLACKLIST_TOKENS = [
-  'LUNA', 'LUNC', 'USTC', 'TA', 'BID', 'HIFI', 'BSW', 'EPT', 'OBOL', 'NAORIS'
+  'LUNA', 'LUNC', 'USTC', 'TA', 'BID', 'HIFI', 'BSW', 'EPT', 'OBOL', 'NAORIS', 'PUMPBTC', 'YALA','UXLINK'
 ];
 
 // 谨慎购买黄名单 - 高波动性风险
 export const YELLOWLIST_TOKENS = [
-  'YALA', 'GPS', 'ZORA', 'DAM', 'PTB', 'Q', 'AIO', 'AVNT', 'SAPIEN', 'JELLYJELLY', 'F', 'BB', 'ACE', 'PUMPBTC', 'UB'
+   'GPS', 'ZORA', 'DAM', 'PTB', 'Q', 'AIO', 'AVNT', 'SAPIEN', 'JELLYJELLY', 'F', 'BB', 'ACE', 'UB'
 ];
 
 
@@ -72,7 +72,7 @@ export function filterTradingPairs(symbols: string[]): string[] {
 }
 
 /**
- * 过滤历史数据收集用的交易对 - 只过滤已下架代币
+ * 过滤历史数据收集用的交易对 - 过滤已下架和风险代币
  */
 export function filterHistoricalDataPairs(symbols: string[]): string[] {
   return symbols.filter(symbol => {
@@ -85,9 +85,9 @@ export function filterHistoricalDataPairs(symbols: string[]): string[] {
     // 过滤季度合约 (包含日期的合约)
     if (/\d{6}$/.test(symbol)) return false; // 以6位数字结尾的季度合约
 
-    // 只过滤已下架代币，保留黑名单代币的数据
+    // 过滤已下架代币和风险代币，不保留其历史数据
     const riskLevel = getTokenRiskLevel(symbol);
-    if (riskLevel === 'delisted') return false;
+    if (riskLevel === 'delisted' || riskLevel === 'blacklist') return false;
 
     return true;
   });
