@@ -420,8 +420,10 @@ export class PotentialAlertService {
         symbol: record.symbol,
         level: record.level
       });
-      // ESP32 语音推送（失败静默）
-      await esp32NotificationService.pushAlert('potential', message);
+      // ESP32 语音：只念"级别 + 标的"，例如 "L2 强信号 ARKM"
+      const levelName = record.level === 1 ? 'L1 极强信号' : record.level === 2 ? 'L2 强信号' : 'L3 潜力信号';
+      const sym = record.symbol.replace(/USDT$/i, '');
+      await esp32NotificationService.pushAlert('potential', `${levelName} ${sym}`);
     } catch (error) {
       log.error(`Failed to send potential alert for ${record.symbol}`, error);
     }

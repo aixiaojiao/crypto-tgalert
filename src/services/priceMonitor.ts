@@ -421,11 +421,10 @@ export class PriceMonitorService {
           userId: alert.user_id
         });
 
-        // ESP32 语音推送（短摘要）
+        // ESP32 语音：只念"标的 + 方向"
         const sym = alert.symbol.replace('USDT', '');
-        const dir = alert.condition === 'above' ? '突破上行' : '跌破下行';
-        const tts = `${sym} 价格 ${dir}，当前 ${currentPrice}，阈值 ${alert.value}`;
-        await esp32NotificationService.pushAlert('price', tts);
+        const dir = alert.condition === 'above' ? '突破' : '跌破';
+        await esp32NotificationService.pushAlert('price', `${sym} 价格${dir}`);
       } else {
         log.warn(`No Telegram bot instance available for notification`, {
           alertId: alert.id

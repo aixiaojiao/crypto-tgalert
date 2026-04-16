@@ -475,8 +475,8 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
         disable_web_page_preview: true
       });
 
-      // ESP32 语音推送（短摘要）
-      const tts = `${cleanSymbol} ${timeframeName}${changeText}${changeSign}${formattedChange}%`;
+      // ESP32 语音：只念"标的 + 时段 + 涨跌方向"
+      const tts = `${cleanSymbol} ${timeframeName}${changeText}触发`;
       await esp32NotificationService.pushAlert('pump_dump', tts);
 
     } catch (error) {

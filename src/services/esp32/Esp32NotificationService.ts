@@ -184,11 +184,11 @@ export class Esp32NotificationService {
       const cleaned = cleanForTts(text);
       if (!cleaned) return skip('empty after clean');
 
-      const result = await this.client.push(cleaned);
-      if (result.success) {
-        this.lastPushAtMs = now;
-      }
-      return result;
+      // 关键：冷却在**入口**就占住，而不是等 push 成功后才占。
+      // 否则 3 条告警并发时都能绕过冷却（都在 await client.push 时各自的
+      // lastPushAtMs 仍是旧值），导致设备端三段 TTS 叠播。
+      this.lastPushAtMs = now;
+      return await this.client.push(cleaned);
     } catch (err: any) {
       // 任何意外异常都吞掉
       log.error('Esp32NotificationService.pushAlert unexpected error', {

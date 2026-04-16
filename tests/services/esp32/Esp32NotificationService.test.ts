@@ -179,7 +179,10 @@ describe('Esp32NotificationService', () => {
       expect(client.calls.length).toBe(2);
     });
 
-    test('cooldown is NOT consumed when downstream push fails', async () => {
+    test('cooldown is consumed at entry (engaged before push, survives failure)', async () => {
+      // 入口就占冷却：防止并发时多条告警都绕过冷却、设备端叠播。
+      // 代价：如果一条失败（设备离线），紧接着那条也会被冷却挡掉。可接受，
+      // 因为告警有时效性，过期即弃（Q4 策略 A）。
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
       await svc.setCooldownSeconds(60);
@@ -190,7 +193,25 @@ describe('Esp32NotificationService', () => {
 
       client.nextResult = { success: true, status: 200 };
       const r2 = await svc.pushAlert('potential', 'second');
-      expect(r2.success).toBe(true); // cooldown was not engaged because first failed
+      expect(r2.success).toBe(false);
+      expect(r2.error).toContain('cooldown');
+      expect(client.calls.length).toBe(1); // second never hit the client
+    });
+
+    test('concurrent pushes within cooldown: only first goes through', async () => {
+      // 回归：3 条 potential 并发时，只播一次，不叠播。
+      await svc.setEnabled(true);
+      await svc.enableTypes(['potential']);
+      await svc.setCooldownSeconds(60);
+
+      const results = await Promise.all([
+        svc.pushAlert('potential', 'alert A'),
+        svc.pushAlert('potential', 'alert B'),
+        svc.pushAlert('potential', 'alert C'),
+      ]);
+      const successes = results.filter((r) => r.success);
+      expect(successes.length).toBe(1);
+      expect(client.calls.length).toBe(1);
     });
 
     test('never throws even if downstream throws', async () => {

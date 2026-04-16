@@ -536,26 +536,21 @@ export class RealtimeAlertService {
           positionChanges: filteredPositionChanges.length
         });
 
-        // ESP32 语音推送（短摘要，避免播报整份 TOP10）
-        const ttsLines: string[] = [];
+        // ESP32 语音：只念一条最关键的（避免一次 push 播过长）
+        // 优先新入榜，其次排名上升
+        let tts = '';
         if (filteredNewEntries.length > 0) {
-          const top = filteredNewEntries.slice(0, 3).map((e: any) => {
-            const sym = (e.symbol || '').replace('USDT', '');
-            const pct = typeof e.priceChangePercent === 'number' ? e.priceChangePercent.toFixed(1) : '';
-            return pct ? `${sym}涨${pct}%` : sym;
-          });
-          ttsLines.push(`涨幅榜新进入：${top.join('，')}`);
+          const first = filteredNewEntries[0];
+          const sym = ((first as any).symbol || '').replace(/USDT$/i, '');
+          tts = `涨幅榜新进入 ${sym}`;
+        } else if (filteredPositionChanges.length > 0) {
+          const first = filteredPositionChanges[0] as any;
+          const sym = (first.symbol || '').replace(/USDT$/i, '');
+          const dir = first.changeValue > 0 ? '上升' : '下降';
+          tts = `${sym} 排名${dir}`;
         }
-        if (filteredPositionChanges.length > 0) {
-          const top = filteredPositionChanges.slice(0, 2).map((c: any) => {
-            const sym = (c.symbol || '').replace('USDT', '');
-            const dir = c.changeValue > 0 ? '上升' : '下降';
-            return `${sym}${dir}${Math.abs(c.changeValue)}位`;
-          });
-          ttsLines.push(`排名变化：${top.join('，')}`);
-        }
-        if (ttsLines.length > 0) {
-          await esp32NotificationService.pushAlert('ranking', ttsLines.join('。'));
+        if (tts) {
+          await esp32NotificationService.pushAlert('ranking', tts);
         }
       }
 

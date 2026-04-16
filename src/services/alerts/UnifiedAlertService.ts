@@ -295,13 +295,11 @@ export class UnifiedAlertService implements IAlertService {
     );
 
     // ESP32 语音推送：仅处理 breakthrough 系列（price 走 priceMonitor，pump_dump 走 priceAlertService）
+    // 只念"标的 + 类型"
     if (event.type === AlertType.BREAKTHROUGH || event.type === AlertType.MULTI_BREAKTHROUGH) {
       try {
         const sym = event.symbol.replace(/USDT$/i, '');
-        const tts = event.message
-          ? event.message
-          : `${sym} 突破历史高点，当前 ${event.currentValue}，阈值 ${event.thresholdValue}`;
-        await esp32NotificationService.pushAlert('breakthrough', tts);
+        await esp32NotificationService.pushAlert('breakthrough', `${sym} 突破新高`);
       } catch (err) {
         // 绝不影响主告警流
         this.logger.debug('esp32 breakthrough push failed', { err });
