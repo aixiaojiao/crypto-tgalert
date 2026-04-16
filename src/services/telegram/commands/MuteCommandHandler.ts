@@ -314,7 +314,7 @@ export class MuteCommandHandler extends BaseCommandHandler {
 • 与黑名单不同，临时屏蔽有时间限制
 • 可随时手动解除屏蔽
 
-💡 **提示:** 使用 /blacklist 命令管理永久黑名单`;
+💡 **提示:** 使用 /black 命令管理永久黑名单`;
 
     return {
       success: true,

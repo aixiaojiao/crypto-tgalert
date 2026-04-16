@@ -291,7 +291,7 @@ export class FilterCommandHandler extends BaseCommandHandler {
 
       // 建议
       if (summary.userFilters.blacklist + summary.userFilters.mute === 0) {
-        message += '\n💡 **建议:** 使用 /blacklist 或 /mute 命令自定义过滤规则';
+        message += '\n💡 **建议:** 使用 /black 或 /mute 命令自定义过滤规则';
       } else if (userStats.expiringSoon.length > 0) {
         message += '\n💡 **提醒:** 有临时屏蔽即将过期，请检查是否需要续期';
       }
@@ -393,7 +393,8 @@ export class FilterCommandHandler extends BaseCommandHandler {
 • 系统级过滤规则始终生效且不可修改
 
 💡 **相关命令:**
-• \`/blacklist\` - 管理永久黑名单
+• \`/black\` - 管理永久黑名单
+• \`/yellow\` - 管理黄名单
 • \`/mute\` - 管理临时屏蔽`;
 
     return {

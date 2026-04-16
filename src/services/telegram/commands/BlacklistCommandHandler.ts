@@ -5,11 +5,11 @@ import { IUserFilterService } from '../../filters/UserFilterService';
 
 /**
  * 黑名单管理命令处理器
- * 支持命令: /blacklist add|remove|list|clear|system
+ * 支持命令: /black_add|remove|list|clear|system
  */
 export class BlacklistCommandHandler extends BaseCommandHandler {
-  readonly command = 'blacklist';
-  readonly description = '管理个人黑名单 - /blacklist add|remove|list|clear|system';
+  readonly command = 'black';
+  readonly description = '管理个人黑名单 - /black /black_add /black_remove /black_clear';
   readonly requiresAuth = false;
 
   constructor(
@@ -64,7 +64,7 @@ export class BlacklistCommandHandler extends BaseCommandHandler {
     if (args.length === 0) {
       return {
         success: false,
-        message: '❌ 请指定要添加的代币符号\n用法: /blacklist add <symbol> [reason]',
+        message: '❌ 请指定要添加的代币符号\n用法: /black_add <symbol> [reason]',
         shouldReply: true
       };
     }
@@ -105,7 +105,7 @@ export class BlacklistCommandHandler extends BaseCommandHandler {
     if (args.length === 0) {
       return {
         success: false,
-        message: '❌ 请指定要移除的代币符号\n用法: /blacklist remove <symbol>',
+        message: '❌ 请指定要移除的代币符号\n用法: /black_remove <symbol>',
         shouldReply: true
       };
     }
@@ -279,7 +279,7 @@ export class BlacklistCommandHandler extends BaseCommandHandler {
       message += '💡 **说明:**\n';
       message += '• 下架和风险代币的过滤无法移除\n';
       message += '• 警告代币可通过个人黑名单进一步屏蔽\n';
-      message += '• 使用 /blacklist add <symbol> 添加个人黑名单';
+      message += '• 使用 /black_add <symbol> 添加个人黑名单';
 
       return {
         success: true,
@@ -303,16 +303,16 @@ export class BlacklistCommandHandler extends BaseCommandHandler {
     const message = `📋 **黑名单管理命令**
 
 **基本用法:**
-• \`/blacklist add <symbol> [reason]\` - 添加黑名单
-• \`/blacklist remove <symbol>\` - 移除黑名单
-• \`/blacklist list\` - 查看所有过滤规则
-• \`/blacklist clear\` - 清空个人黑名单
-• \`/blacklist system\` - 查看系统过滤规则
+• \`/black_add <symbol> [reason]\` - 添加黑名单
+• \`/black_remove <symbol>\` - 移除黑名单
+• \`/black\` - 查看所有过滤规则
+• \`/black_clear\` - 清空个人黑名单
+• \`/black system\` - 查看系统过滤规则
 
 **示例:**
-• \`/blacklist add SHIB 垃圾币\`
-• \`/blacklist remove DOGE\`
-• \`/blacklist list\`
+• \`/black_add SHIB 垃圾币\`
+• \`/black_remove DOGE\`
+• \`/black\`
 
 **说明:**
 • 个人黑名单永久生效，直到手动移除

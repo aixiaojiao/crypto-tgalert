@@ -180,7 +180,7 @@ export class TelegramBot {
 ⚡ **警报系统**: \`/alert\` \`/alert_bt\` \`/alert_list\` \`/alert_5m_gain_3_all\`
 🎯 **潜力信号**: \`/potential\` \`/potential_on\` \`/potential_off\` \`/potential_status\`
 📈 **历史分析**: \`/high\` \`/high near\`
-🛡️ **过滤管理**: \`/filter_settings\` \`/blacklist_list\` \`/mute_list\`
+🛡️ **过滤管理**: \`/filter_settings\` \`/black\` \`/yellow\` \`/mute\`
 ⚙️ **系统状态**: \`/status\` \`/cache_status\`
 📖 **完整列表**: \`/help\`
 
@@ -229,7 +229,7 @@ export class TelegramBot {
   private getSimilarCommands(unknownCommand: string): string[] {
     const availableCommands = [
       'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
-      'debug', 'blacklist_list', 'mute_list', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high'
+      'debug', 'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential'
     ];
 
     // 简单的相似度匹配
@@ -257,10 +257,11 @@ export class TelegramBot {
       'halp': 'help',
       'alrt': 'alert',
       'aler': 'alert',
-      'blacklistlist': 'blacklist_list',
-      'mutelist': 'mute_list',
-      'blacklist': 'blacklist_list',
-      'mute': 'mute_list',
+      'blacklist': 'black',
+      'blacklistlist': 'black',
+      'yellowlist': 'yellow',
+      'yellowlistlist': 'yellow',
+      'mutelist': 'mute',
       'filter': 'filter_settings'
     };
 
@@ -310,16 +311,16 @@ export class TelegramBot {
         { command: 'potential_on', description: '🎯 开启潜力币自动推送' },
         { command: 'potential_off', description: '🎯 关闭潜力币自动推送' },
         { command: 'potential_status', description: '🎯 潜力币推送状态' },
-        { command: 'blacklist_add', description: '🛡️ 添加个人黑名单' },
-        { command: 'blacklist_remove', description: '🛡️ 移除黑名单' },
-        { command: 'blacklist_list', description: '🛡️ 查看过滤规则' },
-        { command: 'yellowlist_add', description: '⚠️ 添加个人黄名单' },
-        { command: 'yellowlist_remove', description: '⚠️ 移除黄名单' },
-        { command: 'yellowlist_list', description: '⚠️ 查看黄名单规则' },
-        { command: 'yellowlist_clear', description: '⚠️ 清空黄名单' },
+        { command: 'black_add', description: '🛡️ 添加个人黑名单' },
+        { command: 'black_remove', description: '🛡️ 移除黑名单' },
+        { command: 'black', description: '🛡️ 查看黑名单' },
+        { command: 'yellow_add', description: '⚠️ 添加个人黄名单' },
+        { command: 'yellow_remove', description: '⚠️ 移除黄名单' },
+        { command: 'yellow', description: '⚠️ 查看黄名单' },
+        { command: 'yellow_clear', description: '⚠️ 清空黄名单' },
         { command: 'mute_add', description: '🔇 临时屏蔽代币' },
         { command: 'mute_remove', description: '🔇 解除屏蔽' },
-        { command: 'mute_list', description: '🔇 查看屏蔽列表' },
+        { command: 'mute', description: '🔇 查看屏蔽列表' },
         { command: 'mute_clear', description: '🔇 清空所有屏蔽' },
         { command: 'filter_settings', description: '⚙️ 过滤设置管理' },
         { command: 'filter_volume', description: '⚙️ 设置交易量阈值' },
@@ -450,10 +451,10 @@ export class TelegramBot {
 /alert btc > 50000 - 添加价格警报 🆕
 
 🛡️ *过滤管理:*
-/blacklist_add doge - 添加DOGE到黑名单
-/yellowlist_add doge - 添加DOGE到黄名单(谨慎交易)
+/black_add doge - 添加DOGE到黑名单
+/yellow_add doge - 添加DOGE到黄名单(谨慎交易)
 /mute_add shib 2h - 临时屏蔽SHIB 2小时
-/blacklist_list - 查看所有过滤规则
+/black - 查看所有过滤规则
 /filter_settings - 查看过滤设置
 /filter_auto on - 启用自动过滤
 
@@ -2072,20 +2073,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
 🛡️ 过滤管理:
 🔒 黑名单(完全屏蔽):
-/blacklist_add <symbol> - 添加个人黑名单
-/blacklist_remove <symbol> - 移除黑名单
-/blacklist_list - 查看过滤规则状态
+/black_add <symbol> - 添加个人黑名单
+/black_remove <symbol> - 移除黑名单
+/black - 查看过滤规则状态
 
 ⚠️ 黄名单(警告标记):
-/yellowlist_add <symbol> [reason] - 添加个人黄名单
-/yellowlist_remove <symbol> - 移除黄名单
-/yellowlist_list - 查看黄名单规则状态
-/yellowlist_clear - 清空个人黄名单
+/yellow_add <symbol> [reason] - 添加个人黄名单
+/yellow_remove <symbol> - 移除黄名单
+/yellow - 查看黄名单规则状态
+/yellow_clear - 清空个人黄名单
 
 🔇 临时屏蔽(定时解除):
 /mute_add <symbol> <duration> - 临时屏蔽代币
 /mute_remove <symbol> - 解除屏蔽
-/mute_list - 查看屏蔽列表
+/mute - 查看屏蔽列表
 /mute_clear - 清空所有屏蔽
 
 ⚙️ 过滤设置:
@@ -2493,10 +2494,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
     });
 
     // Filter相关下划线命令
-    this.bot.command('blacklist_add', async (ctx) => {
+    this.bot.command('black_add', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /blacklist_add &lt;symbol&gt; [reason]\n示例: /blacklist_add SHIB 垃圾币');
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /black_add &lt;symbol&gt; [reason]\n示例: /black_add SHIB 垃圾币');
         return;
       }
       const result = await this.blacklistCommandHandler.handle(ctx, ['add', ...args]);
@@ -2505,10 +2506,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('blacklist_remove', async (ctx) => {
+    this.bot.command('black_remove', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /blacklist_remove &lt;symbol&gt;\n示例: /blacklist_remove DOGE');
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /black_remove &lt;symbol&gt;\n示例: /black_remove DOGE');
         return;
       }
       const result = await this.blacklistCommandHandler.handle(ctx, ['remove', ...args]);
@@ -2517,24 +2518,24 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('blacklist_list', async (ctx) => {
+    this.bot.command('black', async (ctx) => {
       const result = await this.blacklistCommandHandler.handle(ctx, ['list']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
-    this.bot.command('blacklist_clear', async (ctx) => {
+    this.bot.command('black_clear', async (ctx) => {
       const result = await this.blacklistCommandHandler.handle(ctx, ['clear']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
-    this.bot.command('yellowlist_add', async (ctx) => {
+    this.bot.command('yellow_add', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /yellowlist_add &lt;symbol&gt; [reason]\n示例: /yellowlist_add DOGE 高波动性代币');
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /yellow_add &lt;symbol&gt; [reason]\n示例: /yellow_add DOGE 高波动性代币');
         return;
       }
       const result = await this.yellowlistCommandHandler.handle(ctx, ['add', ...args]);
@@ -2543,10 +2544,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('yellowlist_remove', async (ctx) => {
+    this.bot.command('yellow_remove', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /yellowlist_remove &lt;symbol&gt;\n示例: /yellowlist_remove DOGE');
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /yellow_remove &lt;symbol&gt;\n示例: /yellow_remove DOGE');
         return;
       }
       const result = await this.yellowlistCommandHandler.handle(ctx, ['remove', ...args]);
@@ -2555,14 +2556,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('yellowlist_list', async (ctx) => {
+    this.bot.command('yellow', async (ctx) => {
       const result = await this.yellowlistCommandHandler.handle(ctx, ['list']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
-    this.bot.command('yellowlist_clear', async (ctx) => {
+    this.bot.command('yellow_clear', async (ctx) => {
       const result = await this.yellowlistCommandHandler.handle(ctx, ['clear']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
@@ -2593,7 +2594,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('mute_list', async (ctx) => {
+    this.bot.command('mute', async (ctx) => {
       const result = await this.muteCommandHandler.handle(ctx, ['list']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });

@@ -5,11 +5,11 @@ import { IUserFilterService } from '../../filters/UserFilterService';
 
 /**
  * 黄名单管理命令处理器
- * 支持命令: /yellowlist add|remove|list|clear|system
+ * 支持命令: /yellow_add|remove|list|clear|system
  */
 export class YellowlistCommandHandler extends BaseCommandHandler {
-  readonly command = 'yellowlist';
-  readonly description = '管理个人黄名单 - /yellowlist add|remove|list|clear|system';
+  readonly command = 'yellow';
+  readonly description = '管理个人黄名单 - /yellow /yellow_add /yellow_remove /yellow_clear';
   readonly requiresAuth = false;
 
   constructor(
@@ -64,7 +64,7 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
     if (args.length === 0) {
       return {
         success: false,
-        message: '❌ 请指定要添加的代币符号\n用法: /yellowlist add <symbol> [reason]',
+        message: '❌ 请指定要添加的代币符号\n用法: /yellow_add <symbol> [reason]',
         shouldReply: true
       };
     }
@@ -105,7 +105,7 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
     if (args.length === 0) {
       return {
         success: false,
-        message: '❌ 请指定要移除的代币符号\n用法: /yellowlist remove <symbol>',
+        message: '❌ 请指定要移除的代币符号\n用法: /yellow_remove <symbol>',
         shouldReply: true
       };
     }
@@ -292,7 +292,7 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
       message += '💡 **说明:**\n';
       message += '• 下架和风险代币的过滤无法移除\n';
       message += '• 警告代币可通过个人黄名单添加自定义警告标记\n';
-      message += '• 使用 /yellowlist add <symbol> 添加个人黄名单标记';
+      message += '• 使用 /yellow_add <symbol> 添加个人黄名单标记';
 
       return {
         success: true,
@@ -316,16 +316,16 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
     const message = `📋 **黄名单管理命令**
 
 **基本用法:**
-• \`/yellowlist add <symbol> [reason]\` - 添加黄名单标记
-• \`/yellowlist remove <symbol>\` - 移除黄名单标记
-• \`/yellowlist list\` - 查看所有过滤规则
-• \`/yellowlist clear\` - 清空个人黄名单
-• \`/yellowlist system\` - 查看系统过滤规则
+• \`/yellow_add <symbol> [reason]\` - 添加黄名单标记
+• \`/yellow_remove <symbol>\` - 移除黄名单标记
+• \`/yellow\` - 查看所有过滤规则
+• \`/yellow_clear\` - 清空个人黄名单
+• \`/yellow system\` - 查看系统过滤规则
 
 **示例:**
-• \`/yellowlist add DOGE 高波动性代币\`
-• \`/yellowlist remove DOGE\`
-• \`/yellowlist list\`
+• \`/yellow_add DOGE 高波动性代币\`
+• \`/yellow_remove DOGE\`
+• \`/yellow\`
 
 **说明:**
 • 黄名单代币仍会推送但带有警告标记
