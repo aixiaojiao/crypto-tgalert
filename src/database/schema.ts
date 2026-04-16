@@ -44,6 +44,16 @@ export interface UserFilterSettings {
   updated_at: number;
 }
 
+export interface Esp32Config {
+  user_id: string;
+  enabled: number;              // 0/1 总开关
+  enabled_types: string;        // JSON array: ["potential","breakthrough","ranking","price","pump_dump"]
+  cooldown_seconds: number;     // 全局冷却（秒）
+  quiet_start: string | null;   // 静音开始 HH:MM
+  quiet_end: string | null;     // 静音结束 HH:MM
+  updated_at: number;
+}
+
 export const createTables = `
   CREATE TABLE IF NOT EXISTS user_config (
     user_id TEXT PRIMARY KEY,
@@ -93,6 +103,16 @@ export const createTables = `
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY(user_id) REFERENCES user_config(user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS esp32_config (
+    user_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    enabled_types TEXT NOT NULL DEFAULT '[]',
+    cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+    quiet_start TEXT,
+    quiet_end TEXT,
+    updated_at INTEGER NOT NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_price_alerts_active ON price_alerts(is_active, symbol);

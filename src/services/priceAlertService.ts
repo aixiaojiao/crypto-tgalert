@@ -8,6 +8,7 @@ import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { realtimeMarketCache } from './realtimeMarketCache';
+import { esp32NotificationService } from './esp32';
 
 export interface PriceSnapshot {
   symbol: string;
@@ -473,6 +474,10 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
         parse_mode: 'Markdown',
         disable_web_page_preview: true
       });
+
+      // ESP32 语音推送（短摘要）
+      const tts = `${cleanSymbol} ${timeframeName}${changeText}${changeSign}${formattedChange}%`;
+      await esp32NotificationService.pushAlert('pump_dump', tts);
 
     } catch (error) {
       log.error('Failed to send price alert message', error);

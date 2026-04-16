@@ -34,6 +34,7 @@ import { YellowlistCommandHandler } from './services/telegram/commands/Yellowlis
 import { MuteCommandHandler } from './services/telegram/commands/MuteCommandHandler';
 import { FilterCommandHandler } from './services/telegram/commands/FilterCommandHandler';
 import { historicalHighCache } from './services/historicalHighCacheV2';
+import { esp32NotificationService, ESP32_ALERT_TYPES } from './services/esp32';
 
 export class TelegramBot {
   private bot: Telegraf<BotContext>;
@@ -311,17 +312,24 @@ export class TelegramBot {
         { command: 'potential_on', description: '🎯 开启潜力币自动推送' },
         { command: 'potential_off', description: '🎯 关闭潜力币自动推送' },
         { command: 'potential_status', description: '🎯 潜力币推送状态' },
-        { command: 'black_add', description: '🛡️ 添加个人黑名单' },
+        { command: 'esp32_status', description: '🔊 ESP32 语音推送状态' },
+        { command: 'esp32_on', description: '🔊 开启 ESP32 语音推送（可附类型）' },
+        { command: 'esp32_off', description: '🔊 关闭 ESP32 语音推送（可附类型）' },
+        { command: 'esp32_test', description: '🔊 ESP32 推送测试' },
+        { command: 'esp32_cooldown', description: '🔊 设置 ESP32 全局冷却秒数' },
+        { command: 'esp32_quiet', description: '🔊 设置 ESP32 静音时段 HH:MM-HH:MM' },
+        { command: 'black', description: '🛡️ 添加黑名单 /black <symbol>' },
+        { command: 'black_list', description: '🛡️ 查看黑名单' },
         { command: 'black_remove', description: '🛡️ 移除黑名单' },
-        { command: 'black', description: '🛡️ 查看黑名单' },
-        { command: 'yellow_add', description: '⚠️ 添加个人黄名单' },
+        { command: 'black_clear', description: '🛡️ 清空黑名单' },
+        { command: 'yellow', description: '⚠️ 添加黄名单 /yellow <symbol>' },
+        { command: 'yellow_list', description: '⚠️ 查看黄名单' },
         { command: 'yellow_remove', description: '⚠️ 移除黄名单' },
-        { command: 'yellow', description: '⚠️ 查看黄名单' },
         { command: 'yellow_clear', description: '⚠️ 清空黄名单' },
-        { command: 'mute_add', description: '🔇 临时屏蔽代币' },
+        { command: 'mute', description: '🔇 屏蔽 /mute <symbol> <时长>' },
+        { command: 'mute_list', description: '🔇 查看屏蔽列表' },
         { command: 'mute_remove', description: '🔇 解除屏蔽' },
-        { command: 'mute', description: '🔇 查看屏蔽列表' },
-        { command: 'mute_clear', description: '🔇 清空所有屏蔽' },
+        { command: 'mute_clear', description: '🔇 清空屏蔽' },
         { command: 'filter_settings', description: '⚙️ 过滤设置管理' },
         { command: 'filter_volume', description: '⚙️ 设置交易量阈值' },
         { command: 'filter_auto', description: '⚙️ 启用/禁用自动过滤' },
@@ -451,10 +459,10 @@ export class TelegramBot {
 /alert btc > 50000 - 添加价格警报 🆕
 
 🛡️ *过滤管理:*
-/black_add doge - 添加DOGE到黑名单
-/yellow_add doge - 添加DOGE到黄名单(谨慎交易)
-/mute_add shib 2h - 临时屏蔽SHIB 2小时
-/black - 查看所有过滤规则
+/black doge - 添加DOGE到黑名单
+/yellow doge - 添加DOGE到黄名单(谨慎交易)
+/mute shib 2h - 临时屏蔽SHIB 2小时
+/black_list - 查看黑名单
 /filter_settings - 查看过滤设置
 /filter_auto on - 启用自动过滤
 
@@ -1122,6 +1130,144 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         log.error('potential command failed', error);
         await ctx.reply('❌ 手动扫描失败: ' + (error instanceof Error ? error.message : '未知错误'));
+      }
+    });
+
+    // ========== ESP32 语音推送命令（ouyu-v2 设备网关） ==========
+
+    this.bot.command('esp32_status', async (ctx) => {
+      try {
+        await esp32NotificationService.ensureRow();
+        const cfg = await esp32NotificationService.getConfig();
+        const icon = cfg.enabled ? '🟢' : '🔴';
+        const typesStr = cfg.enabledTypes.length ? cfg.enabledTypes.join(', ') : '(无)';
+        const quietStr = cfg.quietStart && cfg.quietEnd ? `${cfg.quietStart}-${cfg.quietEnd}` : '(未设置)';
+        const gatewayOk = cfg.gatewayUrl && cfg.deviceId;
+        let msg = `${icon} *ESP32 语音推送*\n\n`;
+        msg += `• 总开关: ${cfg.enabled ? '启用' : '禁用'}\n`;
+        msg += `• 订阅类型: ${typesStr}\n`;
+        msg += `• 全局冷却: ${cfg.cooldownSeconds} 秒\n`;
+        msg += `• 静音时段: ${quietStr}\n`;
+        msg += `• 设备 ID: \`${cfg.deviceId || '(未配置)'}\`\n`;
+        msg += `• 网关: \`${cfg.gatewayUrl || '(未配置)'}\`\n`;
+        if (!gatewayOk) msg += `\n⚠️ 环境变量 OUYU_GATEWAY_URL / OUYU_DEVICE_ID 未设置\n`;
+        msg += `\n💡 *支持类型:* ${ESP32_ALERT_TYPES.join(', ')}`;
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        log.error('esp32_status command failed', error);
+        await ctx.reply('❌ 查询状态失败');
+      }
+    });
+
+    this.bot.command('esp32_on', async (ctx) => {
+      try {
+        await esp32NotificationService.ensureRow();
+        const args = (ctx.message?.text || '').split(/\s+/).slice(1).filter(Boolean);
+        if (args.length === 0) {
+          await esp32NotificationService.setEnabled(true);
+          const cfg = await esp32NotificationService.getConfig();
+          const typesStr = cfg.enabledTypes.length ? cfg.enabledTypes.join(', ') : '(空，请用 /esp32_on <类型> 添加)';
+          await ctx.reply(`✅ ESP32 语音推送已开启\n订阅类型: ${typesStr}\n支持: ${ESP32_ALERT_TYPES.join(', ')}`);
+          return;
+        }
+        // 检查哪些参数是无效类型（不在支持列表中也不是 "all"）
+        const invalid = args.filter(
+          (a) => a.toLowerCase() !== 'all' && !ESP32_ALERT_TYPES.includes(a.toLowerCase() as any)
+        );
+        const merged = await esp32NotificationService.enableTypes(args);
+        await esp32NotificationService.setEnabled(true);
+        let msg = `✅ 当前订阅: ${merged.length ? merged.join(', ') : '(空)'}`;
+        if (invalid.length > 0) {
+          msg += `\n⚠️ 已忽略无效类型: ${invalid.join(', ')}`;
+          msg += `\n💡 支持的类型: ${ESP32_ALERT_TYPES.join(', ')}`;
+        }
+        await ctx.reply(msg);
+        log.info('ESP32 push enabled', { types: merged, invalid });
+      } catch (error) {
+        log.error('esp32_on command failed', error);
+        await ctx.reply('❌ 开启失败: ' + (error instanceof Error ? error.message : '未知错误'));
+      }
+    });
+
+    this.bot.command('esp32_off', async (ctx) => {
+      try {
+        await esp32NotificationService.ensureRow();
+        const args = (ctx.message?.text || '').split(/\s+/).slice(1).filter(Boolean);
+        if (args.length === 0) {
+          await esp32NotificationService.setEnabled(false);
+          await ctx.reply('🛑 ESP32 语音推送已关闭（订阅类型保留，下次 /esp32_on 即恢复）');
+          return;
+        }
+        const remaining = await esp32NotificationService.disableTypes(args);
+        const msg = remaining.length === 0
+          ? `🛑 订阅已全部移除。总开关状态未变，使用 \`/esp32_off\` 可彻底关闭。`
+          : `🛑 当前订阅: ${remaining.join(', ')}`;
+        await ctx.reply(msg);
+        log.info('ESP32 push types updated', { types: remaining });
+      } catch (error) {
+        log.error('esp32_off command failed', error);
+        await ctx.reply('❌ 关闭失败: ' + (error instanceof Error ? error.message : '未知错误'));
+      }
+    });
+
+    this.bot.command('esp32_test', async (ctx) => {
+      try {
+        const args = (ctx.message?.text || '').split(/\s+/).slice(1);
+        const text = args.length ? args.join(' ') : 'ESP32 测试推送，你好招福';
+        const result = await esp32NotificationService.test(text);
+        if (result.success) {
+          await ctx.reply('✅ 已发送测试消息到设备');
+        } else {
+          await ctx.reply(`❌ 推送失败: ${result.error || '未知'}${result.status === 404 ? '\n(设备可能离线)' : ''}`);
+        }
+      } catch (error) {
+        log.error('esp32_test command failed', error);
+        await ctx.reply('❌ 测试失败');
+      }
+    });
+
+    this.bot.command('esp32_cooldown', async (ctx) => {
+      try {
+        await esp32NotificationService.ensureRow();
+        const args = (ctx.message?.text || '').split(/\s+/).slice(1);
+        if (args.length === 0) {
+          const cfg = await esp32NotificationService.getConfig();
+          await ctx.reply(`当前全局冷却: ${cfg.cooldownSeconds} 秒\n用法: /esp32_cooldown <秒数 0~3600>`);
+          return;
+        }
+        const n = parseInt(args[0], 10);
+        if (!Number.isFinite(n)) {
+          await ctx.reply('❌ 参数必须是整数秒');
+          return;
+        }
+        await esp32NotificationService.setCooldownSeconds(n);
+        await ctx.reply(`✅ 全局冷却设置为 ${n} 秒`);
+      } catch (error) {
+        log.error('esp32_cooldown command failed', error);
+        await ctx.reply('❌ 设置失败: ' + (error instanceof Error ? error.message : '未知错误'));
+      }
+    });
+
+    this.bot.command('esp32_quiet', async (ctx) => {
+      try {
+        await esp32NotificationService.ensureRow();
+        const args = (ctx.message?.text || '').split(/\s+/).slice(1);
+        if (args.length === 0) {
+          const cfg = await esp32NotificationService.getConfig();
+          const cur = cfg.quietStart && cfg.quietEnd ? `${cfg.quietStart}-${cfg.quietEnd}` : '(未设置)';
+          await ctx.reply(`当前静音时段: ${cur}\n用法: /esp32_quiet 23:00-08:00\n清除: /esp32_quiet off`);
+          return;
+        }
+        const raw = args[0] === 'off' || args[0] === 'clear' ? null : args.join(' ');
+        const r = await esp32NotificationService.setQuietHours(raw);
+        if (r.start && r.end) {
+          await ctx.reply(`✅ 静音时段设为 ${r.start}-${r.end}`);
+        } else {
+          await ctx.reply('✅ 静音时段已清除');
+        }
+      } catch (error) {
+        log.error('esp32_quiet command failed', error);
+        await ctx.reply('❌ 设置失败: ' + (error instanceof Error ? error.message : '未知错误'));
       }
     });
 
@@ -2073,21 +2219,22 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
 🛡️ 过滤管理:
 🔒 黑名单(完全屏蔽):
-/black_add <symbol> - 添加个人黑名单
-/black_remove <symbol> - 移除黑名单
-/black - 查看过滤规则状态
+/black <symbol> [reason] - 添加黑名单
+/black_remove <symbol> - 移除
+/black_list - 查看
+/black_clear - 清空
 
 ⚠️ 黄名单(警告标记):
-/yellow_add <symbol> [reason] - 添加个人黄名单
-/yellow_remove <symbol> - 移除黄名单
-/yellow - 查看黄名单规则状态
-/yellow_clear - 清空个人黄名单
+/yellow <symbol> [reason] - 添加黄名单
+/yellow_remove <symbol> - 移除
+/yellow_list - 查看
+/yellow_clear - 清空
 
 🔇 临时屏蔽(定时解除):
-/mute_add <symbol> <duration> - 临时屏蔽代币
-/mute_remove <symbol> - 解除屏蔽
-/mute - 查看屏蔽列表
-/mute_clear - 清空所有屏蔽
+/mute <symbol> <duration> [reason] - 临时屏蔽
+/mute_remove <symbol> - 解除
+/mute_list - 查看
+/mute_clear - 清空
 
 ⚙️ 过滤设置:
 /filter_settings - 查看过滤设置
@@ -2493,11 +2640,13 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    // Filter相关下划线命令
-    this.bot.command('black_add', async (ctx) => {
+    // ========== 过滤列表命令（简化：无参=add，需带 _list / _remove / _clear）==========
+
+    // 黑名单
+    this.bot.command('black', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /black_add &lt;symbol&gt; [reason]\n示例: /black_add SHIB 垃圾币');
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /black <symbol> [reason]\n示例: /black SHIB 垃圾币\n查看列表: /black_list');
         return;
       }
       const result = await this.blacklistCommandHandler.handle(ctx, ['add', ...args]);
@@ -2506,20 +2655,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('black_remove', async (ctx) => {
-      const args = ctx.message?.text.split(' ').slice(1) || [];
-      if (args.length === 0) {
-        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /black_remove &lt;symbol&gt;\n示例: /black_remove DOGE');
-        return;
-      }
-      const result = await this.blacklistCommandHandler.handle(ctx, ['remove', ...args]);
+    this.bot.command('black_list', async (ctx) => {
+      const result = await this.blacklistCommandHandler.handle(ctx, ['list']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
-    this.bot.command('black', async (ctx) => {
-      const result = await this.blacklistCommandHandler.handle(ctx, ['list']);
+    this.bot.command('black_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /black_remove <symbol>\n示例: /black_remove DOGE');
+        return;
+      }
+      const result = await this.blacklistCommandHandler.handle(ctx, ['remove', ...args]);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
@@ -2532,10 +2681,11 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('yellow_add', async (ctx) => {
+    // 黄名单
+    this.bot.command('yellow', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length === 0) {
-        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /yellow_add &lt;symbol&gt; [reason]\n示例: /yellow_add DOGE 高波动性代币');
+        await ctx.reply('❌ 请指定要添加的代币符号\n用法: /yellow <symbol> [reason]\n示例: /yellow DOGE 高波动性\n查看列表: /yellow_list');
         return;
       }
       const result = await this.yellowlistCommandHandler.handle(ctx, ['add', ...args]);
@@ -2544,20 +2694,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('yellow_remove', async (ctx) => {
-      const args = ctx.message?.text.split(' ').slice(1) || [];
-      if (args.length === 0) {
-        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /yellow_remove &lt;symbol&gt;\n示例: /yellow_remove DOGE');
-        return;
-      }
-      const result = await this.yellowlistCommandHandler.handle(ctx, ['remove', ...args]);
+    this.bot.command('yellow_list', async (ctx) => {
+      const result = await this.yellowlistCommandHandler.handle(ctx, ['list']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
-    this.bot.command('yellow', async (ctx) => {
-      const result = await this.yellowlistCommandHandler.handle(ctx, ['list']);
+    this.bot.command('yellow_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要移除的代币符号\n用法: /yellow_remove <symbol>\n示例: /yellow_remove DOGE');
+        return;
+      }
+      const result = await this.yellowlistCommandHandler.handle(ctx, ['remove', ...args]);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
@@ -2570,10 +2720,11 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('mute_add', async (ctx) => {
+    // 临时屏蔽（mute）—— MuteCommandHandler 约定：首参不是子命令关键字即走 add 路径
+    this.bot.command('mute', async (ctx) => {
       const args = ctx.message?.text.split(' ').slice(1) || [];
       if (args.length < 2) {
-        await ctx.reply('❌ 参数不足\n用法: /mute_add &lt;symbol&gt; &lt;duration&gt; [reason]\n示例: /mute_add DOGE 2h 波动太大\n\n时间格式: 30m, 2h, 1d, 1w');
+        await ctx.reply('❌ 参数不足\n用法: /mute <symbol> <duration> [reason]\n示例: /mute DOGE 2h 波动太大\n时间格式: 30m, 2h, 1d, 1w\n查看列表: /mute_list');
         return;
       }
       const result = await this.muteCommandHandler.handle(ctx, args);
@@ -2582,20 +2733,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
-    this.bot.command('mute_remove', async (ctx) => {
-      const args = ctx.message?.text.split(' ').slice(1) || [];
-      if (args.length === 0) {
-        await ctx.reply('❌ 请指定要解除屏蔽的代币符号\n用法: /mute_remove &lt;symbol&gt;\n示例: /mute_remove BTC');
-        return;
-      }
-      const result = await this.muteCommandHandler.handle(ctx, ['remove', ...args]);
+    this.bot.command('mute_list', async (ctx) => {
+      const result = await this.muteCommandHandler.handle(ctx, ['list']);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
-    this.bot.command('mute', async (ctx) => {
-      const result = await this.muteCommandHandler.handle(ctx, ['list']);
+    this.bot.command('mute_remove', async (ctx) => {
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      if (args.length === 0) {
+        await ctx.reply('❌ 请指定要解除屏蔽的代币符号\n用法: /mute_remove <symbol>\n示例: /mute_remove BTC');
+        return;
+      }
+      const result = await this.muteCommandHandler.handle(ctx, ['remove', ...args]);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }

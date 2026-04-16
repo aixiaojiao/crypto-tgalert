@@ -5,11 +5,11 @@ import { IUserFilterService } from '../../filters/UserFilterService';
 
 /**
  * 黄名单管理命令处理器
- * 支持命令: /yellow_add|remove|list|clear|system
+ * 支持命令: /yellow <symbol> | /yellow_list | /yellow_remove | /yellow_clear
  */
 export class YellowlistCommandHandler extends BaseCommandHandler {
   readonly command = 'yellow';
-  readonly description = '管理个人黄名单 - /yellow /yellow_add /yellow_remove /yellow_clear';
+  readonly description = '管理个人黄名单 - /yellow <symbol> /yellow_list /yellow_remove /yellow_clear';
   readonly requiresAuth = false;
 
   constructor(
@@ -64,7 +64,7 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
     if (args.length === 0) {
       return {
         success: false,
-        message: '❌ 请指定要添加的代币符号\n用法: /yellow_add <symbol> [reason]',
+        message: '❌ 请指定要添加的代币符号\n用法: /yellow <symbol> [reason]',
         shouldReply: true
       };
     }
@@ -292,7 +292,7 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
       message += '💡 **说明:**\n';
       message += '• 下架和风险代币的过滤无法移除\n';
       message += '• 警告代币可通过个人黄名单添加自定义警告标记\n';
-      message += '• 使用 /yellow_add <symbol> 添加个人黄名单标记';
+      message += '• 使用 /yellow <symbol> 添加个人黄名单标记';
 
       return {
         success: true,
@@ -316,16 +316,16 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
     const message = `📋 **黄名单管理命令**
 
 **基本用法:**
-• \`/yellow_add <symbol> [reason]\` - 添加黄名单标记
+• \`/yellow <symbol> [reason]\` - 添加黄名单标记
+• \`/yellow_list\` - 查看所有过滤规则
 • \`/yellow_remove <symbol>\` - 移除黄名单标记
-• \`/yellow\` - 查看所有过滤规则
 • \`/yellow_clear\` - 清空个人黄名单
 • \`/yellow system\` - 查看系统过滤规则
 
 **示例:**
-• \`/yellow_add DOGE 高波动性代币\`
+• \`/yellow DOGE 高波动性代币\`
 • \`/yellow_remove DOGE\`
-• \`/yellow\`
+• \`/yellow_list\`
 
 **说明:**
 • 黄名单代币仍会推送但带有警告标记

@@ -6,6 +6,7 @@ import { getRiskIcon, getTokenRiskLevel, isRiskyToken } from '../config/tokenLis
 import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
+import { esp32NotificationService } from './esp32';
 // Utility function for UTC+8 time formatting
 function formatTimeToUTC8(date: Date | number): string {
   const targetDate = typeof date === 'number' ? new Date(date) : date;
@@ -534,6 +535,28 @@ export class RealtimeAlertService {
           newEntries: filteredNewEntries.length,
           positionChanges: filteredPositionChanges.length
         });
+
+        // ESP32 语音推送（短摘要，避免播报整份 TOP10）
+        const ttsLines: string[] = [];
+        if (filteredNewEntries.length > 0) {
+          const top = filteredNewEntries.slice(0, 3).map((e: any) => {
+            const sym = (e.symbol || '').replace('USDT', '');
+            const pct = typeof e.priceChangePercent === 'number' ? e.priceChangePercent.toFixed(1) : '';
+            return pct ? `${sym}涨${pct}%` : sym;
+          });
+          ttsLines.push(`涨幅榜新进入：${top.join('，')}`);
+        }
+        if (filteredPositionChanges.length > 0) {
+          const top = filteredPositionChanges.slice(0, 2).map((c: any) => {
+            const sym = (c.symbol || '').replace('USDT', '');
+            const dir = c.changeValue > 0 ? '上升' : '下降';
+            return `${sym}${dir}${Math.abs(c.changeValue)}位`;
+          });
+          ttsLines.push(`排名变化：${top.join('，')}`);
+        }
+        if (ttsLines.length > 0) {
+          await esp32NotificationService.pushAlert('ranking', ttsLines.join('。'));
+        }
       }
 
     } catch (error) {

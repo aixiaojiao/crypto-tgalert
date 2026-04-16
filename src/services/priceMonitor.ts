@@ -4,6 +4,7 @@ import { PriceAlert } from '../database/schema';
 import { log } from '../utils/logger';
 import { TelegramBot } from '../bot';
 import { getTokenRiskLevel, getRiskIcon } from '../config/tokenLists';
+import { esp32NotificationService } from './esp32';
 
 export interface AlertCheckResult {
   alertId: number;
@@ -419,6 +420,12 @@ export class PriceMonitorService {
           alertId: alert.id,
           userId: alert.user_id
         });
+
+        // ESP32 语音推送（短摘要）
+        const sym = alert.symbol.replace('USDT', '');
+        const dir = alert.condition === 'above' ? '突破上行' : '跌破下行';
+        const tts = `${sym} 价格 ${dir}，当前 ${currentPrice}，阈值 ${alert.value}`;
+        await esp32NotificationService.pushAlert('price', tts);
       } else {
         log.warn(`No Telegram bot instance available for notification`, {
           alertId: alert.id

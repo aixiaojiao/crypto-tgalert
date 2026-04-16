@@ -7,6 +7,7 @@ import { formatPriceWithSeparators } from '../utils/priceFormatter';
 import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
+import { esp32NotificationService } from './esp32';
 
 /**
  * 潜力币信号扫描参数
@@ -419,6 +420,8 @@ export class PotentialAlertService {
         symbol: record.symbol,
         level: record.level
       });
+      // ESP32 语音推送（失败静默）
+      await esp32NotificationService.pushAlert('potential', message);
     } catch (error) {
       log.error(`Failed to send potential alert for ${record.symbol}`, error);
     }
