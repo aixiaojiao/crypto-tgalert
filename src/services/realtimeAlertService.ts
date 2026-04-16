@@ -146,15 +146,27 @@ export class RealtimeAlertService {
 
       if (significantChanges.length === 0) return;
 
+      // 过滤掉用户已加入过滤名单（黑/黄/mute）的代币 —— 它们不应作为推送触发源
+      // 注：榜单展示时这些代币仍会显示（带标识图标），此处只影响"是否触发推送"
+      const userFilteredChanges = await this.filterOutUserFilteredSymbols(significantChanges);
+
+      if (userFilteredChanges.length === 0) {
+        log.debug('All significant changes filtered by user filter, skip push', {
+          total: significantChanges.length,
+          symbols: significantChanges.map(c => c.symbol)
+        });
+        return;
+      }
+
       // 过滤需要推送的变化（考虑冷却时间和推送限制）
-      const pushableChanges = significantChanges.filter(change =>
+      const pushableChanges = userFilteredChanges.filter(change =>
         this.canPushSymbol(change.symbol)
       );
 
       if (pushableChanges.length === 0) {
-        log.debug('No pushable changes after filtering', {
-          totalChanges: significantChanges.length,
-          filtered: significantChanges.map(c => `${c.symbol}:${c.changeType}`)
+        log.debug('No pushable changes after cooldown filtering', {
+          totalChanges: userFilteredChanges.length,
+          filtered: userFilteredChanges.map(c => `${c.symbol}:${c.changeType}`)
         });
         return;
       }
@@ -179,6 +191,41 @@ export class RealtimeAlertService {
     } catch (error) {
       log.error('Failed to handle ranking change event', error);
     }
+  }
+
+  /**
+   * 过滤掉用户自定义过滤名单中的代币（黑/黄/mute + 系统黄名单）
+   * 仅作用于"推送触发源"判定，不影响榜单显示
+   */
+  private async filterOutUserFilteredSymbols(
+    changes: Array<{ symbol: string; changeType: string; [k: string]: any }>
+  ): Promise<typeof changes> {
+    if (!this.filterManager || !this.telegramBot) return changes;
+
+    const userId = this.telegramBot.getAuthorizedUserId();
+    if (!userId) return changes;
+
+    const allowed: typeof changes = [];
+    for (const change of changes) {
+      try {
+        const cleanSymbol = change.symbol.replace('USDT', '');
+        const result = await this.filterManager.checkFilter(userId, cleanSymbol);
+        if (result.allowed) {
+          allowed.push(change);
+        } else {
+          log.debug('Change excluded from push trigger (user filter)', {
+            symbol: change.symbol,
+            changeType: change.changeType,
+            filterSource: result.source
+          });
+        }
+      } catch (err) {
+        // 过滤器出错时为安全起见保留（避免误过滤）
+        log.warn('Filter check failed, keeping change', { symbol: change.symbol, err });
+        allowed.push(change);
+      }
+    }
+    return allowed;
   }
 
   /**
