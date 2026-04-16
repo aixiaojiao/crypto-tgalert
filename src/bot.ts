@@ -308,6 +308,9 @@ export class TelegramBot {
         { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
         { command: 'alert_list', description: '⚡ 查看我的警报列表' },
         { command: 'alert_bt', description: '🚀 历史突破警报' },
+        { command: 'alert_5m_gain_3_all', description: '⚡ 5分钟涨3%全币警报' },
+        { command: 'alert_15m_gain_5_all', description: '⚡ 15分钟涨5%全币警报' },
+        { command: 'alert_1h_gain_10_all', description: '⚡ 1小时涨10%全币警报' },
         { command: 'potential', description: '🎯 手动扫描潜力币信号' },
         { command: 'potential_on', description: '🎯 开启潜力币自动推送' },
         { command: 'potential_off', description: '🎯 关闭潜力币自动推送' },
@@ -457,6 +460,9 @@ export class TelegramBot {
 /status - 查看系统状态
 /price btc - 查看BTC价格
 /alert btc > 50000 - 添加价格警报 🆕
+/alert\_5m\_gain\_3\_all - 5分钟涨3%全币警报 🆕
+/alert\_15m\_gain\_5\_all - 15分钟涨5%全币警报 🆕
+格式: /alert\_[时间]\_[方向]\_[百分比]\_[币种]
 
 🛡️ *过滤管理:*
 /black doge - 添加DOGE到黑名单
@@ -1676,8 +1682,6 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       let message = `📋 您的警报列表 (${totalAlerts}个)\n\n`;
       message += `📊 **统计**: 总计${totalAlerts}个, 活跃${activeAlerts}个, 暂停${totalAlerts - activeAlerts}个\n\n`;
 
-      let alertIndex = 1;
-
       // 显示统一警报系统的警报
       for (const alert of unifiedAlerts) {
         const status = alert.enabled ? '🟢 启用' : '🔴 禁用';
@@ -1694,11 +1698,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         // 获取真实的统计数据
         const stats = await TimeRangeAlertModel.getAlertStats(parseInt(alert.id));
 
-        message += `${alertIndex++}. ${status} 💰 价格警报\n`;
+        message += `${displayId}. ${status} 💰 价格警报\n`;
         message += `   📄 ${description}\n`;
         message += `   📊 触发统计: 今日${stats.todayTriggers}次, 本周${stats.weekTriggers}次, 历史${stats.totalTriggers}次\n`;
         message += `   🚫 屏蔽统计: 今日${stats.todayBlocked}次, 本周${stats.weekBlocked}次, 历史${stats.totalBlocked}次\n`;
-        message += `   🆔 ID: ${displayId}\n`;
         message += `   🔔 优先级: ${alert.priority}\n\n`;
       }
 
@@ -1719,11 +1722,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         // 获取真实的统计数据
         const timeStats = await TimeRangeAlertModel.getAlertStats(alert.id!);
 
-        message += `${alertIndex++}. ${status} 🚀 急涨急跌警报\n`;
+        message += `${displayId}. ${status} 🚀 急涨急跌警报\n`;
         message += `   📄 ${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%\n`;
         message += `   📊 触发统计: 今日${timeStats.todayTriggers}次, 本周${timeStats.weekTriggers}次, 历史${timeStats.totalTriggers}次\n`;
         message += `   🚫 屏蔽统计: 今日${timeStats.todayBlocked}次, 本周${timeStats.weekBlocked}次, 历史${timeStats.totalBlocked}次\n`;
-        message += `   🆔 ID: ${displayId}\n`;
         message += `   ⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}\n\n`;
       }
 

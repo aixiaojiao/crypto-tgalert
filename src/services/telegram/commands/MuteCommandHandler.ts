@@ -73,16 +73,16 @@ export class MuteCommandHandler extends BaseCommandHandler {
    * 添加临时屏蔽
    */
   private async handleAdd(userId: string, args: string[]): Promise<CommandResult> {
-    if (args.length < 2) {
+    if (args.length < 1) {
       return {
         success: false,
-        message: '❌ 参数不足\n用法: /mute <symbol> <duration> [reason]\n示例: /mute DOGE 2h 波动太大',
+        message: '❌ 参数不足\n用法: /mute <symbol> [duration] [reason]\n示例: /mute DOGE (默认1d) 或 /mute DOGE 2h 波动太大',
         shouldReply: true
       };
     }
 
     const symbol = this.normalizeSymbol(args[0]);
-    const duration = args[1];
+    const duration = args[1] || '1d';
     const reason = args.slice(2).join(' ') || undefined;
 
     // 验证符号

@@ -216,7 +216,7 @@ export class PriceAlertModel {
   // 删除报警配置
   static async deleteAlert(id: number, userId: string): Promise<boolean> {
     try {
-      // 开启事务，先删除相关的触发记录，再删除配置
+      // 开启事务，先删除所有外键引用记录，再删除配置
       const transaction = this.db.transaction((alertId: number, uid: string) => {
         // 删除相关的触发记录
         const deleteTriggers = this.db.prepare(`
@@ -224,6 +224,13 @@ export class PriceAlertModel {
           WHERE config_id = ?
         `);
         deleteTriggers.run(alertId);
+
+        // 删除相关的屏蔽统计记录 (与 alert_filter_stats 的 FK)
+        const deleteFilterStats = this.db.prepare(`
+          DELETE FROM alert_filter_stats
+          WHERE config_id = ?
+        `);
+        deleteFilterStats.run(alertId);
 
         // 删除报警配置
         const deleteConfig = this.db.prepare(`
