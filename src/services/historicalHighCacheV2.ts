@@ -82,8 +82,8 @@ class HistoricalHighCacheV2 extends EventEmitter {
       const symbols = await this.getFuturesSymbols();
       log.info(`📊 Found ${symbols.length} futures symbols to process`);
 
-      // 并发处理，控制并发数量
-      const concurrencyLimit = 8;
+      // 并发处理，控制并发数量（低并发 + 长延迟避免 API 频率限制）
+      const concurrencyLimit = 3;
       let processed = 0;
       const failed: string[] = [];
 
@@ -104,11 +104,13 @@ class HistoricalHighCacheV2 extends EventEmitter {
 
         processed += batch.length;
         const progress = Math.round((processed / symbols.length) * 100);
-        log.info(`📈 Progress: ${processed}/${symbols.length} (${progress}%) - Cache size: ${this.cache.size}`);
+        if (progress % 10 === 0 || processed === symbols.length) {
+          log.info(`📈 Progress: ${processed}/${symbols.length} (${progress}%) - Cache size: ${this.cache.size}`);
+        }
 
-        // 批次间延迟
+        // 批次间延迟（2秒，避免触发 Binance 频率限制）
         if (i + concurrencyLimit < symbols.length) {
-          await new Promise(resolve => setTimeout(resolve, 800));
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
 
@@ -142,8 +144,8 @@ class HistoricalHighCacheV2 extends EventEmitter {
       // 处理所有目标时间框架
       for (const [timeframe, config] of Object.entries(this.timeframeConfigs)) {
         await this.processTimeframe(symbol, timeframe, config, currentPrice);
-        // 小延迟避免API限制
-        await new Promise(resolve => setTimeout(resolve, 50));
+        // 延迟避免API频率限制
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
     } catch (error) {
@@ -264,8 +266,8 @@ class HistoricalHighCacheV2 extends EventEmitter {
         // 设置下一批的开始时间（最后一根K线的结束时间 + 1毫秒）
         currentStartTime = rawKlines[rawKlines.length - 1].closeTime + 1;
 
-        // 小延迟避免API限制
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // 延迟避免API频率限制
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
 
       log.debug(`Collected ${allKlines.length} klines for ${symbol} ${interval} from ${new Date(startTime).toISOString()} to ${new Date(endTime).toISOString()}`);

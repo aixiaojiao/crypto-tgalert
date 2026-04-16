@@ -1,5 +1,5 @@
 import { BinanceWebSocketClient, TickerData } from './binanceWebSocket';
-import { BinanceClient } from './binance';
+import { BinanceClient, binanceClient } from './binance';
 import { log } from '../utils/logger';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from '../config/tokenLists';
 import { EventEmitter } from 'events';
@@ -52,12 +52,12 @@ export class RealtimeMarketCache extends EventEmitter {
   constructor() {
     super();
     this.wsClient = new BinanceWebSocketClient();
-    this.binanceClient = new BinanceClient();
+    this.binanceClient = binanceClient;
     this.initializeValidSymbols();
   }
 
   /**
-   * 初始化有效交易对列表
+   * 初始化有效交易对列表（失败时用 fallback 并在后台定期重试）
    */
   private async initializeValidSymbols(): Promise<void> {
     try {
@@ -73,8 +73,30 @@ export class RealtimeMarketCache extends EventEmitter {
         'MATICUSDT', 'AVAXUSDT', 'ATOMUSDT', 'NEARUSDT', 'FTMUSDT', 'SANDUSDT'
       ];
       this.validSymbols = new Set(filterTradingPairs(fallbackSymbols));
-      log.warn(`Using fallback symbols: ${this.validSymbols.size} pairs`);
+      log.warn(`Using fallback symbols: ${this.validSymbols.size} pairs, will retry in background`);
+      // 启动后台重试，每分钟尝试一次，成功后停止
+      this.scheduleValidSymbolsRetry();
     }
+  }
+
+  private validSymbolsRetryTimer: NodeJS.Timeout | null = null;
+
+  private scheduleValidSymbolsRetry(): void {
+    if (this.validSymbolsRetryTimer) return;
+    this.validSymbolsRetryTimer = setInterval(async () => {
+      try {
+        const allSymbols = await this.binanceClient.getFuturesTradingSymbols();
+        const validSymbolsList = filterTradingPairs(allSymbols);
+        this.validSymbols = new Set(validSymbolsList);
+        log.info(`Valid symbols retry succeeded: ${this.validSymbols.size} pairs`);
+        if (this.validSymbolsRetryTimer) {
+          clearInterval(this.validSymbolsRetryTimer);
+          this.validSymbolsRetryTimer = null;
+        }
+      } catch (error) {
+        log.debug('Valid symbols retry failed, will try again', error);
+      }
+    }, 60 * 1000);
   }
 
   /**
@@ -115,6 +137,11 @@ export class RealtimeMarketCache extends EventEmitter {
    */
   async stop(): Promise<void> {
     try {
+      if (this.validSymbolsRetryTimer) {
+        clearInterval(this.validSymbolsRetryTimer);
+        this.validSymbolsRetryTimer = null;
+      }
+
       if (!this.isConnected) {
         log.warn('Realtime market cache is not running');
         return;

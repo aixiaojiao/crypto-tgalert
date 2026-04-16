@@ -1,4 +1,4 @@
-import { BinanceClient } from './binance';
+import { BinanceClient, binanceClient } from './binance';
 import { PriceAlertModel } from '../models/PriceAlert';
 import { PriceAlert } from '../database/schema';
 import { log } from '../utils/logger';
@@ -41,8 +41,8 @@ export class PriceMonitorService {
   private alertsCacheExpiry: number = 0;
   private readonly ALERTS_CACHE_TTL = 60000; // 1 minute cache
 
-  constructor(binanceClient?: BinanceClient, checkIntervalMs?: number, telegramBot?: TelegramBot) {
-    this.binance = binanceClient || new BinanceClient();
+  constructor(binanceClientArg?: BinanceClient, checkIntervalMs?: number, telegramBot?: TelegramBot) {
+    this.binance = binanceClientArg || binanceClient;
     this.telegramBot = telegramBot || null;
     if (checkIntervalMs) {
       this.checkInterval = checkIntervalMs;

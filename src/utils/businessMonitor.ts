@@ -275,13 +275,12 @@ export function recordBusinessOperation(operationType: string, success: boolean,
   businessMonitor.recordOperation(operationType, success, context, error);
 }
 
-// 定期清理过期操作（每5分钟）
-setInterval(() => {
+// 模块级定时器（可通过 stopBusinessMonitor() 清理以支持优雅关闭）
+const cleanupTimer = setInterval(() => {
   businessMonitor.cleanupStaleOperations();
 }, 5 * 60 * 1000);
 
-// 定期报告业务统计（每30分钟）
-setInterval(() => {
+const reportTimer = setInterval(() => {
   const stats = businessMonitor.getAllStats(1800000); // 30分钟内的统计
   const patterns = businessMonitor.detectFailurePatterns(1800000);
 
@@ -294,3 +293,8 @@ setInterval(() => {
     log.warn('⚠️ 业务监控: 检测到失败模式', { patterns });
   }
 }, 30 * 60 * 1000);
+
+export function stopBusinessMonitor(): void {
+  clearInterval(cleanupTimer);
+  clearInterval(reportTimer);
+}

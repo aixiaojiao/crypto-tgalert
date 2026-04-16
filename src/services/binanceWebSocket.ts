@@ -55,6 +55,7 @@ export class BinanceWebSocketClient {
   private reconnectDelay = 5000; // 5 seconds
   private isConnecting = false;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval = 30000; // 30 seconds
 
   constructor() {
@@ -98,6 +99,12 @@ export class BinanceWebSocketClient {
       this.heartbeatInterval = null;
     }
 
+    // 取消待触发的重连计划，避免 disconnect 后再次触发 connect
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     if (this.ws) {
       this.ws.removeAllListeners();
       this.ws.close();
@@ -107,7 +114,7 @@ export class BinanceWebSocketClient {
     // Clear reconnection attempts and flags
     this.reconnectAttempts = 0;
     this.isConnecting = false;
-    
+
     this.subscriptions.clear();
     log.info('WebSocket disconnected');
   }
@@ -491,7 +498,13 @@ export class BinanceWebSocketClient {
       delay: `${delay}ms`
     });
 
-    setTimeout(async () => {
+    // 清理旧的重连计划（如有），避免重复触发
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
+
+    this.reconnectTimeout = setTimeout(async () => {
+      this.reconnectTimeout = null;
       try {
         await this.connect();
       } catch (error) {

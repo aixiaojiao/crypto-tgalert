@@ -258,16 +258,6 @@ export class ServiceRegistry {
       ServiceLifetime.SINGLETON
     );
 
-    // 触发警报服务
-    this.container.registerFactory(
-      SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE,
-      (_container) => {
-        const { triggerAlertService } = require('../../services/triggerAlerts');
-        return triggerAlertService;
-      },
-      ServiceLifetime.SINGLETON
-    );
-
     // 实时警报服务
     this.container.registerFactory(
       SERVICE_IDENTIFIERS.REALTIME_ALERT_SERVICE,

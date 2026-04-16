@@ -9,7 +9,9 @@ import { log } from '../utils/logger';
 export class RankingAnalyzer {
   private refreshInterval = 5 * 60 * 1000; // 5 minutes
   private isRunning = false;
-  
+  private startupTimer: NodeJS.Timeout | null = null;
+  private periodicInterval: NodeJS.Timeout | null = null;
+
   constructor() {
     log.info('RankingAnalyzer initialized');
   }
@@ -22,17 +24,20 @@ export class RankingAnalyzer {
       log.warn('RankingAnalyzer is already running');
       return;
     }
-    
+
     this.isRunning = true;
-    log.info('Starting RankingAnalyzer periodic refresh');
-    
-    // Initial analysis
-    this.analyzeRankings();
-    
-    // Periodic analysis
-    setInterval(() => {
+    log.info('Starting RankingAnalyzer periodic refresh (delayed 30s for startup)');
+
+    // Delay initial analysis by 30s to avoid startup API burst
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = null;
       this.analyzeRankings();
-    }, this.refreshInterval);
+
+      // Periodic analysis
+      this.periodicInterval = setInterval(() => {
+        this.analyzeRankings();
+      }, this.refreshInterval);
+    }, 30000);
   }
 
   /**
@@ -40,6 +45,14 @@ export class RankingAnalyzer {
    */
   stop(): void {
     this.isRunning = false;
+    if (this.startupTimer) {
+      clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+    }
+    if (this.periodicInterval) {
+      clearInterval(this.periodicInterval);
+      this.periodicInterval = null;
+    }
     log.info('RankingAnalyzer stopped');
   }
 
@@ -51,13 +64,26 @@ export class RankingAnalyzer {
     try {
       log.debug('Starting ranking analysis...');
       const startTime = Date.now();
-      
-      // Get all necessary data
-      const [gainersSymbols, losersSymbols, fundingSymbols] = await Promise.all([
-        this.getTopGainers(),
-        this.getTopLosers(), 
-        this.getTopNegativeFunding()
-      ]);
+
+      // Fetch all stats once and share across gainers/losers analysis
+      const allStats = await binanceClient.getFutures24hrStatsMultiple();
+      const validSymbols = filterTradingPairs(allStats.map(s => s.symbol));
+      const filteredStats = allStats.filter(stat => validSymbols.includes(stat.symbol) && parseFloat(stat.volume) > 10000);
+
+      const gainersSymbols = filteredStats
+        .filter(stat => parseFloat(stat.priceChangePercent) > 0)
+        .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
+        .slice(0, 10)
+        .map(stat => stat.symbol);
+
+      const losersSymbols = filteredStats
+        .filter(stat => parseFloat(stat.priceChangePercent) < 0)
+        .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
+        .slice(0, 10)
+        .map(stat => stat.symbol);
+
+      // Fetch funding rates separately (single API call)
+      const fundingSymbols = await this.getTopNegativeFunding();
 
       const analysisTime = Date.now() - startTime;
       log.info('Ranking analysis completed', {
@@ -68,63 +94,9 @@ export class RankingAnalyzer {
         totalHotSymbols: gainersSymbols.length + losersSymbols.length + fundingSymbols.length,
         analysisTime: `${analysisTime}ms`
       });
-      
+
     } catch (error) {
       log.error('Failed to analyze rankings', error);
-    }
-  }
-
-  /**
-   * Get top gainers symbols (TOP 10)
-   */
-  private async getTopGainers(): Promise<string[]> {
-    try {
-      const allStats = await binanceClient.getFutures24hrStatsMultiple();
-      const validSymbols = filterTradingPairs(allStats.map(s => s.symbol));
-      
-      const gainers = allStats
-        .filter(stat => {
-          return parseFloat(stat.priceChangePercent) > 0 && 
-                 validSymbols.includes(stat.symbol) &&
-                 parseFloat(stat.volume) > 10000; // Filter low volume tokens
-        })
-        .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
-        .slice(0, 10)
-        .map(stat => stat.symbol);
-      
-      log.debug('Top gainers identified', { count: gainers.length, symbols: gainers.slice(0, 5) });
-      return gainers;
-      
-    } catch (error) {
-      log.error('Failed to get top gainers', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get top losers symbols (TOP 10)
-   */
-  private async getTopLosers(): Promise<string[]> {
-    try {
-      const allStats = await binanceClient.getFutures24hrStatsMultiple();
-      const validSymbols = filterTradingPairs(allStats.map(s => s.symbol));
-      
-      const losers = allStats
-        .filter(stat => {
-          return parseFloat(stat.priceChangePercent) < 0 && 
-                 validSymbols.includes(stat.symbol) &&
-                 parseFloat(stat.volume) > 10000; // Filter low volume tokens
-        })
-        .sort((a, b) => parseFloat(a.priceChangePercent) - parseFloat(b.priceChangePercent))
-        .slice(0, 10)
-        .map(stat => stat.symbol);
-      
-      log.debug('Top losers identified', { count: losers.length, symbols: losers.slice(0, 5) });
-      return losers;
-      
-    } catch (error) {
-      log.error('Failed to get top losers', error);
-      return [];
     }
   }
 
@@ -135,7 +107,7 @@ export class RankingAnalyzer {
     try {
       const fundingRates = await binanceClient.getAllFundingRates();
       const validSymbols = filterTradingPairs(fundingRates.map(r => r.symbol));
-      
+
       // Filter and deduplicate funding rates
       const filteredRates = fundingRates
         .filter(rate => validSymbols.includes(rate.symbol))
@@ -153,10 +125,10 @@ export class RankingAnalyzer {
         .sort((a, b) => parseFloat(a.fundingRate) - parseFloat(b.fundingRate))
         .slice(0, 15)
         .map(rate => rate.symbol);
-      
+
       log.debug('Top negative funding identified', { count: negativeRates.length, symbols: negativeRates.slice(0, 5) });
       return negativeRates;
-      
+
     } catch (error) {
       log.error('Failed to get top negative funding', error);
       return [];

@@ -339,6 +339,7 @@ export class RealtimeAlertService {
               prefixIcon = '🔇'; // mute代币显示静音图标
               break;
             case 'system_yellowlist':
+            case 'user_yellowlist':
               prefixIcon = '⚠️'; // 黄名单代币显示警告图标
               break;
             case 'user_blacklist':
@@ -424,6 +425,7 @@ export class RealtimeAlertService {
                   prefixIcon = '🔇';
                   break;
                 case 'system_yellowlist':
+                case 'user_yellowlist':
                   prefixIcon = '⚠️';
                   break;
                 case 'user_blacklist':
@@ -451,6 +453,7 @@ export class RealtimeAlertService {
                   prefixIcon = '🔇';
                   break;
                 case 'system_yellowlist':
+                case 'user_yellowlist':
                   prefixIcon = '⚠️';
                   break;
                 case 'user_blacklist':

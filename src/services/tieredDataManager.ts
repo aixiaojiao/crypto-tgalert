@@ -32,7 +32,12 @@ export class TieredDataManager {
   // Update frequency tracking
   private lastSymbolClassification = 0;
   private readonly classificationRefreshInterval = 30 * 60 * 1000; // 30 minutes
-  
+
+  // Timer refs for graceful shutdown
+  private startupTimers: NodeJS.Timeout[] = [];
+  private classificationInterval: NodeJS.Timeout | null = null;
+  private backgroundRefreshInterval: NodeJS.Timeout | null = null;
+
   // Stats tracking
   private refreshStats: DataRefreshStats = {
     high: { requested: 0, updated: 0, skipped: 0 },
@@ -43,16 +48,39 @@ export class TieredDataManager {
   };
 
   constructor() {
-    log.info('TieredDataManager initialized');
-    
-    // Start periodic classification refresh
-    this.startClassificationRefresh();
-    
-    // Start background data refresh
-    this.startBackgroundRefresh();
-    
-    // Start ranking analyzer for hot symbols tracking
-    rankingAnalyzer.start();
+    log.info('TieredDataManager initialized (delayed startup to avoid API burst)');
+
+    // Delay all background tasks to avoid startup API burst
+    // Classification at 10s, background refresh at 20s, ranking at 30s
+    this.startupTimers.push(setTimeout(() => {
+      this.startClassificationRefresh();
+    }, 10000));
+
+    this.startupTimers.push(setTimeout(() => {
+      this.startBackgroundRefresh();
+    }, 20000));
+
+    this.startupTimers.push(setTimeout(() => {
+      rankingAnalyzer.start();
+    }, 30000));
+  }
+
+  /**
+   * 停止所有定时任务
+   */
+  stop(): void {
+    this.startupTimers.forEach(t => clearTimeout(t));
+    this.startupTimers = [];
+    if (this.classificationInterval) {
+      clearInterval(this.classificationInterval);
+      this.classificationInterval = null;
+    }
+    if (this.backgroundRefreshInterval) {
+      clearInterval(this.backgroundRefreshInterval);
+      this.backgroundRefreshInterval = null;
+    }
+    rankingAnalyzer.stop();
+    log.info('TieredDataManager stopped');
   }
 
   /**
@@ -326,93 +354,71 @@ export class TieredDataManager {
     
     // Initial classification
     refreshClassification();
-    
+
     // Periodic refresh every 30 minutes
-    setInterval(refreshClassification, this.classificationRefreshInterval);
+    this.classificationInterval = setInterval(refreshClassification, this.classificationRefreshInterval);
   }
 
   private startBackgroundRefresh(): void {
     const backgroundRefresh = async () => {
       try {
         const startTime = Date.now();
-        
+
         // Get symbols that need updating by tier
         const lastUpdateTimes = new Map<string, number>();
-        
+
         // Collect last update times from all data stores
         for (const [symbol, entry] of this.tickerData) {
           lastUpdateTimes.set(symbol, entry.lastUpdated);
         }
-        
+
         const symbolsNeedingUpdate = volumeClassifier.getSymbolsNeedingUpdate(lastUpdateTimes);
-        
-        // Process high-volume symbols first (most important)
-        if (symbolsNeedingUpdate.high.length > 0) {
-          log.debug(`Background refresh: ${symbolsNeedingUpdate.high.length} high-volume symbols`);
-          await this.refreshSymbolBatch(symbolsNeedingUpdate.high, 'high');
+
+        const totalNeeding = symbolsNeedingUpdate.high.length + symbolsNeedingUpdate.medium.length + symbolsNeedingUpdate.low.length;
+        if (totalNeeding === 0) return;
+
+        // Fetch all ticker data ONCE and distribute to tiers
+        const freshData = await binanceClient.getFutures24hrStatsMultiple();
+        this.refreshStats.totalApiCalls++;
+
+        const freshDataMap = new Map(freshData.map(t => [t.symbol, t]));
+
+        for (const tier of ['high', 'medium', 'low'] as const) {
+          const symbols = symbolsNeedingUpdate[tier];
+          if (symbols.length === 0) continue;
+
+          this.refreshStats[tier].requested += symbols.length;
+          let updated = 0;
+          for (const symbol of symbols) {
+            const ticker = freshDataMap.get(symbol);
+            if (ticker) {
+              await this.storeTickerData(symbol, ticker);
+              updated++;
+            }
+          }
+          this.refreshStats[tier].updated += updated;
+          this.refreshStats[tier].skipped += symbols.length - updated;
         }
-        
-        // Then medium-volume symbols
-        if (symbolsNeedingUpdate.medium.length > 0) {
-          log.debug(`Background refresh: ${symbolsNeedingUpdate.medium.length} medium-volume symbols`);
-          await this.refreshSymbolBatch(symbolsNeedingUpdate.medium, 'medium');
-        }
-        
-        // Finally low-volume symbols (least frequent)
-        if (symbolsNeedingUpdate.low.length > 0) {
-          log.debug(`Background refresh: ${symbolsNeedingUpdate.low.length} low-volume symbols`);
-          await this.refreshSymbolBatch(symbolsNeedingUpdate.low, 'low');
-        }
-        
+
         const processingTime = Date.now() - startTime;
         this.refreshStats.totalProcessingTime += processingTime;
-        
-        if (symbolsNeedingUpdate.high.length + symbolsNeedingUpdate.medium.length + symbolsNeedingUpdate.low.length > 0) {
-          log.info('Background refresh completed', {
-            processingTime: `${processingTime}ms`,
-            updated: {
-              high: symbolsNeedingUpdate.high.length,
-              medium: symbolsNeedingUpdate.medium.length,
-              low: symbolsNeedingUpdate.low.length
-            }
-          });
-        }
-        
+
+        log.info('Background refresh completed', {
+          processingTime: `${processingTime}ms`,
+          updated: {
+            high: symbolsNeedingUpdate.high.length,
+            medium: symbolsNeedingUpdate.medium.length,
+            low: symbolsNeedingUpdate.low.length
+          }
+        });
+
       } catch (error) {
         log.error('Background refresh failed', error);
       }
     };
-    
-    // Run background refresh every 30 seconds
-    setInterval(backgroundRefresh, 30 * 1000);
-  }
 
-  private async refreshSymbolBatch(symbols: string[], tier: 'high' | 'medium' | 'low'): Promise<void> {
-    if (symbols.length === 0) return;
-    
-    this.refreshStats[tier].requested += symbols.length;
-    
-    try {
-      // Use batch API call for efficiency
-      const freshData = await binanceClient.getFutures24hrStatsMultiple();
-      const symbolSet = new Set(symbols);
-      
-      let updated = 0;
-      for (const ticker of freshData) {
-        if (symbolSet.has(ticker.symbol)) {
-          await this.storeTickerData(ticker.symbol, ticker);
-          updated++;
-        }
-      }
-      
-      this.refreshStats[tier].updated += updated;
-      this.refreshStats[tier].skipped += symbols.length - updated;
-      this.refreshStats.totalApiCalls++;
-      
-    } catch (error) {
-      log.error(`Failed to refresh ${tier}-tier symbols`, error);
-      this.refreshStats[tier].skipped += symbols.length;
-    }
+    // Run background refresh every 30 seconds
+    this.backgroundRefreshInterval = setInterval(backgroundRefresh, 30 * 1000);
   }
 }
 

@@ -70,7 +70,6 @@ export class ApplicationBootstrap {
 
       // Application Layer
       SERVICE_IDENTIFIERS.PRICE_MONITOR_SERVICE,
-      SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE,
       SERVICE_IDENTIFIERS.REALTIME_ALERT_SERVICE
     ];
 
@@ -123,13 +122,6 @@ export class ApplicationBootstrap {
       if (historicalHighCache && typeof historicalHighCache.initialize === 'function') {
         await historicalHighCache.initialize();
         log.info('✅ Historical high cache initialized');
-      }
-
-      // 预热触发警报服务
-      const triggerAlertService = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE) as any;
-      if (triggerAlertService && typeof triggerAlertService.initialize === 'function') {
-        await triggerAlertService.initialize();
-        log.info('✅ Trigger alert service initialized');
       }
 
     } catch (error) {
@@ -403,15 +395,6 @@ export class ServiceStartupOrchestrator {
 
     // === APPLICATION LAYER (应用层 - 复合依赖) ===
     {
-      name: 'Trigger Alert Service',
-      serviceId: SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE.toString(),
-      dependencies: [
-        SERVICE_IDENTIFIERS.DATABASE_CONNECTION.toString(),
-        SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString()
-      ],
-      critical: true
-    },
-    {
       name: 'Realtime Alert Service',
       serviceId: SERVICE_IDENTIFIERS.REALTIME_ALERT_SERVICE.toString(),
       dependencies: [
@@ -425,7 +408,6 @@ export class ServiceStartupOrchestrator {
       serviceId: SERVICE_IDENTIFIERS.PRICE_MONITOR_SERVICE.toString(),
       dependencies: [
         SERVICE_IDENTIFIERS.BINANCE_CLIENT.toString(),
-        SERVICE_IDENTIFIERS.TRIGGER_ALERT_SERVICE.toString(),
         'TELEGRAM_BOT_SERVICE'
       ],
       critical: true

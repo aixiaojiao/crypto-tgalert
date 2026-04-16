@@ -1,10 +1,13 @@
 import { TelegramBot } from './bot';
 import { initDatabase } from './database/connection';
-import { BinanceClient } from './services/binance';
+import { BinanceClient, binanceClient } from './services/binance';
 import { PriceMonitorService } from './services/priceMonitor';
-import { triggerAlertService } from './services/triggerAlerts';
 import { historicalHighCache } from './services/historicalHighCacheV2';
+import { realtimeMarketCache } from './services/realtimeMarketCache';
+import { priceAlertService } from './services/priceAlertService';
+import { tieredDataManager } from './services/tieredDataManager';
 import { binanceRateLimit } from './utils/ratelimit';
+import { stopBusinessMonitor } from './utils/businessMonitor';
 import { getServiceRegistry } from './core/container';
 import { startHealthMonitoring as startHealthMonitoringUtil } from './utils/health';
 
@@ -19,7 +22,7 @@ export class CryptoTgAlertApp {
 
   constructor() {
     this.telegramBot = new TelegramBot();
-    this.binanceClient = new BinanceClient();
+    this.binanceClient = binanceClient;
     this.priceMonitor = new PriceMonitorService(this.binanceClient, undefined, this.telegramBot);
   }
 
@@ -43,13 +46,13 @@ export class CryptoTgAlertApp {
       console.log('⚡ Initializing unified alert service...');
       await this.telegramBot.initializeUnifiedAlerts();
 
+      // 3.5 初始化实时市场缓存和价格报警（WebSocket 依赖）
+      console.log('📡 Initializing realtime services...');
+      await this.telegramBot.initializeRealtimeServices();
+
       // 4. 初始化调试服务
       console.log('🐛 Initializing debug service...');
       await this.telegramBot.initializeDebugService();
-
-      // 5. 初始化触发提醒服务
-      console.log('⚡ Initializing trigger alerts...');
-      await triggerAlertService.initialize();
 
       // 6. 测试Binance连接（带重试机制）
       console.log('💰 Testing Binance connection...');
@@ -153,18 +156,16 @@ export class CryptoTgAlertApp {
     binance: boolean;
     database: boolean;
     priceMonitor: any;
-    triggerAlerts: any;
   }> {
     try {
       // 测试各个组件
       const btcPrice = await this.binanceClient.getPrice('BTCUSDT');
-      
+
       return {
         telegram: this.telegramBot.getStatus(),
         binance: btcPrice > 0,
         database: true, // 如果到这里说明数据库正常
-        priceMonitor: await this.priceMonitor.getStats(),
-        triggerAlerts: triggerAlertService.getStats()
+        priceMonitor: await this.priceMonitor.getStats()
       };
     } catch (error) {
       throw error;
@@ -199,8 +200,19 @@ export class CryptoTgAlertApp {
     }
 
     await this.priceMonitor.stopMonitoring();
-    triggerAlertService.stopAllMonitoring();
     await this.telegramBot.stop();
+
+    // 停止实时服务和分层数据管理器
+    try {
+      await realtimeMarketCache.stop();
+    } catch (err) {
+      console.error('Failed to stop realtime market cache:', err);
+    }
+    await priceAlertService.stop();
+    tieredDataManager.stop();
+
+    // 停止业务监控定时器
+    stopBusinessMonitor();
 
     // 清理速率限制器
     binanceRateLimit.destroy();

@@ -2,12 +2,11 @@ import { Telegraf } from 'telegraf';
 import { config } from './config';
 import { authMiddleware } from './middleware/auth';
 import { BotContext, BotStatus } from './types';
-import { BinanceClient } from './services/binance';
+import { BinanceClient, binanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
 import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
-import { triggerAlertService } from './services/triggerAlerts';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -48,7 +47,7 @@ export class TelegramBot {
 
   constructor() {
     this.bot = new Telegraf<BotContext>(config.telegram.botToken);
-    this.binanceClient = new BinanceClient();
+    this.binanceClient = binanceClient;
     this.status = {
       isRunning: false,
       startTime: new Date(),
@@ -76,41 +75,35 @@ export class TelegramBot {
 
     // Set telegram bot instance for services
     this.notificationService.setTelegramBot(this);
-    triggerAlertService.setTelegramBot(this);
     priceAlertService.setTelegramBot(this);
 
     // Initialize databases
     TimeRangeAlertModel.initDatabase();
 
-    // Initialize realtime services
-    this.initializeRealtimeServices();
+    // 注意：实时服务初始化已移到 initializeRealtimeServices()，
+    // 必须在 app.start() 中显式 await 调用，避免静默失败
   }
 
   /**
    * 初始化实时市场数据缓存和推送服务
+   * 必须在启动流程中显式 await 调用
    */
-  private async initializeRealtimeServices(): Promise<void> {
-    try {
-      // 初始化实时市场缓存
-      log.info('Initializing realtime market cache...');
-      await realtimeMarketCache.start();
-      log.info('Realtime market cache initialized successfully');
+  async initializeRealtimeServices(): Promise<void> {
+    // 初始化实时市场缓存
+    log.info('Initializing realtime market cache...');
+    await realtimeMarketCache.start();
+    log.info('Realtime market cache initialized successfully');
 
-      // 初始化实时推送服务
-      log.info('Initializing realtime alert service...');
-      realtimeAlertService.setTelegramBot(this);
-      await realtimeAlertService.start();
-      log.info('Realtime alert service initialized successfully');
+    // 初始化实时推送服务
+    log.info('Initializing realtime alert service...');
+    realtimeAlertService.setTelegramBot(this);
+    await realtimeAlertService.start();
+    log.info('Realtime alert service initialized successfully');
 
-      // 初始化价格报警服务
-      log.info('Initializing price alert service...');
-      await priceAlertService.start();
-      log.info('Price alert service initialized successfully');
-
-    } catch (error) {
-      log.error('Failed to initialize realtime services', error);
-      log.warn('Bot will continue with REST API fallback');
-    }
+    // 初始化价格报警服务
+    log.info('Initializing price alert service...');
+    await priceAlertService.start();
+    log.info('Price alert service initialized successfully');
   }
 
   /**
@@ -183,7 +176,6 @@ export class TelegramBot {
 💰 **价格查询**: \`/price\` \`/signals\`
 📊 **排行榜**: \`/rank\` \`/rank_gainers\` \`/rank_losers\` \`/funding\` \`/oi_24h\`
 ⚡ **警报系统**: \`/alert\` \`/alert_bt\` \`/alert_list\` \`/alert_5m_gain_3_all\`
-🔔 **推送服务**: \`/start_gainers_push\` \`/start_funding_push\` \`/stop_all_push\`
 📈 **历史分析**: \`/high\` \`/high near\`
 🛡️ **过滤管理**: \`/filter_settings\` \`/blacklist_list\` \`/mute_list\`
 ⚙️ **系统状态**: \`/status\` \`/cache_status\`
@@ -311,7 +303,6 @@ export class TelegramBot {
         { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
         { command: 'alert_list', description: '⚡ 查看我的警报列表' },
         { command: 'alert_bt', description: '🚀 历史突破警报' },
-        { command: 'start_gainers_push', description: '🔔 开启涨幅推送' },
         { command: 'blacklist_add', description: '🛡️ 添加个人黑名单' },
         { command: 'blacklist_remove', description: '🛡️ 移除黑名单' },
         { command: 'blacklist_list', description: '🛡️ 查看过滤规则' },
@@ -1347,47 +1338,35 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
    * 处理排行榜命令
    */
   private async handleRankingCommand(ctx: any, type: string, period: string, count: number): Promise<void> {
-    await ctx.reply(`📊 正在查询${period}${type === 'gainers' ? '涨幅' : '跌幅'}榜前${count}名...`);
-
     try {
-      // 获取所有合约交易对24小时数据
-      const data = await this.binanceClient.getFutures24hrStatsMultiple();
-      if (!data || data.length === 0) {
-        throw new Error('无法获取市场数据');
+      // 优先使用 WebSocket 实时缓存数据，避免 REST API 调用触发频率限制
+      const rankings = type === 'gainers'
+        ? realtimeMarketCache.getTopGainers(count, 10000)
+        : realtimeMarketCache.getTopLosers(count, 10000);
+
+      if (!rankings || rankings.length === 0) {
+        await ctx.reply(`❌ 实时数据尚未就绪，请稍后重试`);
+        return;
       }
 
-      // 过滤有效交易对
-      const validSymbols = filterTradingPairs(data.map((d: any) => d.symbol));
-      const filteredData = data.filter((ticker: any) => validSymbols.includes(ticker.symbol));
-
-      // 排序
-      const sortedData = filteredData.sort((a: any, b: any) => {
-        const changeA = parseFloat(a.priceChangePercent);
-        const changeB = parseFloat(b.priceChangePercent);
-        return type === 'gainers' ? changeB - changeA : changeA - changeB;
-      });
-
-      const displayData = sortedData.slice(0, count);
       const titleType = type === 'gainers' ? '涨幅' : '跌幅';
-      let message = `📊 *${period} ${titleType}榜 TOP${displayData.length}*\n\n`;
+      let message = `📊 *${period} ${titleType}榜 TOP${rankings.length}*\n\n`;
 
-      for (let i = 0; i < displayData.length; i++) {
-        const ticker = displayData[i];
+      for (let i = 0; i < rankings.length; i++) {
+        const ticker = rankings[i];
         const symbol = ticker.symbol.replace('USDT', '');
-        const changePercent = parseFloat(ticker.priceChangePercent);
+        const changePercent = ticker.priceChangePercent;
         const changeIcon = changePercent >= 0 ? '📈' : '📉';
-        const riskLevel = getTokenRiskLevel(ticker.symbol);
-        const riskIcon = getRiskIcon(riskLevel);
 
         let priceText = '';
         try {
-          const formattedPrice = await formatPriceWithSeparators(ticker.lastPrice, ticker.symbol);
+          const formattedPrice = await formatPriceWithSeparators(String(ticker.price), ticker.symbol);
           priceText = ` ($${formattedPrice})`;
         } catch (error) {
           priceText = '';
         }
 
-        message += `${i + 1}. ${changeIcon} ${riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
+        message += `${i + 1}. ${changeIcon} ${ticker.riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
       }
 
       message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
@@ -1482,9 +1461,13 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           displayId = await AlertIdManager.migrateExistingId(alert.id, idType, userId);
         }
 
+        // 获取真实的统计数据
+        const stats = await TimeRangeAlertModel.getAlertStats(parseInt(alert.id));
+
         message += `${alertIndex++}. ${status} 💰 价格警报\n`;
         message += `   📄 ${description}\n`;
-        message += `   📊 触发统计: 今日0次, 本周0次, 成功率--% (暂无数据)\n`;
+        message += `   📊 触发统计: 今日${stats.todayTriggers}次, 本周${stats.weekTriggers}次, 历史${stats.totalTriggers}次\n`;
+        message += `   🚫 屏蔽统计: 今日${stats.todayBlocked}次, 本周${stats.weekBlocked}次, 历史${stats.totalBlocked}次\n`;
         message += `   🆔 ID: ${displayId}\n`;
         message += `   🔔 优先级: ${alert.priority}\n\n`;
       }
@@ -1503,9 +1486,13 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           displayId = await AlertIdManager.migrateExistingId(alertIdString, AlertIdType.PUMP_DUMP, userId);
         }
 
+        // 获取真实的统计数据
+        const timeStats = await TimeRangeAlertModel.getAlertStats(alert.id!);
+
         message += `${alertIndex++}. ${status} 🚀 急涨急跌警报\n`;
         message += `   📄 ${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%\n`;
-        message += `   📊 触发统计: 今日0次, 本周0次, 成功率--% (暂无数据)\n`;
+        message += `   📊 触发统计: 今日${timeStats.todayTriggers}次, 本周${timeStats.weekTriggers}次, 历史${timeStats.totalTriggers}次\n`;
+        message += `   🚫 屏蔽统计: 今日${timeStats.todayBlocked}次, 本周${timeStats.weekBlocked}次, 历史${timeStats.totalBlocked}次\n`;
         message += `   🆔 ID: ${displayId}\n`;
         message += `   ⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}\n\n`;
       }
@@ -1984,11 +1971,6 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 /alert_remove T<ID> - 删除急涨急跌警报
 /alert_toggle <ID> - 启用/禁用警报
 
-🔔 推送服务:
-/start_gainers_push - 开启涨幅推送(自动推送Top10)
-/start_funding_push - 开启费率推送
-/stop_all_push - 停止所有推送
-
 📈 历史分析:
 /high btc 1w - BTC一周高点
 /high near 1m - 接近月高点币种 🆕
@@ -2214,50 +2196,6 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         log.error('OI 24h命令处理失败:', error);
         await ctx.reply('❌ 24小时持仓量查询失败，请稍后重试');
-      }
-    });
-
-    // 推送相关下划线命令
-    this.bot.command('start_gainers_push', async (ctx) => {
-      try {
-        await ctx.reply('🚀 正在启动涨幅推送...');
-        // 调用现有的推送启动逻辑
-        // 这里需要调用相应的推送服务
-        await ctx.reply('✅ 涨幅推送已启动！\n\n📈 将为您推送重要的市场涨幅变化');
-      } catch (error) {
-        log.error('启动涨幅推送失败:', error);
-        await ctx.reply('❌ 启动涨幅推送失败，请稍后重试');
-      }
-    });
-
-    this.bot.command('start_funding_push', async (ctx) => {
-      try {
-        await ctx.reply('🚀 正在启动资金费率推送...');
-        // 调用现有的推送启动逻辑
-        await ctx.reply('✅ 资金费率推送已启动！\n\n💰 将为您推送重要的费率变化信息');
-      } catch (error) {
-        log.error('启动资金费率推送失败:', error);
-        await ctx.reply('❌ 启动资金费率推送失败，请稍后重试');
-      }
-    });
-
-    this.bot.command('stop_gainers_push', async (ctx) => {
-      try {
-        await ctx.reply('🛑 正在停止涨幅推送...');
-        await ctx.reply('✅ 涨幅推送已停止！');
-      } catch (error) {
-        log.error('停止涨幅推送失败:', error);
-        await ctx.reply('❌ 停止涨幅推送失败，请稍后重试');
-      }
-    });
-
-    this.bot.command('stop_funding_push', async (ctx) => {
-      try {
-        await ctx.reply('🛑 正在停止资金费率推送...');
-        await ctx.reply('✅ 资金费率推送已停止！');
-      } catch (error) {
-        log.error('停止资金费率推送失败:', error);
-        await ctx.reply('❌ 停止资金费率推送失败，请稍后重试');
       }
     });
 

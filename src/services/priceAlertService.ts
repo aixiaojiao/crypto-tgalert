@@ -46,6 +46,7 @@ export class PriceAlertService extends EventEmitter {
   private isEnabled: boolean = false;
   private alertConfigs: Map<number, PriceAlertConfig> = new Map();
   private filterManager: IAdvancedFilterManager | null = null;
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   // 多时间周期数据存储
   private timeframes: Map<string, TimeframeData> = new Map();
@@ -124,7 +125,7 @@ export class PriceAlertService extends EventEmitter {
     this.isEnabled = true;
 
     // 定期清理过期数据和冷却记录
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       this.cleanupExpiredData();
       this.cleanupExpiredCooldowns();
     }, 5 * 60 * 1000); // 每5分钟清理一次
@@ -139,6 +140,13 @@ export class PriceAlertService extends EventEmitter {
    */
   async stop(): Promise<void> {
     this.isEnabled = false;
+
+    // 清理定时器
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+
     this.alertConfigs.clear();
     this.recentTriggers.clear();
 
@@ -371,21 +379,35 @@ export class PriceAlertService extends EventEmitter {
 
     try {
       // 检查是否应该发送警报（过滤检查）
+      let filterReason = '';
       if (this.filterManager) {
-        const shouldSend = await this.filterManager.shouldSendAlert(
+        const filterResult = await this.filterManager.shouldSendAlert(
           config.userId,
           symbol,
           'price_alert'
         );
 
-        if (!shouldSend) {
+        if (!filterResult.allowed) {
+          // 记录被屏蔽的警报统计
+          await PriceAlertModel.recordFilteredAlert({
+            configId: config.id!,
+            symbol,
+            filterReason: filterResult.reason,
+            filterSource: filterResult.source
+          });
+
           log.info('Price alert filtered out', {
             userId: config.userId,
             symbol,
             timeframe: alertData.timeframe,
-            reason: 'User filter applied'
+            reason: filterResult.reason
           });
           return;
+        }
+
+        // 保存风险标识用于消息生成
+        if (filterResult.reason && filterResult.reason.includes('黄名单')) {
+          filterReason = filterResult.reason;
         }
       }
       const cleanSymbol = symbol.replace('USDT', '');
@@ -434,9 +456,12 @@ export class PriceAlertService extends EventEmitter {
       );
       const alertTitle = isGain ? '拉涨报警' : '下跌报警';
 
+      // 组合风险标识
+      const allRiskPrefix = riskPrefix + (filterReason ? `${filterReason} ` : '');
+
       const message = `${visualIcon} *${alertTitle}*
 
-${riskPrefix}**${cleanSymbol}/USDT**
+${allRiskPrefix}**${cleanSymbol}/USDT**
 ${timeframeName}内${changeText} ${changeSign}${formattedChange}%
 $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
 

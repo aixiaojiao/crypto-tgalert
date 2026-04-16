@@ -116,7 +116,6 @@ export const SERVICE_IDENTIFIERS = {
 
   // Application Layer (应用层 - 复合依赖)
   PRICE_MONITOR_SERVICE: Symbol('PriceMonitorService'),
-  TRIGGER_ALERT_SERVICE: Symbol('TriggerAlertService'),
   REALTIME_ALERT_SERVICE: Symbol('RealtimeAlertService'),
 
   // Legacy service identifiers (保持兼容性)
