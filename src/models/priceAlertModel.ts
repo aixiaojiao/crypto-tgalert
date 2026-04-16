@@ -29,6 +29,15 @@ export interface PriceAlertTrigger {
   volume24h: number;
 }
 
+export interface AlertFilterStat {
+  id?: number;
+  configId: number;
+  symbol: string;
+  filterReason: string;
+  filterSource: string;
+  blockedAt: string;
+}
+
 export class PriceAlertModel {
   private static db: Database.Database;
 
@@ -82,6 +91,27 @@ export class PriceAlertModel {
 
         CREATE INDEX IF NOT EXISTS idx_alert_triggers_symbol_time
         ON price_alert_triggers(symbol, triggered_at);
+      `);
+
+      // 创建过滤统计表
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS alert_filter_stats (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          config_id INTEGER NOT NULL,
+          symbol TEXT NOT NULL,
+          filter_reason TEXT NOT NULL,
+          filter_source TEXT NOT NULL,
+          blocked_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (config_id) REFERENCES price_alert_configs (id)
+        )
+      `);
+
+      // 创建过滤统计索引
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_filter_stats_config_time
+        ON alert_filter_stats(config_id, blocked_at);
+        CREATE INDEX IF NOT EXISTS idx_filter_stats_symbol_time
+        ON alert_filter_stats(symbol, blocked_at);
       `);
 
       log.info('Price alert database initialized successfully');
@@ -263,6 +293,125 @@ export class PriceAlertModel {
       return stmt.all(userId, limit) as PriceAlertTrigger[];
     } catch (error) {
       log.error('Failed to get trigger history', error);
+      throw error;
+    }
+  }
+
+  // 记录被过滤的警报
+  static async recordFilteredAlert(data: {
+    configId: number;
+    symbol: string;
+    filterReason: string;
+    filterSource: string;
+  }): Promise<void> {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO alert_filter_stats
+        (config_id, symbol, filter_reason, filter_source)
+        VALUES (?, ?, ?, ?)
+      `);
+      stmt.run(data.configId, data.symbol, data.filterReason, data.filterSource);
+    } catch (error) {
+      log.error('Failed to record filtered alert', error);
+      throw error;
+    }
+  }
+
+  // 获取警报触发统计数据
+  static async getAlertStats(configId: number): Promise<{
+    totalTriggers: number;
+    todayTriggers: number;
+    weekTriggers: number;
+    monthTriggers: number;
+    totalBlocked: number;
+    todayBlocked: number;
+    weekBlocked: number;
+    lastTriggeredAt: string | null;
+  }> {
+    try {
+      // 获取总触发次数
+      const totalStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM price_alert_triggers
+        WHERE config_id = ?
+      `);
+      const totalResult = totalStmt.get(configId) as { count: number };
+
+      // 获取今日触发次数
+      const todayStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM price_alert_triggers
+        WHERE config_id = ?
+        AND DATE(triggered_at) = DATE('now')
+      `);
+      const todayResult = todayStmt.get(configId) as { count: number };
+
+      // 获取本周触发次数
+      const weekStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM price_alert_triggers
+        WHERE config_id = ?
+        AND DATE(triggered_at) >= DATE('now', '-7 days')
+      `);
+      const weekResult = weekStmt.get(configId) as { count: number };
+
+      // 获取本月触发次数
+      const monthStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM price_alert_triggers
+        WHERE config_id = ?
+        AND DATE(triggered_at) >= DATE('now', '-30 days')
+      `);
+      const monthResult = monthStmt.get(configId) as { count: number };
+
+      // 获取最后触发时间
+      const lastStmt = this.db.prepare(`
+        SELECT triggered_at
+        FROM price_alert_triggers
+        WHERE config_id = ?
+        ORDER BY triggered_at DESC
+        LIMIT 1
+      `);
+      const lastResult = lastStmt.get(configId) as { triggered_at: string } | undefined;
+
+      // 获取总屏蔽次数
+      const totalBlockedStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM alert_filter_stats
+        WHERE config_id = ?
+      `);
+      const totalBlockedResult = totalBlockedStmt.get(configId) as { count: number };
+
+      // 获取今日屏蔽次数
+      const todayBlockedStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM alert_filter_stats
+        WHERE config_id = ?
+        AND DATE(blocked_at) = DATE('now')
+      `);
+      const todayBlockedResult = todayBlockedStmt.get(configId) as { count: number };
+
+      // 获取本周屏蔽次数
+      const weekBlockedStmt = this.db.prepare(`
+        SELECT COUNT(*) as count
+        FROM alert_filter_stats
+        WHERE config_id = ?
+        AND DATE(blocked_at) >= DATE('now', '-7 days')
+      `);
+      const weekBlockedResult = weekBlockedStmt.get(configId) as { count: number };
+
+      return {
+        totalTriggers: totalResult.count,
+        todayTriggers: todayResult.count,
+        weekTriggers: weekResult.count,
+        monthTriggers: monthResult.count,
+        totalBlocked: totalBlockedResult.count,
+        todayBlocked: todayBlockedResult.count,
+        weekBlocked: weekBlockedResult.count,
+        lastTriggeredAt: lastResult?.triggered_at || null
+      };
+    } catch (error) {
+      log.error('Failed to get alert stats', error);
       throw error;
     }
   }

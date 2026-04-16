@@ -71,7 +71,7 @@ export interface IAdvancedFilterManager {
   filterSymbolList(userId: string, symbols: string[]): Promise<string[]>;
 
   // 过滤统计
-  shouldSendAlert(userId: string, symbol: string, alertType: string): Promise<boolean>;
+  shouldSendAlert(userId: string, symbol: string, alertType: string): Promise<FilterResult>;
 
   // 过滤报告
   generateFilterReport(userId: string): Promise<string>;
@@ -391,42 +391,21 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
   /**
    * 检查是否应该发送警报
    */
-  async shouldSendAlert(userId: string, symbol: string, alertType: string): Promise<boolean> {
+  async shouldSendAlert(userId: string, symbol: string, alertType: string): Promise<FilterResult> {
     try {
       // 标准化symbol格式以确保与存储的格式一致
       const normalizedSymbol = this.normalizeSymbolForFiltering(symbol);
       const filterResult = await this.checkFilter(userId, normalizedSymbol);
 
-      if (filterResult.allowed) {
-        recordBusinessOperation('filter_check', true, {
-          userId,
-          symbol: normalizedSymbol,
-          alertType,
-          result: 'allowed'
-        });
-        return true;
-      }
-
-      // 记录过滤日志和业务监控
-      log.debug('Alert filtered', {
-        userId,
-        originalSymbol: symbol,
-        normalizedSymbol,
-        alertType,
-        reason: filterResult.reason,
-        source: filterResult.source
-      });
-
-      recordBusinessOperation('filter_check', true, {
+      recordBusinessOperation('filter_check', filterResult.allowed, {
         userId,
         symbol: normalizedSymbol,
         alertType,
-        result: 'filtered',
-        reason: filterResult.reason,
-        source: filterResult.source
+        result: filterResult.allowed ? 'allowed' : 'blocked',
+        reason: filterResult.reason
       });
 
-      return false;
+      return filterResult;
 
     } catch (error) {
       log.error('Error checking alert filter', { userId, symbol, alertType, error });
@@ -438,7 +417,13 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       }, error instanceof Error ? error.message : String(error));
 
       // 发生错误时采用保守策略：不发送警报
-      return false;
+      return {
+        allowed: false,
+        reason: '🚫 系统错误，已阻止推送',
+        source: 'system_blacklist',
+        priority: FilterPriority.SYSTEM_BLACKLIST,
+        canOverride: false
+      };
     }
   }
 

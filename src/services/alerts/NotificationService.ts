@@ -289,18 +289,19 @@ export class NotificationService implements INotificationService {
       // 检查用户过滤设置
       if (this.filterManager && context.event.symbol) {
         try {
-          const shouldSend = await this.filterManager.shouldSendAlert(
+          const filterResult = await this.filterManager.shouldSendAlert(
             chatId.toString(),
             context.event.symbol,
             context.event.type
           );
 
-          if (!shouldSend) {
+          if (!filterResult.allowed) {
             this.logger.info('Notification filtered by user settings', {
               alertId: context.event.alertId,
               symbol: context.event.symbol,
               chatId,
-              type: context.event.type
+              type: context.event.type,
+              reason: filterResult.reason
             });
 
             return {
