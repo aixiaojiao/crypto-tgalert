@@ -377,6 +377,13 @@ export class RealtimeMarketCache extends EventEmitter {
   }
 
   /**
+   * 获取所有币种的实时数据快照（只读）
+   */
+  getAllMarketData(): MarketTickerData[] {
+    return Array.from(this.marketData.values());
+  }
+
+  /**
    * 检查缓存是否就绪
    */
   isReady(): boolean {

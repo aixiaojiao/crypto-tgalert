@@ -7,6 +7,8 @@ import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tok
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
 import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
+import { potentialAlertService } from './services/potentialAlertService';
+import { PotentialAlertModel } from './models/potentialAlertModel';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -176,6 +178,7 @@ export class TelegramBot {
 💰 **价格查询**: \`/price\` \`/signals\`
 📊 **排行榜**: \`/rank\` \`/rank_gainers\` \`/rank_losers\` \`/funding\` \`/oi_24h\`
 ⚡ **警报系统**: \`/alert\` \`/alert_bt\` \`/alert_list\` \`/alert_5m_gain_3_all\`
+🎯 **潜力信号**: \`/potential\` \`/potential_on\` \`/potential_off\` \`/potential_status\`
 📈 **历史分析**: \`/high\` \`/high near\`
 🛡️ **过滤管理**: \`/filter_settings\` \`/blacklist_list\` \`/mute_list\`
 ⚙️ **系统状态**: \`/status\` \`/cache_status\`
@@ -303,6 +306,10 @@ export class TelegramBot {
         { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
         { command: 'alert_list', description: '⚡ 查看我的警报列表' },
         { command: 'alert_bt', description: '🚀 历史突破警报' },
+        { command: 'potential', description: '🎯 手动扫描潜力币信号' },
+        { command: 'potential_on', description: '🎯 开启潜力币自动推送' },
+        { command: 'potential_off', description: '🎯 关闭潜力币自动推送' },
+        { command: 'potential_status', description: '🎯 潜力币推送状态' },
         { command: 'blacklist_add', description: '🛡️ 添加个人黑名单' },
         { command: 'blacklist_remove', description: '🛡️ 移除黑名单' },
         { command: 'blacklist_list', description: '🛡️ 查看过滤规则' },
@@ -1038,6 +1045,82 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         log.error('跌幅榜命令处理失败:', error);
         await ctx.reply(`❌ 跌幅榜查询失败，请稍后重试\n\n💡 使用方法：\n/rank_losers [时间] [数量]\n例如：/rank_losers 4h 15`);
+      }
+    });
+
+    // ==================== 潜力币信号推送命令 ====================
+    // 信号定义：1h 窗口内 价格↑≥5% + OI↑≥20% + Funding 负/下降/松动
+    this.bot.command('potential_status', async (ctx) => {
+      try {
+        const status = potentialAlertService.getStatus();
+        const icon = status.enabled ? '🟢' : '🔴';
+        let msg = `${icon} *潜力币信号推送*\n\n`;
+        msg += `• 服务运行: ${status.running ? '✅' : '❌'}\n`;
+        msg += `• 推送开关: ${status.enabled ? '启用' : '禁用'}\n`;
+        msg += `• 扫描间隔: ${status.intervalMin} 分钟\n`;
+        msg += `• 正在扫描: ${status.scanning ? '是' : '否'}\n\n`;
+        msg += `📊 *今日统计:*\n`;
+        msg += `  总触发: ${status.todayStats.total} 次\n`;
+        msg += `  L1 极强: ${status.todayStats.byLevel[1] || 0}\n`;
+        msg += `  L2 强: ${status.todayStats.byLevel[2] || 0}\n`;
+        msg += `  L3 一般: ${status.todayStats.byLevel[3] || 0}\n\n`;
+        msg += `💡 命令：\n`;
+        msg += `\`/potential_on\` - 开启推送\n`;
+        msg += `\`/potential_off\` - 关闭推送\n`;
+        msg += `\`/potential\` - 立即手动扫描一次`;
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        log.error('potential_status command failed', error);
+        await ctx.reply('❌ 查询状态失败');
+      }
+    });
+
+    this.bot.command('potential_on', async (ctx) => {
+      try {
+        PotentialAlertModel.setEnabled(true);
+        await ctx.reply('✅ 潜力币信号推送已开启\n\n下次扫描将在 10 分钟内触发\n使用 /potential 可立即手动扫描');
+        log.info('PotentialAlertService enabled by user');
+      } catch (error) {
+        log.error('potential_on command failed', error);
+        await ctx.reply('❌ 开启失败');
+      }
+    });
+
+    this.bot.command('potential_off', async (ctx) => {
+      try {
+        PotentialAlertModel.setEnabled(false);
+        await ctx.reply('🛑 潜力币信号推送已关闭\n\n定时扫描任务仍在运行但会直接跳过，再开启用 /potential_on');
+        log.info('PotentialAlertService disabled by user');
+      } catch (error) {
+        log.error('potential_off command failed', error);
+        await ctx.reply('❌ 关闭失败');
+      }
+    });
+
+    this.bot.command('potential', async (ctx) => {
+      try {
+        await ctx.reply('🔍 正在扫描市场，这可能需要 30-60 秒...');
+        const results = await potentialAlertService.manualScan();
+        if (results.length === 0) {
+          await ctx.reply('ℹ️ 当前市场没有满足潜力信号的币种');
+          return;
+        }
+        // 按等级从高到低排序
+        results.sort((a, b) => a.level - b.level);
+        // 汇总改为纯文本（避免 Markdown 实体解析错误），用 emoji 区分等级
+        let summary = `🎯 手动扫描结果：共 ${results.length} 个候选\n\n`;
+        for (const r of results) {
+          const icon = r.level === 1 ? '🚨' : r.level === 2 ? '⚡' : '📍';
+          const name = r.symbol.replace('USDT', '');
+          summary += `${icon} L${r.level} ${name} | 价${r.priceChange1h.toFixed(1)}% OI${r.oiChange1h.toFixed(1)}% 费率${(r.fundingRate8h * 100).toFixed(3)}%`;
+          if (r.fundingIntervalHours !== 8) summary += ` ⚠️${r.fundingIntervalHours}h`;
+          summary += `\n`;
+        }
+        summary += `\n💡 开启自动推送用 /potential_on`;
+        await ctx.reply(summary);
+      } catch (error) {
+        log.error('potential command failed', error);
+        await ctx.reply('❌ 手动扫描失败: ' + (error instanceof Error ? error.message : '未知错误'));
       }
     });
 
@@ -1970,6 +2053,17 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 /alert_remove <ID> - 删除价格警报
 /alert_remove T<ID> - 删除急涨急跌警报
 /alert_toggle <ID> - 启用/禁用警报
+
+🎯 潜力币信号 (24h窗口):
+信号定义: 价格↑ + OI↑ + Funding↓/负/松动 = 聪明钱入场信号
+/potential - 立即手动扫描一次当前市场
+/potential_on - 开启后台自动推送 (每10分钟)
+/potential_off - 关闭自动推送
+/potential_status - 查看推送状态和今日统计
+触发条件: 24h价格 ≥+5%, 24h OI ≥+20%, Funding 负/下降/松动
+等级: L1(funding≤-0.5%) / L2(≤-0.1%) / L3(其他)
+冷却: 同级2小时; 等级升高立即推
+自动过滤: 系统黑名单 + 个人黑黄/mute名单
 
 📈 历史分析:
 /high btc 1w - BTC一周高点

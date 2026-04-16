@@ -815,7 +815,7 @@ export class BinanceClient {
   async getFundingRate(symbol: string): Promise<FundingRate> {
     try {
       const response = await this.futuresClient.get('/fapi/v1/fundingRate', {
-        params: { 
+        params: {
           symbol: symbol.toUpperCase(),
           limit: 1
         }
@@ -827,6 +827,30 @@ export class BinanceClient {
       return fundingData;
     } catch (error) {
       log.error(`Failed to get funding rate for ${symbol}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get funding rate history for a symbol (未归一化，返回原始值)
+   * 用于检测"费率松动"：对比当前 vs 最近 N 次的最高值
+   */
+  async getFundingRateHistory(symbol: string, limit: number = 10): Promise<Array<{ symbol: string; fundingRate: number; fundingTime: number }>> {
+    try {
+      const response = await this.futuresClient.get('/fapi/v1/fundingRate', {
+        params: {
+          symbol: symbol.toUpperCase(),
+          limit
+        }
+      });
+
+      return response.data.map((item: any) => ({
+        symbol: item.symbol,
+        fundingRate: parseFloat(item.fundingRate),
+        fundingTime: item.fundingTime
+      }));
+    } catch (error) {
+      log.error(`Failed to get funding rate history for ${symbol}`, error);
       throw error;
     }
   }
@@ -856,14 +880,16 @@ export class BinanceClient {
       return premiumResponse.data.map((item: any) => {
         const currentInterval = fundingIntervalMap.get(item.symbol) || 8;
         const currentRate = parseFloat(item.lastFundingRate);
-        
+
         // Normalize to 8-hour rate: rate_8h = rate_current * (8 / current_interval)
         const normalizedRate = currentRate * (8 / currentInterval);
-        
+
         return {
           symbol: item.symbol,
           fundingRate: normalizedRate.toFixed(8),
-          fundingTime: item.nextFundingTime
+          fundingTime: item.nextFundingTime,
+          markPrice: item.markPrice || '0',
+          fundingIntervalHours: currentInterval
         };
       });
     } catch (error) {

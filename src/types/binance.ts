@@ -180,6 +180,7 @@ export interface FundingRate {
   fundingRate: string;
   fundingTime: number;
   markPrice: string;
+  fundingIntervalHours?: number; // 原始费率周期（小时）; fundingRate 已归一化为 8h 基准
 }
 
 export interface OpenInterest {

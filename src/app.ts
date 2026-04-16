@@ -5,6 +5,8 @@ import { PriceMonitorService } from './services/priceMonitor';
 import { historicalHighCache } from './services/historicalHighCacheV2';
 import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { priceAlertService } from './services/priceAlertService';
+import { potentialAlertService } from './services/potentialAlertService';
+import { PotentialAlertModel } from './models/potentialAlertModel';
 import { tieredDataManager } from './services/tieredDataManager';
 import { binanceRateLimit } from './utils/ratelimit';
 import { stopBusinessMonitor } from './utils/businessMonitor';
@@ -78,6 +80,12 @@ export class CryptoTgAlertApp {
       // 9. 启动健康监控系统
       console.log('🏥 Starting health monitoring system...');
       await this.startHealthMonitoring();
+
+      // 9.5 启动潜力币信号扫描服务（默认关闭，等用户 /potential_on 启用）
+      console.log('🎯 Starting potential alert service...');
+      PotentialAlertModel.initDatabase();
+      potentialAlertService.setTelegramBot(this.telegramBot);
+      await potentialAlertService.start();
 
       console.log('✅ All systems online!');
 
@@ -209,6 +217,7 @@ export class CryptoTgAlertApp {
       console.error('Failed to stop realtime market cache:', err);
     }
     await priceAlertService.stop();
+    await potentialAlertService.stop();
     tieredDataManager.stop();
 
     // 停止业务监控定时器
