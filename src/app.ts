@@ -7,6 +7,8 @@ import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
 import { PotentialAlertModel } from './models/potentialAlertModel';
+import { fundingAlertService } from './services/fundingAlertService';
+import { FundingAlertModel } from './models/fundingAlertModel';
 import { tieredDataManager } from './services/tieredDataManager';
 import { binanceRateLimit } from './utils/ratelimit';
 import { stopBusinessMonitor } from './utils/businessMonitor';
@@ -86,6 +88,12 @@ export class CryptoTgAlertApp {
       PotentialAlertModel.initDatabase();
       potentialAlertService.setTelegramBot(this.telegramBot);
       await potentialAlertService.start();
+
+      // 9.6 启动费率报警服务（默认关闭，等用户 /funding_alert_on 启用）
+      console.log('💸 Starting funding alert service...');
+      FundingAlertModel.initDatabase();
+      fundingAlertService.setTelegramBot(this.telegramBot);
+      await fundingAlertService.start();
 
       console.log('✅ All systems online!');
 
@@ -218,6 +226,7 @@ export class CryptoTgAlertApp {
     }
     await priceAlertService.stop();
     await potentialAlertService.stop();
+    await fundingAlertService.stop();
     tieredDataManager.stop();
 
     // 停止业务监控定时器

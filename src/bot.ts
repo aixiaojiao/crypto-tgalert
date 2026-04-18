@@ -9,6 +9,8 @@ import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
 import { PotentialAlertModel } from './models/potentialAlertModel';
+import { fundingAlertService } from './services/fundingAlertService';
+import { FundingAlertModel } from './models/fundingAlertModel';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -180,6 +182,7 @@ export class TelegramBot {
 📊 **排行榜**: \`/rank\` \`/rank_gainers\` \`/rank_losers\` \`/funding\` \`/oi_24h\`
 ⚡ **警报系统**: \`/alert\` \`/alert_bt\` \`/alert_list\` \`/alert_5m_gain_3_all\`
 🎯 **潜力信号**: \`/potential\` \`/potential_on\` \`/potential_off\` \`/potential_status\`
+💸 **费率报警**: \`/funding_alert_on\` \`/funding_alert_off\` \`/funding_alert_status\`
 📈 **历史分析**: \`/high\` \`/high near\`
 🛡️ **过滤管理**: \`/filter_settings\` \`/black\` \`/yellow\` \`/mute\`
 ⚙️ **系统状态**: \`/status\` \`/cache_status\`
@@ -230,7 +233,9 @@ export class TelegramBot {
   private getSimilarCommands(unknownCommand: string): string[] {
     const availableCommands = [
       'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
-      'debug', 'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential'
+      'debug', 'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential',
+      'funding_alert_on', 'funding_alert_off', 'funding_alert_status',
+      'alert_list', 'alert_remove', 'alert_toggle', 'alert_history', 'alert_bt'
     ];
 
     // 简单的相似度匹配
@@ -307,6 +312,9 @@ export class TelegramBot {
         { command: 'funding', description: '💰 查看资金费率排行' },
         { command: 'oi_24h', description: '📈 24小时持仓量增长榜' },
         { command: 'alert_list', description: '⚡ 查看我的警报列表' },
+        { command: 'alert_remove', description: '⚡ 删除警报 /alert_remove <ID>' },
+        { command: 'alert_toggle', description: '⚡ 启用/禁用警报 /alert_toggle <ID>' },
+        { command: 'alert_history', description: '⚡ 查看警报触发历史' },
         { command: 'alert_bt', description: '🚀 历史突破警报' },
         { command: 'alert_5m_gain_3_all', description: '⚡ 5分钟涨3%全币警报' },
         { command: 'alert_15m_gain_5_all', description: '⚡ 15分钟涨5%全币警报' },
@@ -315,6 +323,9 @@ export class TelegramBot {
         { command: 'potential_on', description: '🎯 开启潜力币自动推送' },
         { command: 'potential_off', description: '🎯 关闭潜力币自动推送' },
         { command: 'potential_status', description: '🎯 潜力币推送状态' },
+        { command: 'funding_alert_on', description: '💸 开启费率报警推送' },
+        { command: 'funding_alert_off', description: '💸 关闭费率报警推送' },
+        { command: 'funding_alert_status', description: '💸 费率报警状态' },
         { command: 'esp32_status', description: '🔊 ESP32 语音推送状态' },
         { command: 'esp32_on', description: '🔊 开启 ESP32 语音推送（可附类型）' },
         { command: 'esp32_off', description: '🔊 关闭 ESP32 语音推送（可附类型）' },
@@ -1139,6 +1150,54 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       }
     });
 
+    // ==================== 费率报警推送命令 ====================
+    // 1天内首次触发：负费率、-0.5%、-1%、-1.5%、周期 4h/1h
+
+    this.bot.command('funding_alert_status', async (ctx) => {
+      try {
+        const status = fundingAlertService.getStatus();
+        let msg = `💸 *费率报警状态*\n\n`;
+        msg += `🔘 推送: ${status.enabled ? '✅ 已开启' : '❌ 已关闭'}\n`;
+        msg += `⏱ 扫描间隔: ${status.intervalMin} 分钟\n`;
+        msg += `🔄 运行中: ${status.running ? '是' : '否'}\n\n`;
+        msg += `📊 *今日触发统计:* ${status.todayStats.total} 次\n`;
+        if (status.todayStats.total > 0) {
+          for (const [type, count] of Object.entries(status.todayStats.byType)) {
+            msg += `  • ${type}: ${count}\n`;
+          }
+        }
+        msg += `\n💡 命令：\n`;
+        msg += `\`/funding_alert_on\` - 开启推送\n`;
+        msg += `\`/funding_alert_off\` - 关闭推送`;
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        log.error('funding_alert_status command failed', error);
+        await ctx.reply('❌ 查询状态失败');
+      }
+    });
+
+    this.bot.command('funding_alert_on', async (ctx) => {
+      try {
+        FundingAlertModel.setEnabled(true);
+        await ctx.reply('✅ 费率报警推送已开启\n\n监控阈值: 负费率 / -0.5% / -1% / -1.5% / 周期4h / 周期1h\n同阈值 4 小时内仅报警一次\n下次扫描将在 10 分钟内触发');
+        log.info('FundingAlertService enabled by user');
+      } catch (error) {
+        log.error('funding_alert_on command failed', error);
+        await ctx.reply('❌ 开启失败');
+      }
+    });
+
+    this.bot.command('funding_alert_off', async (ctx) => {
+      try {
+        FundingAlertModel.setEnabled(false);
+        await ctx.reply('🛑 费率报警推送已关闭\n\n定时扫描任务仍在运行但会直接跳过，再开启用 /funding_alert_on');
+        log.info('FundingAlertService disabled by user');
+      } catch (error) {
+        log.error('funding_alert_off command failed', error);
+        await ctx.reply('❌ 关闭失败');
+      }
+    });
+
     // ========== ESP32 语音推送命令（ouyu-v2 设备网关） ==========
 
     this.bot.command('esp32_status', async (ctx) => {
@@ -1339,11 +1398,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       await ctx.reply(
         '🔄 *命令已优化升级*\n\n' +
         '`/remove_alert` 命令已整合到新的 `/alert` 命令中！\n\n' +
-        '📊 *新用法:*\n' +
-        '• `/alert_remove <ID>` - 删除指定警报\n' +
-        '• `/alert_list` - 查看所有警报和ID\n' +
-        '• `/alert_toggle <ID>` - 启用/禁用警报\n\n' +
-        '✨ *新功能:* 更直观的ID管理，支持批量操作\n\n' +
+        '📊 *新用法 (ID 格式 P/B/V/T + 数字):*\n' +
+        '• `/alert_remove <ID>` - 删除警报 (如 P1, T3)\n' +
+        '• `/alert_list` - 查看所有警报和 ID\n' +
+        '• `/alert_toggle <ID>` - 启用/禁用警报 (如 P1, T3)\n\n' +
         '👆 请使用 `/alert_remove <ID>` 替代此命令',
         { parse_mode: 'Markdown' }
       );
@@ -1640,15 +1698,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       '🔸 **排行榜推送**\n' +
       '• `/alert gainers push` - 开启涨幅榜推送通知\n' +
       '• `/alert funding push` - 开启资金费率推送通知\n\n' +
-      '⚙️ *管理命令:*\n' +
-      '• `/alert_list` - 查看所有警报\n' +
-      '• `/alert_remove <ID>` - 删除指定警报\n' +
-      '• `/alert_toggle <ID>` - 启用/禁用警报\n' +
-      '• `/alert_history` - 查看触发历史\n' +
+      '⚙️ *管理命令 (ID 格式 P/B/V/T + 数字):*\n' +
+      '• `/alert_list` - 查看所有警报和 ID\n' +
+      '• `/alert_remove <ID>` - 删除警报 (如 P1, T3)\n' +
+      '• `/alert_toggle <ID>` - 启用/禁用警报 (如 P1, T3)\n' +
+      '• `/alert_history [ID]` - 查看触发历史\n' +
       '• `/alert_stats` - 查看统计信息\n\n' +
       '💡 *时间框架:* 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d, 1w\n' +
-      '⚡ *智能系统:* 自动避免重复提醒，支持优先级管理\n\n' +
-      '🔗 *迁移提示:* 旧命令如 `/add_alert`, `/alerts` 等已整合到此系统';
+      '⚡ *智能系统:* 自动避免重复提醒，支持优先级管理';
 
     await ctx.replyWithMarkdown(helpMessage);
   }
@@ -1729,10 +1786,9 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         message += `   ⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}\n\n`;
       }
 
-      message += `💡 操作指南:\n`;
-      message += `• 删除警报: /alert_remove <ID>\n`;
-      message += `• 示例: /alert_remove P1 或 /alert_remove B2 或 /alert_remove T3\n`;
-      message += `• 切换: /alert_toggle <ID>\n`;
+      message += `💡 操作指南 (ID 统一格式 P/B/V/T + 数字):\n`;
+      message += `• 删除: /alert_remove <ID>  例: /alert_remove T3\n`;
+      message += `• 启用/禁用: /alert_toggle <ID>  例: /alert_toggle T3\n`;
       message += `• 历史: /alert_history [ID]\n`;
       message += `• 创建新警报: /alert btc > 50000 或 /alert_5m_gain_3_all`;
 
@@ -1758,150 +1814,81 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       const userId = ctx.from?.id?.toString() || 'unknown';
       await ctx.reply(`🗑️ 正在删除警报 ${inputId}...`);
 
-      // 初始化ID管理器
       await AlertIdManager.initialize();
-
-      // 解析ID格式
       const parsedId = AlertIdManager.parseId(inputId);
 
-      if (parsedId) {
-        // 新的简化ID格式 (P1, B2, T3等)
-        if (parsedId.type === 'T') {
-          // 急涨急跌警报
-          const numericId = parsedId.sequence;
+      if (!parsedId) {
+        await ctx.reply('❌ ID 格式无效，请使用 /alert_list 查看有效 ID（如 P1、B2、T3）');
+        return;
+      }
 
-          // 验证警报是否存在且属于当前用户
-          const timeBasedAlerts = await TimeRangeAlertModel.getUserAlerts(userId);
-          const alert = timeBasedAlerts.find(a => a.id === numericId);
-
-          if (!alert) {
-            await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
-            return;
-          }
-
-          // 删除时间基警报
-          const success = await TimeRangeAlertModel.deleteAlert(numericId, userId);
-          if (!success) {
-            await ctx.reply('❌ 删除急涨急跌警报失败');
-            return;
-          }
-
-          // 删除ID管理器中的记录
-          await AlertIdManager.removeId(inputId);
-
-          // 生成描述
-          const symbolText = alert.symbol || '所有代币';
-          const timeText = this.formatTimeframe(alert.timeframe);
-          const typeText = alert.alertType === 'gain' ? '涨幅' : alert.alertType === 'loss' ? '跌幅' : '涨跌幅';
-          const description = `${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%`;
-
-          await ctx.reply(
-            `✅ 急涨急跌警报删除成功！\n\n` +
-            `🗑️ **已删除警报:**\n` +
-            `🚀 ${description}\n` +
-            `🆔 ID: ${inputId}\n` +
-            `⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}`
-          );
-
-        } else {
-          // 价格警报、突破警报等统一警报系统
-          // 先尝试直接查找
-          let alert = await this.unifiedAlertService.getAlert(inputId);
-
-          if (!alert) {
-            // 如果找不到，尝试查找是否有对应的原始ID
-            const originalId = await AlertIdManager.findOriginalById(inputId);
-            if (originalId) {
-              alert = await this.unifiedAlertService.getAlert(originalId);
-            }
-          }
-
-          if (!alert) {
-            await ctx.reply('❌ 警报不存在或ID无效');
-            return;
-          }
-
-          if (alert.metadata?.userId !== userId) {
-            await ctx.reply('❌ 您只能删除自己的警报');
-            return;
-          }
-
-          // 删除警报（使用实际的ID）
-          await this.unifiedAlertService.removeAlert(alert.id);
-
-          // 删除ID管理器中的记录
-          await AlertIdManager.removeId(inputId);
-
-          const description = AlertCommandParser.generateAlertDescription(alert);
-          await ctx.reply(
-            `✅ 警报删除成功！\n\n` +
-            `🗑️ **已删除警报:**\n` +
-            `💰 ${description}\n` +
-            `🆔 ID: ${inputId}`
-          );
+      if (parsedId.type === 'T') {
+        // 急涨急跌警报（存储在 TimeRangeAlertModel）
+        const numericId = await this.resolveTimeAlertDbId(inputId);
+        if (numericId === null) {
+          await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
+          return;
         }
 
-      } else {
-        // 旧的复杂ID格式或T开头的急涨急跌警报（向后兼容）
-        if (inputId.startsWith('T') && inputId.length > 1) {
-          // 急涨急跌警报的旧格式处理
-          const numericId = parseInt(inputId.substring(1));
-          if (isNaN(numericId)) {
-            await ctx.reply('❌ 无效的急涨急跌警报ID格式');
-            return;
-          }
+        const timeBasedAlerts = await TimeRangeAlertModel.getUserAlerts(userId);
+        const alert = timeBasedAlerts.find(a => a.id === numericId);
+        if (!alert) {
+          await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
+          return;
+        }
 
-          const timeBasedAlerts = await TimeRangeAlertModel.getUserAlerts(userId);
-          const alert = timeBasedAlerts.find(a => a.id === numericId);
+        const success = await TimeRangeAlertModel.deleteAlert(numericId, userId);
+        if (!success) {
+          await ctx.reply('❌ 删除急涨急跌警报失败');
+          return;
+        }
+        await priceAlertService.reloadConfigs();
+        await AlertIdManager.removeId(inputId);
 
-          if (!alert) {
-            await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
-            return;
-          }
+        const symbolText = alert.symbol || '所有代币';
+        const timeText = this.formatTimeframe(alert.timeframe);
+        const typeText = alert.alertType === 'gain' ? '涨幅' : alert.alertType === 'loss' ? '跌幅' : '涨跌幅';
+        const description = `${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%`;
 
-          const success = await TimeRangeAlertModel.deleteAlert(numericId, userId);
-          if (!success) {
-            await ctx.reply('❌ 删除急涨急跌警报失败');
-            return;
-          }
+        await ctx.reply(
+          `✅ 急涨急跌警报删除成功！\n\n` +
+          `🗑️ **已删除警报:**\n` +
+          `🚀 ${description}\n` +
+          `🆔 ID: ${inputId}\n` +
+          `⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}`
+        );
+        return;
+      }
 
-          const symbolText = alert.symbol || '所有代币';
-          const timeText = this.formatTimeframe(alert.timeframe);
-          const typeText = alert.alertType === 'gain' ? '涨幅' : alert.alertType === 'loss' ? '跌幅' : '涨跌幅';
-          const description = `${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%`;
-
-          await ctx.reply(
-            `✅ 急涨急跌警报删除成功！\n\n` +
-            `🗑️ **已删除警报:**\n` +
-            `🚀 ${description}\n` +
-            `🆔 ID: ${inputId}\n` +
-            `⏰ 创建时间: ${new Date(alert.createdAt).toLocaleString('zh-CN')}`
-          );
-
-        } else {
-          // 价格警报、突破警报的旧复杂ID格式
-          const alert = await this.unifiedAlertService.getAlert(inputId);
-          if (!alert) {
-            await ctx.reply('❌ 警报不存在或ID无效');
-            return;
-          }
-
-          if (alert.metadata?.userId !== userId) {
-            await ctx.reply('❌ 您只能删除自己的警报');
-            return;
-          }
-
-          await this.unifiedAlertService.removeAlert(inputId);
-
-          const description = AlertCommandParser.generateAlertDescription(alert);
-          await ctx.reply(
-            `✅ 警报删除成功！\n\n` +
-            `🗑️ **已删除警报:**\n` +
-            `💰 ${description}\n` +
-            `🆔 ID: ${inputId}`
-          );
+      // 统一警报系统 (P/B/V)
+      let alert = await this.unifiedAlertService.getAlert(inputId);
+      if (!alert) {
+        const originalId = await AlertIdManager.findOriginalById(inputId);
+        if (originalId) {
+          alert = await this.unifiedAlertService.getAlert(originalId);
         }
       }
+
+      if (!alert) {
+        await ctx.reply('❌ 警报不存在或ID无效');
+        return;
+      }
+
+      if (alert.metadata?.userId !== userId) {
+        await ctx.reply('❌ 您只能删除自己的警报');
+        return;
+      }
+
+      await this.unifiedAlertService.removeAlert(alert.id);
+      await AlertIdManager.removeId(inputId);
+
+      const description = AlertCommandParser.generateAlertDescription(alert);
+      await ctx.reply(
+        `✅ 警报删除成功！\n\n` +
+        `🗑️ **已删除警报:**\n` +
+        `💰 ${description}\n` +
+        `🆔 ID: ${inputId}`
+      );
 
     } catch (error) {
       log.error('Failed to remove alert:', error);
@@ -1915,30 +1902,82 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
    */
   private async handleAlertToggle(ctx: any, args: string[]): Promise<void> {
     if (!args || args.length === 0) {
-      await ctx.reply('❌ 请指定要切换的警报ID\n\n💡 示例: /alert_toggle user123-BTC-1234567890');
+      await ctx.reply('❌ 请指定要切换的警报ID\n\n💡 示例: \n• 价格警报: /alert_toggle P1\n• 突破警报: /alert_toggle B2\n• 急涨急跌警报: /alert_toggle T6');
       return;
     }
 
     try {
-      const alertId = args[0];
+      const inputId = args[0];
+      const userId = ctx.from?.id?.toString() || 'unknown';
       await ctx.reply(`🔄 正在切换警报状态...`);
 
-      // 验证警报是否存在且属于当前用户
-      const alert = await this.unifiedAlertService.getAlert(alertId);
+      await AlertIdManager.initialize();
+      const parsedId = AlertIdManager.parseId(inputId);
+
+      if (!parsedId) {
+        await ctx.reply('❌ ID 格式无效，请使用 /alert_list 查看有效 ID（如 P1、B2、T3）');
+        return;
+      }
+
+      if (parsedId.type === 'T') {
+        // 急涨急跌警报（存储在 TimeRangeAlertModel）
+        const numericId = await this.resolveTimeAlertDbId(inputId);
+        if (numericId === null) {
+          await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
+          return;
+        }
+        const timeBasedAlerts = await TimeRangeAlertModel.getUserAlerts(userId);
+        const alert = timeBasedAlerts.find(a => a.id === numericId);
+
+        if (!alert) {
+          await ctx.reply('❌ 急涨急跌警报不存在或ID无效');
+          return;
+        }
+
+        const newStatus = !alert.isEnabled;
+        const success = await TimeRangeAlertModel.toggleAlert(numericId, newStatus);
+        if (!success) {
+          await ctx.reply('❌ 切换急涨急跌警报状态失败');
+          return;
+        }
+        await priceAlertService.reloadConfigs();
+
+        const symbolText = alert.symbol || '所有代币';
+        const timeText = this.formatTimeframe(alert.timeframe);
+        const typeText = alert.alertType === 'gain' ? '涨幅' : alert.alertType === 'loss' ? '跌幅' : '涨跌幅';
+        const description = `${symbolText} ${timeText}内${typeText} ≥ ${alert.thresholdPercent}%`;
+        const statusText = newStatus ? '🟢 启用' : '🔴 禁用';
+
+        await ctx.reply(
+          `✅ 急涨急跌警报状态更新成功！\n\n` +
+          `🔄 **警报状态:** ${statusText}\n` +
+          `🚀 ${description}\n` +
+          `🆔 ID: ${inputId}`
+        );
+        return;
+      }
+
+      // 价格/突破/成交量等统一警报：先用输入ID查，再回退到 original_id
+      let alert = await this.unifiedAlertService.getAlert(inputId);
+      if (!alert) {
+        const originalId = await AlertIdManager.findOriginalById(inputId);
+        if (originalId) {
+          alert = await this.unifiedAlertService.getAlert(originalId);
+        }
+      }
+
       if (!alert) {
         await ctx.reply('❌ 警报不存在或ID无效');
         return;
       }
 
-      const userId = ctx.from?.id?.toString() || 'unknown';
       if (alert.metadata?.userId !== userId) {
         await ctx.reply('❌ 您只能操作自己的警报');
         return;
       }
 
-      // 切换警报状态
       const newStatus = !alert.enabled;
-      await this.unifiedAlertService.toggleAlert(alertId, newStatus);
+      await this.unifiedAlertService.toggleAlert(alert.id, newStatus);
 
       const description = AlertCommandParser.generateAlertDescription(alert);
       const statusText = newStatus ? '🟢 启用' : '🔴 禁用';
@@ -1947,7 +1986,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         `✅ 警报状态更新成功！\n\n` +
         `🔄 **警报状态:** ${statusText}\n` +
         `📄 ${description}\n` +
-        `🆔 ID: ${alertId}`
+        `🆔 ID: ${inputId}`
       );
 
     } catch (error) {
@@ -2197,11 +2236,12 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 方向: gain(涨),loss(跌),all(涨跌)
 币种: btc,eth,all(全部)等
 
-🔸 警报管理:
-/alert_list - 查看所有警报
-/alert_remove <ID> - 删除价格警报
-/alert_remove T<ID> - 删除急涨急跌警报
-/alert_toggle <ID> - 启用/禁用警报
+🔸 警报管理 (ID 统一格式):
+ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
+/alert_list - 查看所有警报和 ID
+/alert_remove <ID> - 删除警报 (如 P1, B2, T3)
+/alert_toggle <ID> - 启用/禁用警报 (如 P1, T3)
+/alert_history [ID] - 查看触发历史
 
 🎯 潜力币信号 (24h窗口):
 信号定义: 价格↑ + OI↑ + Funding↓/负/松动 = 聪明钱入场信号
@@ -2213,6 +2253,14 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 等级: L1(funding≤-0.5%) / L2(≤-0.1%) / L3(其他)
 冷却: 同级2小时; 等级升高立即推
 自动过滤: 系统黑名单 + 个人黑黄/mute名单
+
+💸 费率报警 (4小时去重窗口):
+/funding_alert_on - 开启费率报警推送
+/funding_alert_off - 关闭费率报警推送
+/funding_alert_status - 查看状态和今日统计
+阈值: 负费率 / -0.5% / -1% / -1.5% (8h归一化)
+周期: 4h / 1h (交易所调整=行情极端)
+每阈值每币种 4 小时内仅报一次
 
 📈 历史分析:
 /high btc 1w - BTC一周高点
@@ -3108,8 +3156,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         isEnabled: true
       };
 
-      // 保存到数据库
+      // 保存到数据库并同步创建简化 ID 映射（T<n>）
       const alertId = await TimeRangeAlertModel.addAlert(alertConfig);
+      await AlertIdManager.migrateExistingId(`T${alertId}`, AlertIdType.PUMP_DUMP, userId);
+      await priceAlertService.reloadConfigs();
 
       // 格式化确认消息
       const symbolText = symbol === 'ALL' ? '所有代币' : symbol;
@@ -3138,6 +3188,20 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       console.error('Time-based alert setup failed:', error);
       await ctx.reply('❌ 设置急涨急跌警报失败，请稍后重试');
     }
+  }
+
+  /**
+   * 将用户输入的简化 ID（如 T2）解析为 price_alert_configs 表的真实主键
+   *
+   * Why: AlertIdManager 的 sequence 和 DB 主键会随着创建/删除而偏移，
+   * 必须通过 original_id 查真实 id。创建警报时已同步写入 mapping，
+   * 不存在 mapping = 该 ID 不存在。
+   */
+  private async resolveTimeAlertDbId(inputId: string): Promise<number | null> {
+    const originalId = await AlertIdManager.findOriginalById(inputId);
+    if (!originalId || !originalId.startsWith('T')) return null;
+    const n = parseInt(originalId.substring(1), 10);
+    return isNaN(n) ? null : n;
   }
 
   /**

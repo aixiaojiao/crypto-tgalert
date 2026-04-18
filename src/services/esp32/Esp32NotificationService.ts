@@ -19,7 +19,8 @@ export type Esp32AlertType =
   | 'breakthrough'
   | 'ranking'
   | 'price'
-  | 'pump_dump';
+  | 'pump_dump'
+  | 'funding';
 
 export const ESP32_ALERT_TYPES: Esp32AlertType[] = [
   'potential',
@@ -27,6 +28,7 @@ export const ESP32_ALERT_TYPES: Esp32AlertType[] = [
   'ranking',
   'price',
   'pump_dump',
+  'funding',
 ];
 
 export interface Esp32ConfigSnapshot {
