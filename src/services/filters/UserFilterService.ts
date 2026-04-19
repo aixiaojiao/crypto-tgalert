@@ -210,6 +210,17 @@ export class UserFilterService implements IUserFilterService {
     const db = await getDatabase();
 
     try {
+      // 先清理已过期的屏蔽规则（避免列表展示已过期条目）
+      const purge = await db.run(`
+        DELETE FROM user_filters
+        WHERE user_id = ? AND filter_type = ?
+          AND expires_at IS NOT NULL AND expires_at < ?
+      `, [userId, 'mute', Date.now()]);
+      const purged = (purge as any)?.changes ?? 0;
+      if (purged > 0) {
+        log.info(`Purged ${purged} expired mute rule(s)`, { userId });
+      }
+
       const rows = await db.all(`
         SELECT * FROM user_filters
         WHERE user_id = ? AND filter_type = ?

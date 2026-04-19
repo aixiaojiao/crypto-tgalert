@@ -10,6 +10,19 @@ import { IAdvancedFilterManager } from '../../filters/AdvancedFilterManager';
 import { fundingAlertService } from '../../fundingAlertService';
 import { potentialAlertService } from '../../potentialAlertService';
 
+type View = {
+  text: string;
+  keyboard: InlineKeyboardMarkup;
+  parseMode: 'Markdown' | 'HTML';
+};
+
+function htmlEscape(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 /**
  * Inline keyboard 菜单
  *
@@ -41,7 +54,7 @@ export class MenuCommandHandler {
       try {
         const userId = String(ctx.from?.id ?? '');
         const view = await this.renderHome(userId);
-        await ctx.reply(view.text, { parse_mode: 'Markdown', reply_markup: view.keyboard });
+        await ctx.reply(view.text, { parse_mode: view.parseMode, reply_markup: view.keyboard });
       } catch (error) {
         log.error('menu command failed', error);
         await ctx.reply('❌ 打开菜单失败');
@@ -124,18 +137,28 @@ export class MenuCommandHandler {
     const view = await this.buildView(page, userId);
     try {
       await ctx.editMessageText(view.text, {
-        parse_mode: 'Markdown',
+        parse_mode: view.parseMode,
         reply_markup: view.keyboard,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      if (!msg.includes('message is not modified')) {
-        log.warn('menu rerender edit failed', { page, err: msg });
+      if (msg.includes('message is not modified')) return;
+      log.warn(`menu rerender edit failed [${page}]: ${msg}`);
+      // Markdown/HTML 解析失败时降级为纯文本重试
+      if (msg.includes("can't parse entities") || msg.includes('entities')) {
+        try {
+          await ctx.editMessageText(view.text, { reply_markup: view.keyboard });
+        } catch (retryErr) {
+          const rm = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          if (!rm.includes('message is not modified')) {
+            log.warn(`menu rerender plain-text retry failed [${page}]: ${rm}`);
+          }
+        }
       }
     }
   }
 
-  private async buildView(page: string, userId: string): Promise<{ text: string; keyboard: InlineKeyboardMarkup }> {
+  private async buildView(page: string, userId: string): Promise<View> {
     switch (page) {
       case 'status':
         return this.renderStatus();
@@ -203,7 +226,7 @@ export class MenuCommandHandler {
 
   // ─────────── 各页面渲染 ───────────
 
-  private async renderHome(userId: string): Promise<{ text: string; keyboard: InlineKeyboardMarkup }> {
+  private async renderHome(userId: string): Promise<View> {
     const fundingOn = FundingAlertModel.isEnabled();
     const potentialOn = PotentialAlertModel.isEnabled();
     let esp32On = false;
@@ -246,21 +269,21 @@ export class MenuCommandHandler {
       ],
     ]).reply_markup;
 
-    return { text, keyboard };
+    return { text, keyboard, parseMode: 'Markdown' };
   }
 
-  private async renderStatus(): Promise<{ text: string; keyboard: InlineKeyboardMarkup }> {
+  private async renderStatus(): Promise<View> {
     // funding
     const fs = fundingAlertService.getStatus();
     const fundingLines = [
-      `🔔 *负费率报警*`,
+      `🔔 <b>负费率报警</b>`,
       `  状态: ${fs.enabled ? '✅ 开启' : '❌ 关闭'} / ${fs.running ? '运行中' : '未运行'}${fs.scanning ? ' / 扫描中' : ''}`,
       `  扫描间隔: ${fs.intervalMin} 分钟`,
       `  今日触发: ${fs.todayStats.total} 次`,
     ];
     if (fs.todayStats.total > 0) {
       for (const [type, cnt] of Object.entries(fs.todayStats.byType)) {
-        fundingLines.push(`    · ${type}: ${cnt}`);
+        fundingLines.push(`    · <code>${htmlEscape(type)}</code>: ${cnt}`);
       }
     }
 
@@ -268,7 +291,7 @@ export class MenuCommandHandler {
     const ps = potentialAlertService.getStatus();
     const potentialLines = [
       ``,
-      `🎯 *潜力币信号*`,
+      `🎯 <b>潜力币信号</b>`,
       `  状态: ${ps.enabled ? '✅ 开启' : '❌ 关闭'} / ${ps.running ? '运行中' : '未运行'}${ps.scanning ? ' / 扫描中' : ''}`,
     ];
     if ((ps as any).intervalMin !== undefined) {
@@ -276,26 +299,26 @@ export class MenuCommandHandler {
     }
 
     // esp32
-    let esp32Lines: string[] = ['', '🔊 *ESP32 语音*'];
+    const esp32Lines: string[] = ['', '🔊 <b>ESP32 语音</b>'];
     try {
       await esp32NotificationService.ensureRow();
       const cfg = await esp32NotificationService.getConfig();
       esp32Lines.push(`  状态: ${cfg.enabled ? '✅ 开启' : '❌ 关闭'}`);
       if (Array.isArray(cfg.enabledTypes) && cfg.enabledTypes.length > 0) {
-        esp32Lines.push(`  允许类型: ${cfg.enabledTypes.join(', ')}`);
+        esp32Lines.push(`  允许类型: ${htmlEscape(cfg.enabledTypes.join(', '))}`);
       }
       if (cfg.cooldownSeconds !== undefined) {
         esp32Lines.push(`  冷却: ${cfg.cooldownSeconds}s`);
       }
       if (cfg.quietStart && cfg.quietEnd) {
-        esp32Lines.push(`  静音时段: ${cfg.quietStart} - ${cfg.quietEnd}`);
+        esp32Lines.push(`  静音时段: ${htmlEscape(cfg.quietStart)} - ${htmlEscape(cfg.quietEnd)}`);
       }
     } catch {
       esp32Lines.push(`  状态: ⚠ 无法读取`);
     }
 
     const text =
-      `📊 *系统状态*\n━━━━━━━━━━━━\n` +
+      `📊 <b>系统状态</b>\n━━━━━━━━━━━━\n` +
       [...fundingLines, ...potentialLines, ...esp32Lines].join('\n');
 
     const keyboard = Markup.inlineKeyboard([
@@ -305,19 +328,19 @@ export class MenuCommandHandler {
       ],
     ]).reply_markup;
 
-    return { text, keyboard };
+    return { text, keyboard, parseMode: 'HTML' };
   }
 
-  private async renderFilter(userId: string): Promise<{ text: string; keyboard: InlineKeyboardMarkup }> {
+  private async renderFilter(userId: string): Promise<View> {
     let summaryText: string;
     try {
       const s = await this.filterManager.getFilterSummary(userId);
       summaryText =
-        `*用户自定义过滤*\n` +
+        `<b>用户自定义过滤</b>\n` +
         `  🚫 黑名单: ${s.userFilters.blacklist}\n` +
         `  ⚠ 黄名单: ${s.userFilters.yellowlist}\n` +
         `  🔇 屏蔽: ${s.userFilters.mute}\n` +
-        `\n*系统级过滤*\n` +
+        `\n<b>系统级过滤</b>\n` +
         `  已下架: ${s.systemFilters.delisted}\n` +
         `  系统黑名单: ${s.systemFilters.blacklist}\n` +
         `  系统黄名单: ${s.systemFilters.yellowlist}\n` +
@@ -329,9 +352,9 @@ export class MenuCommandHandler {
     }
 
     const text =
-      `🛡 *过滤器*\n━━━━━━━━━━━━\n${summaryText}\n\n` +
-      `_新增条目请用命令：/black <sym> | /yellow <sym> | /mute <sym> <时长>_\n` +
-      `_调整阈值：/filter_volume <USDT金额>_`;
+      `🛡 <b>过滤器</b>\n━━━━━━━━━━━━\n${summaryText}\n\n` +
+      `<i>新增条目请用命令：</i> <code>/black &lt;sym&gt;</code> | <code>/yellow &lt;sym&gt;</code> | <code>/mute &lt;sym&gt; &lt;时长&gt;</code>\n` +
+      `<i>调整阈值：</i> <code>/filter_volume &lt;USDT金额&gt;</code>`;
 
     const keyboard = Markup.inlineKeyboard([
       [
@@ -345,10 +368,10 @@ export class MenuCommandHandler {
       ],
     ]).reply_markup;
 
-    return { text, keyboard };
+    return { text, keyboard, parseMode: 'HTML' };
   }
 
-  private async renderList(userId: string, type: 'bl' | 'yl' | 'mu'): Promise<{ text: string; keyboard: InlineKeyboardMarkup }> {
+  private async renderList(userId: string, type: 'bl' | 'yl' | 'mu'): Promise<View> {
     const meta = this.listMeta(type);
 
     let rules: FilterRule[] = [];
@@ -394,7 +417,7 @@ export class MenuCommandHandler {
       Markup.button.callback('⬅ 返回', `${MenuCommandHandler.PREFIX}nav:home`),
     ]);
 
-    return { text, keyboard: Markup.inlineKeyboard(rows).reply_markup };
+    return { text, keyboard: Markup.inlineKeyboard(rows).reply_markup, parseMode: 'Markdown' };
   }
 
   private listMeta(type: 'bl' | 'yl' | 'mu') {
