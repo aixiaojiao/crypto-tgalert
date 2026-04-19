@@ -74,7 +74,7 @@ export class TelegramBot {
     this.yellowlistCommandHandler = new YellowlistCommandHandler(null, log, filterManager, userFilterService);
     this.muteCommandHandler = new MuteCommandHandler(null, log, filterManager, userFilterService);
     this.filterCommandHandler = new FilterCommandHandler(null, log, filterManager, userFilterService);
-    this.menuCommandHandler = new MenuCommandHandler(userFilterService, filterManager);
+    this.menuCommandHandler = new MenuCommandHandler(userFilterService, filterManager, this.unifiedAlertService);
     this.menuCommandHandler.register(this.bot);
 
     this.setupMiddleware();

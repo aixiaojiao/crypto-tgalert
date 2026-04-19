@@ -9,6 +9,11 @@ import { IUserFilterService, FilterRule } from '../../filters/UserFilterService'
 import { IAdvancedFilterManager } from '../../filters/AdvancedFilterManager';
 import { fundingAlertService } from '../../fundingAlertService';
 import { potentialAlertService } from '../../potentialAlertService';
+import { AlertConfig } from '../../alerts/IAlertService';
+import { PersistentAlertService } from '../../alerts/PersistentAlertService';
+import { PriceAlertModel, PriceAlertConfig } from '../../../models/priceAlertModel';
+import { AlertIdManager, AlertIdType } from '../../alerts/AlertIdManager';
+import { AlertCommandParser } from '../../../utils/alertParser';
 
 type View = {
   text: string;
@@ -47,6 +52,7 @@ export class MenuCommandHandler {
   constructor(
     private readonly userFilterService: IUserFilterService,
     private readonly filterManager: IAdvancedFilterManager,
+    private readonly alertService: PersistentAlertService,
   ) {}
 
   register(bot: Telegraf<BotContext>): void {
@@ -114,6 +120,23 @@ export class MenuCommandHandler {
       return;
     }
 
+    // alert:r:<displayId>  /  alert:t:<displayId>
+    if (rest.startsWith('alert:')) {
+      const [op, displayId] = rest.slice('alert:'.length).split(':');
+      if (!op || !displayId) {
+        await ctx.answerCbQuery('❌ 参数错误');
+        return;
+      }
+      const result = op === 'r'
+        ? await this.applyAlertRemove(userId, displayId)
+        : op === 't'
+          ? await this.applyAlertToggle(userId, displayId)
+          : { ok: false, msg: '❓ 未知操作' };
+      await ctx.answerCbQuery(result.msg);
+      await this.rerender(ctx, 'alerts', userId);
+      return;
+    }
+
     // refresh / close（保留首版兼容）
     if (rest === 'refresh') {
       await ctx.answerCbQuery('🔄 已刷新');
@@ -161,7 +184,7 @@ export class MenuCommandHandler {
   private async buildView(page: string, userId: string): Promise<View> {
     switch (page) {
       case 'status':
-        return this.renderStatus();
+        return this.renderStatus(userId);
       case 'filter':
         return this.renderFilter(userId);
       case 'bl':
@@ -170,6 +193,8 @@ export class MenuCommandHandler {
         return this.renderList(userId, 'yl');
       case 'mu':
         return this.renderList(userId, 'mu');
+      case 'alerts':
+        return this.renderAlerts(userId);
       case 'home':
       default:
         return this.renderHome(userId);
@@ -263,6 +288,7 @@ export class MenuCommandHandler {
         Markup.button.callback('⚠ 黄名单', `${MenuCommandHandler.PREFIX}nav:yl`),
         Markup.button.callback('🔇 屏蔽', `${MenuCommandHandler.PREFIX}nav:mu`),
       ],
+      [Markup.button.callback('💰 价格警报', `${MenuCommandHandler.PREFIX}nav:alerts`)],
       [
         Markup.button.callback('🔄 刷新', `${MenuCommandHandler.PREFIX}refresh`),
         Markup.button.callback('❌ 关闭', `${MenuCommandHandler.PREFIX}close`),
@@ -272,7 +298,7 @@ export class MenuCommandHandler {
     return { text, keyboard, parseMode: 'Markdown' };
   }
 
-  private async renderStatus(): Promise<View> {
+  private async renderStatus(userId: string): Promise<View> {
     // funding
     const fs = fundingAlertService.getStatus();
     const fundingLines = [
@@ -317,11 +343,27 @@ export class MenuCommandHandler {
       esp32Lines.push(`  状态: ⚠ 无法读取`);
     }
 
+    // 警报统计
+    const alertLines: string[] = ['', '💰 <b>警报</b>'];
+    try {
+      const { unified, timeBased } = await this.fetchAllAlerts(userId);
+      const unifiedOn = unified.filter(a => a.enabled).length;
+      const timeOn = timeBased.filter(a => a.isEnabled).length;
+      alertLines.push(`  价格警报: ${unified.length} 条 (启用 ${unifiedOn})`);
+      alertLines.push(`  急涨急跌: ${timeBased.length} 条 (启用 ${timeOn})`);
+    } catch (error) {
+      log.warn('menu status: alerts summary failed', error);
+      alertLines.push(`  状态: ⚠ 无法读取`);
+    }
+
     const text =
       `📊 <b>系统状态</b>\n━━━━━━━━━━━━\n` +
-      [...fundingLines, ...potentialLines, ...esp32Lines].join('\n');
+      [...fundingLines, ...potentialLines, ...esp32Lines, ...alertLines].join('\n');
 
     const keyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('💰 管理警报', `${MenuCommandHandler.PREFIX}nav:alerts`),
+      ],
       [
         Markup.button.callback('🔄 刷新', `${MenuCommandHandler.PREFIX}nav:status`),
         Markup.button.callback('⬅ 返回', `${MenuCommandHandler.PREFIX}nav:home`),
@@ -443,5 +485,196 @@ export class MenuCommandHandler {
       listCmd: 'mute_list',
       fetch: (svc: IUserFilterService, uid: string) => svc.getMuteList(uid),
     };
+  }
+
+  // ─────────── 警报子页 ───────────
+
+  /** 同时加载两类警报 */
+  private async fetchAllAlerts(userId: string): Promise<{ unified: AlertConfig[]; timeBased: PriceAlertConfig[] }> {
+    await AlertIdManager.initialize();
+    const [unified, timeBased] = await Promise.all([
+      this.alertService.getUserAlerts(userId),
+      PriceAlertModel.getUserAlerts(userId),
+    ]);
+    return { unified, timeBased };
+  }
+
+  /** 为 alert 找（或迁移生成）一个 displayId */
+  private async ensureDisplayId(
+    alert: { origin: 'unified'; cfg: AlertConfig } | { origin: 'timeBased'; cfg: PriceAlertConfig },
+    userId: string,
+  ): Promise<string> {
+    if (alert.origin === 'unified') {
+      let id = await AlertIdManager.findIdByOriginal(alert.cfg.id);
+      if (!id) {
+        const idType = AlertIdManager.getIdTypeFromAlertType(alert.cfg.type);
+        id = await AlertIdManager.migrateExistingId(alert.cfg.id, idType, userId);
+      }
+      return id;
+    }
+    const original = `T${alert.cfg.id}`;
+    let id = await AlertIdManager.findIdByOriginal(original);
+    if (!id) {
+      id = await AlertIdManager.migrateExistingId(original, AlertIdType.PUMP_DUMP, userId);
+    }
+    return id;
+  }
+
+  private async renderAlerts(userId: string): Promise<View> {
+    let unified: AlertConfig[] = [];
+    let timeBased: PriceAlertConfig[] = [];
+    try {
+      ({ unified, timeBased } = await this.fetchAllAlerts(userId));
+    } catch (error) {
+      log.error('menu alerts fetch failed', error);
+    }
+
+    // 构建展示行和按钮（保留 displayId 映射便于回调）
+    type Row = { displayId: string; enabled: boolean; line: string };
+    const rows: Row[] = [];
+
+    for (const cfg of unified) {
+      const displayId = await this.ensureDisplayId({ origin: 'unified', cfg }, userId);
+      const status = cfg.enabled ? '🟢' : '🔴';
+      const desc = AlertCommandParser.generateAlertDescription(cfg);
+      rows.push({
+        displayId,
+        enabled: cfg.enabled,
+        line: `<code>${htmlEscape(displayId)}</code> ${status} 💰 ${htmlEscape(desc)}`,
+      });
+    }
+    for (const cfg of timeBased) {
+      const displayId = await this.ensureDisplayId({ origin: 'timeBased', cfg }, userId);
+      const status = cfg.isEnabled ? '🟢' : '🔴';
+      const symbolText = cfg.symbol || '所有代币';
+      const timeText = this.formatTimeframe(cfg.timeframe);
+      const typeText = cfg.alertType === 'gain' ? '涨幅' : cfg.alertType === 'loss' ? '跌幅' : '涨跌幅';
+      const desc = `${symbolText} ${timeText} ${typeText}≥${cfg.thresholdPercent}%`;
+      rows.push({
+        displayId,
+        enabled: cfg.isEnabled,
+        line: `<code>${htmlEscape(displayId)}</code> ${status} 🚀 ${htmlEscape(desc)}`,
+      });
+    }
+
+    const total = rows.length;
+    const onCount = rows.filter(r => r.enabled).length;
+    const limit = 15;
+    const shown = rows.slice(0, limit);
+
+    const lines: string[] = [
+      `💰 <b>价格警报</b>（共 ${total} 条 · 启用 ${onCount}）`,
+      `━━━━━━━━━━━━`,
+    ];
+    if (rows.length === 0) {
+      lines.push('<i>尚未创建任何警报</i>');
+      lines.push('');
+      lines.push(`使用 <code>/alert btc &gt; 50000</code> 或 <code>/alert_5m_gain_3_all</code> 创建`);
+    } else {
+      for (const r of shown) lines.push(r.line);
+      if (rows.length > shown.length) {
+        lines.push(`<i>…只显示前 ${limit} 条，其余请用 /alert_list 查看</i>`);
+      }
+    }
+
+    // 按钮：每条一行，两个按钮（toggle / 删除）
+    const btnRows: ReturnType<typeof Markup.button.callback>[][] = [];
+    for (const r of shown) {
+      const toggleCb = `${MenuCommandHandler.PREFIX}alert:t:${r.displayId}`;
+      const removeCb = `${MenuCommandHandler.PREFIX}alert:r:${r.displayId}`;
+      // callback_data 长度检查（64 bytes）
+      if (toggleCb.length > 64 || removeCb.length > 64) continue;
+      const toggleLabel = r.enabled ? `⏸ ${r.displayId}` : `▶ ${r.displayId}`;
+      btnRows.push([
+        Markup.button.callback(toggleLabel, toggleCb),
+        Markup.button.callback(`🗑 ${r.displayId}`, removeCb),
+      ]);
+    }
+    btnRows.push([
+      Markup.button.callback('🔄 刷新', `${MenuCommandHandler.PREFIX}nav:alerts`),
+      Markup.button.callback('⬅ 返回', `${MenuCommandHandler.PREFIX}nav:home`),
+    ]);
+
+    return {
+      text: lines.join('\n'),
+      keyboard: Markup.inlineKeyboard(btnRows).reply_markup,
+      parseMode: 'HTML',
+    };
+  }
+
+  private formatTimeframe(tf: string): string {
+    switch (tf) {
+      case '5m': return '5分钟';
+      case '15m': return '15分钟';
+      case '1h': return '1小时';
+      case '4h': return '4小时';
+      case '1d': return '1日';
+      default: return tf;
+    }
+  }
+
+  // ─────────── 警报操作 ───────────
+
+  private async applyAlertToggle(userId: string, displayId: string): Promise<{ ok: boolean; msg: string }> {
+    try {
+      await AlertIdManager.initialize();
+      const parsed = AlertIdManager.parseId(displayId);
+      if (!parsed) return { ok: false, msg: '❌ ID 格式错误' };
+
+      if (parsed.type === AlertIdType.PUMP_DUMP) {
+        // 急涨急跌：通过 PriceAlertModel
+        const originalId = await AlertIdManager.findOriginalById(displayId);
+        if (!originalId) return { ok: false, msg: '❌ 未找到' };
+        const numId = parseInt(originalId.replace(/^T/, ''), 10);
+        const list = await PriceAlertModel.getUserAlerts(userId);
+        const current = list.find((a: PriceAlertConfig) => a.id === numId);
+        if (!current) return { ok: false, msg: '❌ 未找到' };
+        const next = !current.isEnabled;
+        await PriceAlertModel.toggleAlert(numId, next);
+        log.info(`menu: time alert ${displayId} → ${next ? 'enabled' : 'disabled'}`);
+        return { ok: true, msg: next ? `🟢 ${displayId} 已启用` : `🔴 ${displayId} 已禁用` };
+      }
+
+      // 统一警报
+      const originalId = await AlertIdManager.findOriginalById(displayId);
+      if (!originalId) return { ok: false, msg: '❌ 未找到' };
+      const alert = await this.alertService.getAlert(originalId);
+      if (!alert) return { ok: false, msg: '❌ 未找到' };
+      const next = !alert.enabled;
+      await this.alertService.toggleAlert(originalId, next);
+      log.info(`menu: unified alert ${displayId} → ${next ? 'enabled' : 'disabled'}`);
+      return { ok: true, msg: next ? `🟢 ${displayId} 已启用` : `🔴 ${displayId} 已禁用` };
+    } catch (error) {
+      log.error('menu alert toggle failed', { displayId, error });
+      return { ok: false, msg: '❌ 切换失败' };
+    }
+  }
+
+  private async applyAlertRemove(userId: string, displayId: string): Promise<{ ok: boolean; msg: string }> {
+    try {
+      await AlertIdManager.initialize();
+      const parsed = AlertIdManager.parseId(displayId);
+      if (!parsed) return { ok: false, msg: '❌ ID 格式错误' };
+
+      if (parsed.type === AlertIdType.PUMP_DUMP) {
+        const originalId = await AlertIdManager.findOriginalById(displayId);
+        if (!originalId) return { ok: false, msg: '❌ 未找到' };
+        const numId = parseInt(originalId.replace(/^T/, ''), 10);
+        const ok = await PriceAlertModel.deleteAlert(numId, userId);
+        if (ok) await AlertIdManager.removeId(displayId);
+        log.info(`menu: deleted time alert ${displayId}`);
+        return ok ? { ok: true, msg: `🗑 已删除 ${displayId}` } : { ok: false, msg: '❌ 删除失败' };
+      }
+
+      const originalId = await AlertIdManager.findOriginalById(displayId);
+      if (!originalId) return { ok: false, msg: '❌ 未找到' };
+      await this.alertService.removeAlert(originalId);
+      await AlertIdManager.removeId(displayId);
+      log.info(`menu: deleted unified alert ${displayId}`);
+      return { ok: true, msg: `🗑 已删除 ${displayId}` };
+    } catch (error) {
+      log.error('menu alert remove failed', { displayId, error });
+      return { ok: false, msg: '❌ 删除失败' };
+    }
   }
 }
