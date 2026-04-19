@@ -71,9 +71,17 @@ export class FundingAlertModel {
         CREATE TABLE IF NOT EXISTS funding_rate_state (
           symbol TEXT PRIMARY KEY,
           last_rate_8h REAL NOT NULL,
-          last_scanned_at INTEGER NOT NULL
+          last_scanned_at INTEGER NOT NULL,
+          last_interval_hours INTEGER
         )
       `);
+
+      // 迁移：老版本表没有 last_interval_hours 列，缺则补上（NULL 允许）
+      const cols = this.db.prepare(`PRAGMA table_info(funding_rate_state)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'last_interval_hours')) {
+        this.db.exec(`ALTER TABLE funding_rate_state ADD COLUMN last_interval_hours INTEGER`);
+        log.info('Migrated funding_rate_state: added last_interval_hours column');
+      }
 
       log.info('FundingAlertModel database initialized');
     } catch (error) {
@@ -182,29 +190,36 @@ export class FundingAlertModel {
     this.setConfig('enabled', enabled ? 'true' : 'false');
   }
 
-  // ---- 费率状态（用于边沿触发） ----
+  // ---- 费率/周期状态（用于边沿触发） ----
 
   /**
-   * 获取某 symbol 上次扫描记录的 8h 归一化费率
-   * 返回 null 表示从未记录过
+   * 获取某 symbol 上次扫描记录的状态
+   * 返回 null 表示从未记录过；字段为 null 表示该列历史缺失
    */
-  static getLastRate(symbol: string): number | null {
+  static getLastState(symbol: string): { rate: number; intervalHours: number | null } | null {
     const row = this.db.prepare(
-      `SELECT last_rate_8h FROM funding_rate_state WHERE symbol = ?`
-    ).get(symbol) as { last_rate_8h: number } | undefined;
-    return row?.last_rate_8h ?? null;
+      `SELECT last_rate_8h, last_interval_hours FROM funding_rate_state WHERE symbol = ?`
+    ).get(symbol) as { last_rate_8h: number; last_interval_hours: number | null } | undefined;
+    if (!row) return null;
+    return { rate: row.last_rate_8h, intervalHours: row.last_interval_hours ?? null };
+  }
+
+  /** 保留旧 API 兼容（若有外部引用，仅返回 rate） */
+  static getLastRate(symbol: string): number | null {
+    return this.getLastState(symbol)?.rate ?? null;
   }
 
   /**
-   * upsert 费率状态（每次扫描结束后调用）
+   * upsert 费率/周期状态（每次扫描结束后调用）
    */
-  static upsertRateState(symbol: string, rate: number, ts: number): void {
+  static upsertRateState(symbol: string, rate: number, intervalHours: number, ts: number): void {
     this.db.prepare(`
-      INSERT INTO funding_rate_state (symbol, last_rate_8h, last_scanned_at)
-      VALUES (?, ?, ?)
+      INSERT INTO funding_rate_state (symbol, last_rate_8h, last_scanned_at, last_interval_hours)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(symbol) DO UPDATE SET
         last_rate_8h = excluded.last_rate_8h,
-        last_scanned_at = excluded.last_scanned_at
-    `).run(symbol, rate, ts);
+        last_scanned_at = excluded.last_scanned_at,
+        last_interval_hours = excluded.last_interval_hours
+    `).run(symbol, rate, ts, intervalHours);
   }
 }

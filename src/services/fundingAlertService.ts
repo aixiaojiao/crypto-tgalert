@@ -165,11 +165,16 @@ export class FundingAlertService {
       const fundingRate8h = parseFloat(funding.fundingRate as any);
       const fundingIntervalHours = funding.fundingIntervalHours || 8;
 
-      // 检查费率阈值
-      // negative: 边沿触发（上次 >= 0 且本次 < 0），首次观察只记录不报警
-      // 其他阈值：保持电平触发 + 4h 去重
-      const prevRate = FundingAlertModel.getLastRate(symbol);
+      // 读取上次观察到的状态（费率 + 周期），用于两种边沿判断
+      // - negative: 上次 >= 0 且本次 < 0
+      // - interval_4h / interval_1h: 上次不是该周期且本次变为该周期
+      // 首次观察一律只记录不报警，避免启动期轰炸
+      const prevState = FundingAlertModel.getLastState(symbol);
+      const prevRate = prevState?.rate ?? null;
+      const prevInterval = prevState?.intervalHours ?? null;
 
+      // 检查费率阈值
+      // negative: 边沿触发；其他阈值保持电平触发 + 4h 去重
       for (const { type, threshold, label, icon } of CONFIG.RATE_THRESHOLDS) {
         let triggered: boolean;
         if (type === 'negative') {
@@ -194,12 +199,14 @@ export class FundingAlertService {
         }
       }
 
-      // 更新费率状态（供下一轮扫描做边沿比对）
-      FundingAlertModel.upsertRateState(symbol, fundingRate8h, Date.now());
-
-      // 检查周期阈值
+      // 检查周期阈值（边沿触发：上次不是此周期，本次变为此周期）
+      // 目的是只在交易所主动调整周期时报警，避免把"本来就是 4h"的大量山寨也报出来
       for (const { type, interval, label, icon } of CONFIG.INTERVAL_THRESHOLDS) {
-        if (fundingIntervalHours === interval && !FundingAlertModel.hasAlertedRecently(symbol, type)) {
+        const triggered =
+          prevInterval !== null &&
+          prevInterval !== interval &&
+          fundingIntervalHours === interval;
+        if (triggered) {
           const record: FundingAlertRecord = {
             symbol,
             alertType: type,
@@ -212,6 +219,9 @@ export class FundingAlertService {
           alertCount++;
         }
       }
+
+      // 更新状态（供下一轮扫描做边沿比对）
+      FundingAlertModel.upsertRateState(symbol, fundingRate8h, fundingIntervalHours, Date.now());
     }
 
     const scanTime = Date.now() - scanStart;
