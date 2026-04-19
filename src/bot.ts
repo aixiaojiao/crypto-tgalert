@@ -35,6 +35,7 @@ import { BlacklistCommandHandler } from './services/telegram/commands/BlacklistC
 import { YellowlistCommandHandler } from './services/telegram/commands/YellowlistCommandHandler';
 import { MuteCommandHandler } from './services/telegram/commands/MuteCommandHandler';
 import { FilterCommandHandler } from './services/telegram/commands/FilterCommandHandler';
+import { MenuCommandHandler } from './services/telegram/commands/MenuCommandHandler';
 import { historicalHighCache } from './services/historicalHighCacheV2';
 import { esp32NotificationService, ESP32_ALERT_TYPES } from './services/esp32';
 
@@ -49,6 +50,7 @@ export class TelegramBot {
   private yellowlistCommandHandler: YellowlistCommandHandler;
   private muteCommandHandler: MuteCommandHandler;
   private filterCommandHandler: FilterCommandHandler;
+  private menuCommandHandler: MenuCommandHandler;
 
   constructor() {
     this.bot = new Telegraf<BotContext>(config.telegram.botToken);
@@ -72,6 +74,8 @@ export class TelegramBot {
     this.yellowlistCommandHandler = new YellowlistCommandHandler(null, log, filterManager, userFilterService);
     this.muteCommandHandler = new MuteCommandHandler(null, log, filterManager, userFilterService);
     this.filterCommandHandler = new FilterCommandHandler(null, log, filterManager, userFilterService);
+    this.menuCommandHandler = new MenuCommandHandler();
+    this.menuCommandHandler.register(this.bot);
 
     this.setupMiddleware();
     this.setupCommands();
