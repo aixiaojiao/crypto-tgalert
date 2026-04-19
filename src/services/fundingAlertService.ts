@@ -166,12 +166,21 @@ export class FundingAlertService {
       const fundingIntervalHours = funding.fundingIntervalHours || 8;
 
       // 检查费率阈值
-      for (const { type, threshold, label, icon } of CONFIG.RATE_THRESHOLDS) {
-        const triggered = type === 'negative'
-          ? fundingRate8h < 0
-          : fundingRate8h <= threshold;
+      // negative: 边沿触发（上次 >= 0 且本次 < 0），首次观察只记录不报警
+      // 其他阈值：保持电平触发 + 4h 去重
+      const prevRate = FundingAlertModel.getLastRate(symbol);
 
-        if (triggered && !FundingAlertModel.hasAlertedRecently(symbol, type)) {
+      for (const { type, threshold, label, icon } of CONFIG.RATE_THRESHOLDS) {
+        let triggered: boolean;
+        if (type === 'negative') {
+          triggered = prevRate !== null && prevRate >= 0 && fundingRate8h < 0;
+        } else {
+          triggered = fundingRate8h <= threshold;
+        }
+
+        // negative 已是边沿触发，无需再过 4h 冷却
+        const needsDedup = type !== 'negative';
+        if (triggered && (!needsDedup || !FundingAlertModel.hasAlertedRecently(symbol, type))) {
           const record: FundingAlertRecord = {
             symbol,
             alertType: type,
@@ -184,6 +193,9 @@ export class FundingAlertService {
           alertCount++;
         }
       }
+
+      // 更新费率状态（供下一轮扫描做边沿比对）
+      FundingAlertModel.upsertRateState(symbol, fundingRate8h, Date.now());
 
       // 检查周期阈值
       for (const { type, interval, label, icon } of CONFIG.INTERVAL_THRESHOLDS) {
@@ -263,7 +275,11 @@ export class FundingAlertService {
     }
 
     message += `\n⏰ *触发时间:* ${new Date(r.triggeredAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
-    message += `\n💡 _同一币种同一阈值 4 小时内仅报警一次_`;
+    if (r.alertType === 'negative') {
+      message += `\n💡 _从正/零费率首次转负时触发，持续为负不重复提醒_`;
+    } else {
+      message += `\n💡 _同一币种同一阈值 4 小时内仅报警一次_`;
+    }
 
     return message;
   }

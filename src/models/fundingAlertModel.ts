@@ -67,6 +67,14 @@ export class FundingAlertModel {
         )
       `);
 
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS funding_rate_state (
+          symbol TEXT PRIMARY KEY,
+          last_rate_8h REAL NOT NULL,
+          last_scanned_at INTEGER NOT NULL
+        )
+      `);
+
       log.info('FundingAlertModel database initialized');
     } catch (error) {
       log.error('Failed to initialize FundingAlertModel database', error);
@@ -172,5 +180,31 @@ export class FundingAlertModel {
 
   static setEnabled(enabled: boolean): void {
     this.setConfig('enabled', enabled ? 'true' : 'false');
+  }
+
+  // ---- 费率状态（用于边沿触发） ----
+
+  /**
+   * 获取某 symbol 上次扫描记录的 8h 归一化费率
+   * 返回 null 表示从未记录过
+   */
+  static getLastRate(symbol: string): number | null {
+    const row = this.db.prepare(
+      `SELECT last_rate_8h FROM funding_rate_state WHERE symbol = ?`
+    ).get(symbol) as { last_rate_8h: number } | undefined;
+    return row?.last_rate_8h ?? null;
+  }
+
+  /**
+   * upsert 费率状态（每次扫描结束后调用）
+   */
+  static upsertRateState(symbol: string, rate: number, ts: number): void {
+    this.db.prepare(`
+      INSERT INTO funding_rate_state (symbol, last_rate_8h, last_scanned_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(symbol) DO UPDATE SET
+        last_rate_8h = excluded.last_rate_8h,
+        last_scanned_at = excluded.last_scanned_at
+    `).run(symbol, rate, ts);
   }
 }
