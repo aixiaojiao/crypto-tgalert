@@ -62,10 +62,6 @@ export class UnifiedAlertService implements IAlertService {
     this.lastTriggerTimes.delete(alertId);
     this.cooldownMap.delete(alertId);
 
-    // 释放视觉标识
-    const { AlertCommandParser } = require('../../utils/alertParser');
-    AlertCommandParser.releaseAlertIcon(alertId);
-
     this.logger.info('Alert removed', { alertId });
   }
 
@@ -462,41 +458,29 @@ export class UnifiedAlertService implements IAlertService {
 
     switch (alert.type) {
       case AlertType.PRICE_ABOVE:
-        const aboveIcon = this.getVisualIcon(alert.id, true);
-        return `${aboveIcon} ${symbol} 价格突破上方 ${alert.thresholds.value}! 当前: ${currentValue}`;
+        return `📈 ${symbol} 价格突破上方 ${alert.thresholds.value}! 当前: ${currentValue}`;
 
       case AlertType.PRICE_BELOW:
-        const belowIcon = this.getVisualIcon(alert.id, false);
-        return `${belowIcon} ${symbol} 价格跌破下方 ${alert.thresholds.value}! 当前: ${currentValue}`;
+        return `📉 ${symbol} 价格跌破下方 ${alert.thresholds.value}! 当前: ${currentValue}`;
 
       case AlertType.PRICE_CHANGE:
         const isGain = currentValue >= 0;
-        const changeIcon = this.getVisualIcon(alert.id, isGain);
+        const changeIcon = isGain ? '📈' : '📉';
         const changeText = isGain ? '上涨' : '下跌';
         return `${changeIcon} ${symbol} 24小时${changeText} ${Math.abs(currentValue)}%! 阈值: ${alert.thresholds.value}%`;
 
       case AlertType.VOLUME_SPIKE:
-        const volumeIcon = this.getVisualIcon(alert.id, true);
-        return `${volumeIcon} ${symbol} 交易量异常! 当前: ${currentValue}, 阈值: ${alert.thresholds.value}`;
+        return `📊 ${symbol} 交易量异常! 当前: ${currentValue}, 阈值: ${alert.thresholds.value}`;
 
       case AlertType.BREAKTHROUGH:
-        const breakthroughIcon = this.getVisualIcon(alert.id, true);
-        return `${breakthroughIcon} ${symbol} 突破警报已触发! 当前价格: ${currentValue}`;
+        return `🎯 ${symbol} 突破警报已触发! 当前价格: ${currentValue}`;
 
       case AlertType.MULTI_BREAKTHROUGH:
-        const multiBreakthroughIcon = this.getVisualIcon(alert.id, true);
-        return `${multiBreakthroughIcon} ${symbol} 突破警报已触发! 当前价格: ${currentValue}`;
+        return `🎯 ${symbol} 突破警报已触发! 当前价格: ${currentValue}`;
 
       default:
-        const defaultIcon = this.getVisualIcon(alert.id, true);
-        return `${defaultIcon} ${symbol} 警报触发! 当前值: ${currentValue}`;
+        return `ℹ️ ${symbol} 警报触发! 当前值: ${currentValue}`;
     }
-  }
-
-  private getVisualIcon(alertId: string, isGain: boolean): string {
-    // 动态导入来避免循环依赖
-    const { AlertCommandParser } = require('../../utils/alertParser');
-    return AlertCommandParser.getAlertVisualIcon(alertId, isGain);
   }
 
   private validateAlertConfig(config: AlertConfig): void {

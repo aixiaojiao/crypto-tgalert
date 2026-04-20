@@ -449,12 +449,8 @@ export class PriceAlertService extends EventEmitter {
       const alertTypeText = config.alertType === 'gain' ? '涨幅' :
                            config.alertType === 'loss' ? '跌幅' : '变动';
 
-      // 根据警报ID和涨跌方向获取视觉标识
       const isGain = alertData.changePercent >= 0;
-      const visualIcon = (await import('../utils/alertParser')).AlertCommandParser.getAlertVisualIcon(
-        config.id?.toString() || 'unknown',
-        isGain
-      );
+      const visualIcon = isGain ? '📈' : '📉';
       const alertTitle = isGain ? '拉涨报警' : '下跌报警';
 
       // 组合风险标识

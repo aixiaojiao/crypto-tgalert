@@ -433,7 +433,7 @@ export class PotentialAlertService {
    * 格式化推送消息（参考 /signals 样式）
    */
   private async formatMessage(r: PotentialAlertRecord): Promise<string> {
-    const levelIcon = r.level === 1 ? '🚨' : r.level === 2 ? '⚡' : '📍';
+    const levelIcon = '⚡';
     const levelName = r.level === 1 ? 'L1 极强信号' : r.level === 2 ? 'L2 强信号' : 'L3 潜力信号';
     const displaySymbol = r.symbol.replace('USDT', '');
 

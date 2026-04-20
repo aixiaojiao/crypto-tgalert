@@ -24,16 +24,16 @@ const CONFIG = {
 
   // 费率阈值（8h 归一化后的小数值）
   RATE_THRESHOLDS: [
-    { type: 'negative' as FundingAlertType, threshold: 0, label: '负费率', icon: '🔴' },
-    { type: 'rate_-0.5' as FundingAlertType, threshold: -0.005, label: '-0.5%', icon: '🟠' },
-    { type: 'rate_-1' as FundingAlertType, threshold: -0.01, label: '-1%', icon: '🔥' },
-    { type: 'rate_-1.5' as FundingAlertType, threshold: -0.015, label: '-1.5%', icon: '💀' },
+    { type: 'negative' as FundingAlertType, threshold: 0, label: 'L3 · 负费率', icon: '💸' },
+    { type: 'rate_-0.5' as FundingAlertType, threshold: -0.005, label: 'L2 · 费率 -0.5%', icon: '💸' },
+    { type: 'rate_-1' as FundingAlertType, threshold: -0.01, label: 'L1 · 费率 -1%', icon: '💸' },
+    { type: 'rate_-1.5' as FundingAlertType, threshold: -0.015, label: 'L1+ · 费率 -1.5%', icon: '💸' },
   ],
 
   // 周期阈值
   INTERVAL_THRESHOLDS: [
-    { type: 'interval_4h' as FundingAlertType, interval: 4, label: '4h', icon: '⚠️' },
-    { type: 'interval_1h' as FundingAlertType, interval: 1, label: '1h', icon: '🚨' },
+    { type: 'interval_4h' as FundingAlertType, interval: 4, label: 'L2 · 周期异常 4h', icon: '💸' },
+    { type: 'interval_1h' as FundingAlertType, interval: 1, label: 'L1 · 周期异常 1h', icon: '💸' },
   ],
 
   // 扫描频率
@@ -266,12 +266,7 @@ export class FundingAlertService {
     const fundingPct = (r.fundingRate8h * 100).toFixed(4);
     const isInterval = r.alertType.startsWith('interval_');
 
-    let title: string;
-    if (isInterval) {
-      title = `费率周期异常 — ${displaySymbol}`;
-    } else {
-      title = `费率报警 ${label} — ${displaySymbol}`;
-    }
+    const title = `${label} — ${displaySymbol}`;
 
     let message = `${icon} *${title}*\n\n`;
     message += `💸 *当前费率 (8h):* ${fundingPct}%\n`;

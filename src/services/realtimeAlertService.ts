@@ -326,7 +326,7 @@ export class RealtimeAlertService {
       // TODO: Implement proper user preference checking
 
       // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
-      let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
+      let message = `🏆 *24小时涨幅榜 TOP10*\n\n`;
 
       // 应用用户过滤设置 - 涨幅榜只过滤下架/系统黑名单，mute/黄名单代币加标识显示
       let filteredRankings = currentRankings;
@@ -388,7 +388,7 @@ export class RealtimeAlertService {
               break;
             case 'system_yellowlist':
             case 'user_yellowlist':
-              prefixIcon = '⚠️'; // 黄名单代币显示警告图标
+              prefixIcon = '🟡'; // 黄名单代币
               break;
             case 'user_blacklist':
               prefixIcon = '🔒'; // 用户黑名单显示锁定图标
@@ -457,7 +457,7 @@ export class RealtimeAlertService {
       }
 
       if (filteredNewEntries.length > 0 || filteredPositionChanges.length > 0) {
-        message += `\n🔥 *本次变化:*\n`;
+        message += `\n📊 *本次变化:*\n`;
 
         // 新进入前10
         if (filteredNewEntries.length > 0) {
@@ -474,7 +474,7 @@ export class RealtimeAlertService {
                   break;
                 case 'system_yellowlist':
                 case 'user_yellowlist':
-                  prefixIcon = '⚠️';
+                  prefixIcon = '🟡';
                   break;
                 case 'user_blacklist':
                   prefixIcon = '🔒';
@@ -502,7 +502,7 @@ export class RealtimeAlertService {
                   break;
                 case 'system_yellowlist':
                 case 'user_yellowlist':
-                  prefixIcon = '⚠️';
+                  prefixIcon = '🟡';
                   break;
                 case 'user_blacklist':
                   prefixIcon = '🔒';

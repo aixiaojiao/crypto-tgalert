@@ -55,10 +55,10 @@ const TIER_LABEL: Record<BreakoutTier, string> = {
 };
 
 const TIER_ICON: Record<BreakoutTier, string> = {
-  L3_weak: '📈',
-  L2_mid: '⚡',
-  L1_strong: '🔥',
-  L1_extreme: '🚀',
+  L3_weak: '🎯',
+  L2_mid: '🎯',
+  L1_strong: '🎯',
+  L1_extreme: '🎯',
 };
 
 interface Candidate {
@@ -387,8 +387,8 @@ export class BreakoutAlertService {
 
     let msg = `${icon} *突破 ${tierLabel} — ${display}*\n\n`;
     msg += `💰 当前: \`${formatPrice(r.currentPrice)}\`\n`;
-    msg += `🎯 ${r.timeframe} 高点: \`${formatPrice(r.refHigh)}\` (${highDate})\n`;
-    msg += `📈 突破幅度: *+${r.breakPct.toFixed(2)}%*\n`;
+    msg += `📍 ${r.timeframe} 高点: \`${formatPrice(r.refHigh)}\` (${highDate})\n`;
+    msg += `📊 突破幅度: *+${r.breakPct.toFixed(2)}%*\n`;
     msg += `🔊 放量: 1h 量 × ${r.volumeRatio.toFixed(2)} (> ${CONFIG.VOLUME_MULT_THRESHOLD})\n`;
     msg += `🕒 持续: 未跌破参考高点 ✓\n\n`;
     msg += `⏰ ${new Date(r.triggeredAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}\n`;
