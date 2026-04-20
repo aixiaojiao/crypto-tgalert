@@ -2,7 +2,7 @@ import { TelegramBot } from './bot';
 import { initDatabase } from './database/connection';
 import { BinanceClient, binanceClient } from './services/binance';
 import { PriceMonitorService } from './services/priceMonitor';
-import { historicalHighCache } from './services/historicalHighCacheV2';
+import { historicalHighService } from './services/historicalHighService';
 import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
@@ -75,9 +75,9 @@ export class CryptoTgAlertApp {
       console.log('⚡ Starting price monitoring...');
       await this.priceMonitor.startMonitoring();
 
-      // 8. 初始化历史新高缓存
-      console.log('📈 Initializing historical high cache...');
-      await historicalHighCache.initialize();
+      // 8. 启动历史新高缓存 v3（非阻塞：冷刷新在后台跑）
+      console.log('📈 Starting historical high cache service (v3)...');
+      await historicalHighService.start();
 
       // 9. 启动健康监控系统
       console.log('🏥 Starting health monitoring system...');

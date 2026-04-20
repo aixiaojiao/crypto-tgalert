@@ -1,6 +1,23 @@
 import { AlertConfig, AlertType, BreakthroughCheckResult, BreakthroughAlertMetadata, MarketData } from './IAlertService';
-import { historicalHighCache } from '../historicalHighCacheV2';
+import { historicalHighService } from '../historicalHighService';
+import { HighTimeframe } from '../../models/historicalHighModel';
 import { log } from '../../utils/logger';
+
+/**
+ * 兼容旧警报 metadata 里保存的时间框架（1w/1m/6m/1y/all），
+ * 映射到 v3 的 5 档（7d/30d/180d/52w/ATH）。
+ * 新警报也可直接使用 v3 的 key。
+ */
+function mapToV3Timeframe(tf: string): HighTimeframe | null {
+  switch (tf) {
+    case '1w': case '7d': return '7d';
+    case '1m': case '30d': return '30d';
+    case '6m': case '180d': return '180d';
+    case '1y': case '52w': return '52w';
+    case 'all': case 'ATH': return 'ATH';
+    default: return null;
+  }
+}
 
 /**
  * Breakthrough Detection Service - 突破检测服务
@@ -21,15 +38,22 @@ export class BreakthroughDetectionService {
       // 确保symbol以USDT结尾
       const normalizedSymbol = symbol.endsWith('USDT') ? symbol : symbol + 'USDT';
 
-      // 从历史高价缓存获取数据
-      const historyData = historicalHighCache.queryHistoricalHigh(normalizedSymbol, timeframe);
+      // 映射 timeframe 到 v3
+      const v3tf = mapToV3Timeframe(timeframe);
+      if (!v3tf) {
+        log.warn(`Unsupported timeframe ${timeframe} for breakthrough check`);
+        return null;
+      }
 
-      if (!historyData) {
+      // 从 v3 缓存读取
+      const rec = historicalHighService.queryHigh(normalizedSymbol, v3tf);
+      if (!rec) {
         log.debug(`No historical data found for ${normalizedSymbol} ${timeframe}`);
         return null;
       }
 
-      const { highPrice, highTimestamp } = historyData;
+      const highPrice = rec.highPrice;
+      const highTimestamp = rec.highAt;
 
       // 检查是否为突破
       const isBreakthrough = this.isBreakthroughConditionMet(
@@ -72,31 +96,30 @@ export class BreakthroughDetectionService {
     try {
       const breakthroughs: BreakthroughCheckResult[] = [];
 
-      // 获取所有币种的排名数据（这包含了当前价格和历史高点）
-      const rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 500);
+      // 映射 timeframe 到 v3
+      const v3tf = mapToV3Timeframe(timeframe);
+      if (!v3tf) {
+        log.warn(`Unsupported timeframe ${timeframe} for multi-breakthrough`);
+        return [];
+      }
 
-      for (const ranking of rankings) {
-        if (!ranking || !ranking.symbol || !ranking.currentPrice || !ranking.highPrice) {
-          continue;
-        }
+      // v3 排名：当前价已超过高点的 symbol 会是 distancePercent < 0
+      const rankings = await historicalHighService.getRankingByProximityToHigh(v3tf, 500);
 
-        // 检查是否突破（当前价格超过历史高点）
-        if (ranking.currentPrice > ranking.highPrice) {
-          const breakAmount = ranking.currentPrice - ranking.highPrice;
-          const breakPercentage = ((ranking.currentPrice - ranking.highPrice) / ranking.highPrice) * 100;
-
-          // 只有突破幅度超过最小阈值才算有效突破
-          if (breakPercentage >= minBreakPercentage) {
-            breakthroughs.push({
-              symbol: ranking.symbol,
-              currentPrice: ranking.currentPrice,
-              timeframeHigh: ranking.highPrice,
-              highTimestamp: ranking.highTimestamp,
-              isBreakthrough: true,
-              breakAmount,
-              breakPercentage
-            });
-          }
+      for (const r of rankings) {
+        if (r.currentPrice <= r.highPrice) continue;
+        const breakAmount = r.currentPrice - r.highPrice;
+        const breakPercentage = ((r.currentPrice - r.highPrice) / r.highPrice) * 100;
+        if (breakPercentage >= minBreakPercentage) {
+          breakthroughs.push({
+            symbol: r.symbol,
+            currentPrice: r.currentPrice,
+            timeframeHigh: r.highPrice,
+            highTimestamp: r.highAt,
+            isBreakthrough: true,
+            breakAmount,
+            breakPercentage,
+          });
         }
       }
 
@@ -208,11 +231,11 @@ export class BreakthroughDetectionService {
   ): string {
     const symbol = result.symbol.replace('USDT', '');
     const timeframeNames: Record<string, string> = {
-      '1w': '1周',
-      '1m': '1个月',
-      '6m': '6个月',
-      '1y': '1年',
-      'all': '历史'
+      '1w': '7天', '7d': '7天',
+      '1m': '30天', '30d': '30天',
+      '6m': '180天', '180d': '180天',
+      '1y': '52周', '52w': '52周',
+      'all': '历史', 'ATH': '历史',
     };
 
     const timeframeName = timeframeNames[timeframe] || timeframe;
