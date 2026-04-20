@@ -147,7 +147,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
         const reason = await this.userFilterService.getFilterReason(userId, normalizedSymbol);
         return {
           allowed: true,
-          reason: reason || '⚠️ 个人黄名单，谨慎交易',
+          reason: reason || '🟡 个人黄名单，谨慎交易',
           source: 'user_yellowlist',
           priority: FilterPriority.USER_YELLOWLIST,
           canOverride: true
@@ -163,7 +163,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
     if (isTokenInList(cleanSymbol, YELLOWLIST_TOKENS)) {
       return {
         allowed: true,  // 🔧 FIX: 黄名单代币应该允许推送但加风险标识
-        reason: '⚠️ 系统警告代币，谨慎交易',
+        reason: '🟡 系统警告代币，谨慎交易',
         source: 'system_yellowlist',
         priority: FilterPriority.SYSTEM_YELLOWLIST,
         canOverride: true
@@ -191,7 +191,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       if (!filterResult.allowed && !filterResult.canOverride) {
         return {
           success: false,
-          message: `❌ 无法添加 ${symbol}：${filterResult.reason.replace(/^[🚫⛔⚠️🔒🔇]\s*/, '')}`
+          message: `❌ 无法添加 ${symbol}：${filterResult.reason.replace(/^[🚫⛔⚠️🔒🔇🟡]\s*/, '')}`
         };
       }
 
@@ -201,7 +201,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       if (filterResult.source === 'system_yellowlist') {
         return {
           success: true,
-          message: `✅ 已将 ${symbol} 添加到个人黑名单\n   原状态：⚠️ 系统黄名单 → 🔒 个人黑名单`
+          message: `✅ 已将 ${symbol} 添加到个人黑名单\n   原状态：🟡 系统黄名单 → 🔒 个人黑名单`
         };
       }
 
@@ -269,7 +269,7 @@ export class AdvancedFilterManager implements IAdvancedFilterManager {
       if (!filterResult.allowed && !filterResult.canOverride) {
         return {
           success: false,
-          message: `❌ 无法添加 ${symbol}：${filterResult.reason.replace(/^[🚫⛔⚠️🔒🔇]\s*/, '')}`
+          message: `❌ 无法添加 ${symbol}：${filterResult.reason.replace(/^[🚫⛔⚠️🔒🔇🟡]\s*/, '')}`
         };
       }
 

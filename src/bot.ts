@@ -345,10 +345,10 @@ export class TelegramBot {
         { command: 'black_list', description: '🛡️ 查看黑名单' },
         { command: 'black_remove', description: '🛡️ 移除黑名单' },
         { command: 'black_clear', description: '🛡️ 清空黑名单' },
-        { command: 'yellow', description: '⚠️ 添加黄名单 /yellow <symbol>' },
-        { command: 'yellow_list', description: '⚠️ 查看黄名单' },
-        { command: 'yellow_remove', description: '⚠️ 移除黄名单' },
-        { command: 'yellow_clear', description: '⚠️ 清空黄名单' },
+        { command: 'yellow', description: '🟡 添加黄名单 /yellow <symbol>' },
+        { command: 'yellow_list', description: '🟡 查看黄名单' },
+        { command: 'yellow_remove', description: '🟡 移除黄名单' },
+        { command: 'yellow_clear', description: '🟡 清空黄名单' },
         { command: 'mute', description: '🔇 屏蔽 /mute <symbol> <时长>' },
         { command: 'mute_list', description: '🔇 查看屏蔽列表' },
         { command: 'mute_remove', description: '🔇 解除屏蔽' },
@@ -647,7 +647,7 @@ export class TelegramBot {
             if (systemRiskIcon) {
               riskIcon = systemRiskIcon + ' ';
             } else if (isInUserYellowlist) {
-              riskIcon = '⚠️ ';
+              riskIcon = '🟡 ';
             }
           } catch (riskError: any) {
             console.log('Risk check failed:', riskError?.message || riskError);
@@ -2332,7 +2332,7 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 /black_list - 查看
 /black_clear - 清空
 
-⚠️ 黄名单(警告标记):
+🟡 黄名单(警告标记):
 /yellow <symbol> [reason] - 添加黄名单
 /yellow_remove <symbol> - 移除
 /yellow_list - 查看

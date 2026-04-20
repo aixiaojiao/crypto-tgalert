@@ -266,7 +266,7 @@ export class FilterCommandHandler extends BaseCommandHandler {
       message += '🏛️ **系统级过滤:**\n';
       message += `• 🚫 已下架代币: ${summary.systemFilters.delisted}个\n`;
       message += `• ⛔ 风险代币: ${summary.systemFilters.blacklist}个\n`;
-      message += `• ⚠️ 警告代币: ${summary.systemFilters.yellowlist}个\n`;
+      message += `• 🟡 警告代币: ${summary.systemFilters.yellowlist}个\n`;
       message += `• 小计: ${summary.systemFilters.delisted + summary.systemFilters.blacklist + summary.systemFilters.yellowlist}个\n\n`;
 
       // 用户级过滤详情

@@ -183,14 +183,14 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
 
       // 个人黄名单
       if (yellowlist.length > 0) {
-        message += '⚠️ **个人黄名单:**\n';
+        message += '🟡 **个人黄名单:**\n';
         yellowlist.forEach((rule, index) => {
           const reason = rule.reason ? ` (${rule.reason})` : '';
           message += `   ${index + 1}. ${rule.symbol}${reason}\n`;
         });
         message += '\n';
       } else {
-        message += '⚠️ **个人黄名单:** 空\n\n';
+        message += '🟡 **个人黄名单:** 空\n\n';
       }
 
       // 临时屏蔽
@@ -282,7 +282,7 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
       }
 
       // 警告代币
-      message += '⚠️ **警告代币 (谨慎交易):**\n';
+      message += '🟡 **警告代币 (谨慎交易):**\n';
       if (systemFilters.yellowlist.length > 0) {
         message += `   ${systemFilters.yellowlist.join(', ')}\n\n`;
       } else {
