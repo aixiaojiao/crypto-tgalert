@@ -2,6 +2,7 @@ import { BaseCommandHandler } from './BaseCommandHandler';
 import { BotContext, CommandResult } from '../ICommandHandler';
 import { IAdvancedFilterManager } from '../../filters/AdvancedFilterManager';
 import { IUserFilterService } from '../../filters/UserFilterService';
+import { refreshVolumeThreshold } from '../../../config/volumeConfig';
 
 /**
  * 过滤设置命令处理器
@@ -146,6 +147,9 @@ export class FilterCommandHandler extends BaseCommandHandler {
       await this.userFilterService.updateSettings(userId, {
         volume_threshold: volumeThreshold
       });
+
+      // 运行时服务使用的是内存缓存的阈值，写完 DB 后必须立即刷新，否则下次撞库前仍是旧值
+      await refreshVolumeThreshold();
 
       const displayVolume = (volumeThreshold / 1000000).toFixed(0);
       let message = `✅ 交易量阈值已设置为 ${displayVolume}M USDT`;

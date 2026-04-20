@@ -8,12 +8,12 @@ import {
   ALL_TIMEFRAMES,
 } from '../models/historicalHighModel';
 import type { Kline, FuturesSymbolInfo, FuturesTicker24hr } from '../types/binance';
+import { getVolumeThreshold } from '../config/volumeConfig';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
-// 死币过滤阈值（可调）
-const MIN_VOLUME_USDT_24H = 1_000_000;          // 24h 成交额 < 1M USDT 视为死币
+// 死币过滤：下限改为运行时从 volumeConfig 读取
 const HIGH_VOLUME_USDT_24H = 50_000_000;        // 成交额 >= 50M USDT 的币跳过振幅检查（主流币波动小也算活跃）
 const MIN_24H_AMPLITUDE_PCT = 3;                // 24h 振幅 < 3% 且成交额 < 50M 视为死币
 
@@ -465,7 +465,7 @@ export class HistoricalHighService {
       if (isRiskyToken(symbol)) continue;
       const vol = volumeMap.get(symbol) ?? 0;
       // 成交额太低直接剔除
-      if (vol < MIN_VOLUME_USDT_24H) continue;
+      if (vol < getVolumeThreshold()) continue;
       // 高成交额（主流币/活跃币）跳过振幅检查；中低成交额要求 24h 振幅 >= 3%
       if (vol < HIGH_VOLUME_USDT_24H) {
         const amp = amplitude24hMap.get(symbol) ?? 0;

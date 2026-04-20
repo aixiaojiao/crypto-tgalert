@@ -9,6 +9,7 @@ import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { realtimeMarketCache } from './realtimeMarketCache';
 import { esp32NotificationService } from './esp32';
+import { isLowVolume } from '../config/volumeConfig';
 
 export interface PriceSnapshot {
   symbol: string;
@@ -55,9 +56,20 @@ export class PriceAlertService extends EventEmitter {
   // 1分钟内防重复通知记录 (symbol:timeframe -> 最后触发时间)
   private recentTriggers: Map<string, {changePercent: number, price: number, timestamp: number}> = new Map();
 
+  // 所有支持的时间周期到窗口毫秒的映射（按需激活，不再全量初始化）
+  private static readonly TIMEFRAME_WINDOW_MS: Record<string, number> = {
+    '1m': 1 * 60 * 1000,
+    '5m': 5 * 60 * 1000,
+    '15m': 15 * 60 * 1000,
+    '30m': 30 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '3d': 3 * 24 * 60 * 60 * 1000,
+  };
+
   constructor() {
     super();
-    this.initializeTimeframes();
 
     // Initialize filter manager
     try {
@@ -68,30 +80,45 @@ export class PriceAlertService extends EventEmitter {
   }
 
   /**
-   * 初始化时间周期数据结构
+   * 根据当前启用的报警配置，同步 timeframes Map：
+   *   - 加入缺失的已启用 timeframe
+   *   - 删除不再被任何配置使用的 timeframe（同步清空其 snapshots 释放内存）
+   * 在 loadAlertConfigs 之后调用，以及用户增删改配置后调用 reloadConfigs 间接触发。
    */
-  private initializeTimeframes(): void {
-    const timeframeConfigs = [
-      { timeframe: '1m', windowMs: 1 * 60 * 1000 },
-      { timeframe: '5m', windowMs: 5 * 60 * 1000 },
-      { timeframe: '15m', windowMs: 15 * 60 * 1000 },
-      { timeframe: '30m', windowMs: 30 * 60 * 1000 },
-      { timeframe: '1h', windowMs: 60 * 60 * 1000 },
-      { timeframe: '4h', windowMs: 4 * 60 * 60 * 1000 },
-      { timeframe: '24h', windowMs: 24 * 60 * 60 * 1000 },
-      { timeframe: '3d', windowMs: 3 * 24 * 60 * 60 * 1000 }
-    ];
+  private syncTimeframesToConfigs(): void {
+    const neededTimeframes = new Set<string>();
+    for (const config of this.alertConfigs.values()) {
+      if (config.isEnabled && config.timeframe) {
+        neededTimeframes.add(config.timeframe);
+      }
+    }
 
-    for (const config of timeframeConfigs) {
-      this.timeframes.set(config.timeframe, {
-        timeframe: config.timeframe,
-        windowMs: config.windowMs,
-        snapshots: new Map()
+    // 移除不再需要的 timeframe（释放 snapshots 内存）
+    for (const tf of Array.from(this.timeframes.keys())) {
+      if (!neededTimeframes.has(tf)) {
+        const data = this.timeframes.get(tf);
+        if (data) data.snapshots.clear();
+        this.timeframes.delete(tf);
+      }
+    }
+
+    // 新增缺失的 timeframe
+    for (const tf of neededTimeframes) {
+      if (this.timeframes.has(tf)) continue;
+      const windowMs = PriceAlertService.TIMEFRAME_WINDOW_MS[tf];
+      if (!windowMs) {
+        log.warn(`Unknown timeframe in alert config, skipping: ${tf}`);
+        continue;
+      }
+      this.timeframes.set(tf, {
+        timeframe: tf,
+        windowMs,
+        snapshots: new Map(),
       });
     }
 
-    log.info('Price alert timeframes initialized', {
-      timeframes: Array.from(this.timeframes.keys())
+    log.info('Price alert timeframes synced to active configs', {
+      timeframes: Array.from(this.timeframes.keys()),
     });
   }
 
@@ -119,6 +146,7 @@ export class PriceAlertService extends EventEmitter {
     // 确保数据库已初始化，然后加载配置
     if (PriceAlertModel.isDatabaseInitialized()) {
       await this.loadAlertConfigs();
+      this.syncTimeframesToConfigs();
     } else {
       log.warn('Database not initialized, will load configs later when available');
     }
@@ -200,6 +228,11 @@ export class PriceAlertService extends EventEmitter {
    * 检查报警条件
    */
   private async checkAlertConditions(symbol: string, currentSnapshot: PriceSnapshot): Promise<void> {
+
+    // 全局规则：<30M (可配置) 的低成交量代币不触发任何价格报警
+    if (isLowVolume(currentSnapshot.volume24h)) {
+      return;
+    }
 
     for (const config of this.alertConfigs.values()) {
       // 跳过已禁用的配置
@@ -530,6 +563,7 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
   async reloadConfigs(): Promise<void> {
     if (PriceAlertModel.isDatabaseInitialized()) {
       await this.loadAlertConfigs();
+      this.syncTimeframesToConfigs();
     } else {
       log.warn('Database not initialized, cannot reload configs');
     }
@@ -571,9 +605,11 @@ $${formattedFromPrice} → $${formattedToPrice}${backgroundInfo}
     const now = Date.now();
     let cleanedCount = 0;
 
-    // 清理过期的触发记录 (保留5分钟)
+    // 清理过期的触发记录：按该 key 自身的冷却时长判断，避免长周期(1h/4h)冷却被提前清空
     for (const [key, record] of this.recentTriggers.entries()) {
-      if (now - record.timestamp > 5 * 60 * 1000) {
+      const timeframe = key.split(':')[1];
+      const cooldownMs = this.calculateCooldownMs(timeframe);
+      if (now - record.timestamp > cooldownMs) {
         this.recentTriggers.delete(key);
         cleanedCount++;
       }

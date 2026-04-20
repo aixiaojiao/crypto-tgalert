@@ -2,6 +2,88 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.0] - 2026-04-20
+
+### 💧 低成交量全局标记 + 统一阈值体系
+
+新增以 `user_filter_settings.volume_threshold` 为单一真源的全局成交量阈值（默认 30M USDT），取代此前散落 6 处的硬编码阈值。低于阈值的代币：(a) 不触发任何主动推送；(b) 出现在用户主动查询的榜单中时仍显示，但统一加 💧 标记。
+
+**新增模块**: `src/config/volumeConfig.ts`
+- `refreshVolumeThreshold()` — 从 DB 读取并缓存阈值（`max(volume_threshold)`，默认 30M）
+- `getVolumeThreshold()` / `isLowVolume(v)` / `getVolumeIcon(v)` — 运行时查询接口
+- `/filter_volume <N>` 更新 DB 后立即调用 `refreshVolumeThreshold()` 刷新内存缓存，无需重启
+
+**🐛 关键 Bug：Binance `!ticker@arr` 使用了错误的 volume 字段**
+- `binanceWebSocket.ts:137/288/325` 此前取 `data.v`（base 成交量，token 数量），与 30M USDT 阈值比较语义错误
+- 现象：`GUN`（单价 $0.024，token 数 >30M）被当成高流动性漏标；`TRADOOR`（单价 $7.77，token 数 <30M）被正确标记
+- 修复：改用 `data.q`（quote 成交量，USDT 金额）
+
+**推送硬拦截（<30M 不推）**
+- `priceAlertService.ts:checkAlertConditions` 前置 `isLowVolume(volume24h)` 判断 → 直接 return，不触发、不占 cooldown
+- `realtimeAlertService.ts:handleRankingChangeEvent` 排名变化事件过滤低量币，若过滤后无可推变化则放弃本次推送
+
+**展示标记（💧 前缀）**
+- `bot.ts`: `/rank_gainers` / `/rank_losers` / `/funding` / `/oi` / `/potential` 五处榜单渲染
+- `realtimeAlertService.ts`: 实时涨幅榜 TOP10 行、🆕 新进入、⬆️/⬇️ 排名大幅变化 三处渲染
+- `/oi` 顺手补上此前缺失的 `riskIcon`
+- `/rank_gainers` / `/rank_losers` 取消硬编码 10K USDT 下限（传 0），改为全展示 + 低量加 💧
+
+**统一四服务阈值来源**
+| 服务 | 原硬编码 | 改动 |
+|---|---|---|
+| `potentialAlertService.ts` | 30M | → `getVolumeThreshold()` |
+| `fundingAlertService.ts` | 30M | → `getVolumeThreshold()` |
+| `breakoutAlertService.ts` | 1M | → `getVolumeThreshold()` |
+| `historicalHighService.ts` | 1M | → `getVolumeThreshold()` |
+
+**DB 迁移**
+- `schema.ts` 默认值 `10000000` → `30000000`
+- `UserFilterService.ts` 新建记录默认值同步
+- 生产库单一已有用户记录从 10M 迁移到 30M
+
+---
+
+### 🧠 PriceAlertService 内存优化（timeframes 按需激活）
+
+#### 问题
+- 服务对 8 个时间框架（1m/5m/15m/30m/1h/4h/24h/3d）全量缓存 710+ 交易对的 price snapshots，不论配置中是否启用
+- PM2 配置 `max_memory_restart: '500M'`，每 1.5-2 小时被动重启一次（日志显示过去 48 小时内 30 次 max-memory-restart 事件）
+- 实测内存增速 **7.8 MB/min**，90 分钟后撞 500MB 上限
+
+#### 修复
+`src/services/priceAlertService.ts`
+- 删除构造函数中无条件的 `initializeTimeframes()`
+- 新增 `syncTimeframesToConfigs()`：按 `alertConfigs` 中启用配置动态增删 timeframe 桶；被删除的桶同步清空 snapshots Map 释放内存
+- 挂接点：`start()`（loadAlertConfigs 之后）、`reloadConfigs()`（用户 CRUD 后）
+- 生产只有 1 条 1h 配置启用 → timeframe 从 8 个压到 1 个
+
+#### 效果
+- 增速降至 **4.7 MB/min**（-40%），撞 500MB 延后至 ~85 分钟
+- 残余内存增长源（realtimeMarketCache / WebSocket 订阅累积等）待后续排查
+
+---
+
+### 🐛 PriceAlertService 冷却清理 Bug 修复
+
+#### 问题
+`cleanupExpiredCooldowns()` 硬编码保留 5 分钟记录，但 1h 时间框架冷却为 30 分钟、4h 为 2 小时。5 分钟后记录被清空 → `globalRecent` 为 undefined → 绕过冷却，重复推送。
+
+实测：`GUNUSDT 1h` 冷却本应 30 分钟，实际 14:01 → 14:08 → 14:25 → 14:33 连续四次触发（间隔 7-17 分钟），日志显示 `MUSDT` 单小时推送 40 次。
+
+#### 修复
+`src/services/priceAlertService.ts:cleanupExpiredCooldowns`
+```ts
+// 按每个 key 自身的 calculateCooldownMs(timeframe) 判断过期，
+// 不再硬编码 5 分钟
+const timeframe = key.split(':')[1];
+const cooldownMs = this.calculateCooldownMs(timeframe);
+if (now - record.timestamp > cooldownMs) {
+  this.recentTriggers.delete(key);
+}
+```
+
+---
+
 ## [2.6.9] - 2025-09-23
 
 ### 🔧 **系统级过滤机制优化与统一**

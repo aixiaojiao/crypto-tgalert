@@ -16,6 +16,7 @@ import { binanceRateLimit } from './utils/ratelimit';
 import { stopBusinessMonitor } from './utils/businessMonitor';
 import { getServiceRegistry } from './core/container';
 import { startHealthMonitoring as startHealthMonitoringUtil } from './utils/health';
+import { refreshVolumeThreshold } from './config/volumeConfig';
 
 /**
  * 完整的应用程序类 - 集成所有组件
@@ -42,6 +43,9 @@ export class CryptoTgAlertApp {
       // 1. 初始化数据库
       console.log('📊 Initializing database...');
       await initDatabase();
+
+      // 1.5 加载全局成交量阈值 (用于所有 feature 的 <30M 判定)
+      await refreshVolumeThreshold();
 
       // 2. 初始化服务注册表
       console.log('🔧 Initializing service registry...');

@@ -4,6 +4,7 @@ import { authMiddleware } from './middleware/auth';
 import { BotContext, BotStatus } from './types';
 import { BinanceClient, binanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
+import { getVolumeIcon } from './config/volumeConfig';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
 import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
@@ -910,7 +911,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             priceText = '';
           }
 
-          return `${index + 1}. ${icon} ${riskIcon}**${symbol}** ${fundingPercent}%${priceText}\n`;
+          const volumeIcon = getVolumeIcon(realtimeMarketCache.getTickerData(rate.symbol)?.volume);
+          return `${index + 1}. ${icon} ${volumeIcon}${riskIcon}**${symbol}** ${fundingPercent}%${priceText}\n`;
         });
 
         const formattedEntries = await Promise.all(pricePromises);
@@ -1148,7 +1150,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         for (const r of results) {
           const icon = r.level === 1 ? '🚨' : r.level === 2 ? '⚡' : '📍';
           const name = r.symbol.replace('USDT', '');
-          summary += `${icon} L${r.level} ${name} | 价${r.priceChange1h.toFixed(1)}% OI${r.oiChange1h.toFixed(1)}% 费率${(r.fundingRate8h * 100).toFixed(3)}%`;
+          const volumeIcon = getVolumeIcon(realtimeMarketCache.getTickerData(r.symbol)?.volume);
+          summary += `${icon} L${r.level} ${volumeIcon}${name} | 价${r.priceChange1h.toFixed(1)}% OI${r.oiChange1h.toFixed(1)}% 费率${(r.fundingRate8h * 100).toFixed(3)}%`;
           if (r.fundingIntervalHours !== 8) summary += ` ⚠️${r.fundingIntervalHours}h`;
           summary += `\n`;
         }
@@ -1673,7 +1676,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
       displayData.forEach((result, index) => {
         const changeIcon = result.change >= 0 ? '📈' : '📉';
-        message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+        const riskIcon = getRiskIcon(getTokenRiskLevel(result.symbol));
+        const volumeIcon = getVolumeIcon(realtimeMarketCache.getTickerData(result.symbol)?.volume);
+        const symbolDisplay = result.symbol.replace('USDT', '');
+        message += `${index + 1}. ${changeIcon} ${volumeIcon}${riskIcon}**${symbolDisplay}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
       });
 
       message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
@@ -1691,10 +1697,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
    */
   private async handleRankingCommand(ctx: any, type: string, period: string, count: number): Promise<void> {
     try {
-      // 优先使用 WebSocket 实时缓存数据，避免 REST API 调用触发频率限制
+      // 优先使用 WebSocket 实时缓存数据。用户主动查询展示全部（0 阈值），低成交量行另加 💧
       const rankings = type === 'gainers'
-        ? realtimeMarketCache.getTopGainers(count, 10000)
-        : realtimeMarketCache.getTopLosers(count, 10000);
+        ? realtimeMarketCache.getTopGainers(count, 0)
+        : realtimeMarketCache.getTopLosers(count, 0);
 
       if (!rankings || rankings.length === 0) {
         await ctx.reply(`❌ 实时数据尚未就绪，请稍后重试`);
@@ -1718,7 +1724,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           priceText = '';
         }
 
-        message += `${i + 1}. ${changeIcon} ${ticker.riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
+        const volumeIcon = getVolumeIcon(ticker.volume);
+        message += `${i + 1}. ${changeIcon} ${volumeIcon}${ticker.riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
       }
 
       message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;

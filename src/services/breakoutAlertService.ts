@@ -10,6 +10,7 @@ import {
 } from '../models/breakoutAlertModel';
 import { TelegramBot } from '../bot';
 import { esp32NotificationService } from './esp32';
+import { getVolumeThreshold } from '../config/volumeConfig';
 import type { FuturesTicker24hr, FuturesSymbolInfo, Kline } from '../types/binance';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -21,7 +22,7 @@ const CONFIG = {
   SYMBOL_API_DELAY_MS: 200,                     // 相邻 klines 调用间隔
   VOLUME_MULT_THRESHOLD: 1.5,                   // 最新 1h 量 / 前 20h 均量 >= 1.5
   VOLUME_LOOKBACK_HOURS: 20,                    // 放量比对的基准窗口
-  MIN_VOLUME_USDT_24H: 1_000_000,               // 跟 historicalHighService 保持一致
+  // MIN_VOLUME_USDT_24H 改为运行时从 volumeConfig.getVolumeThreshold() 读取
   ONBOARD_CACHE_TTL_MS: DAY_MS,                 // onboardDate 缓存 24h
 };
 
@@ -197,7 +198,7 @@ export class BreakoutAlertService {
       const currentPrice = priceMap.get(symbol);
       if (!currentPrice || currentPrice <= 0) continue;
       const vol = volumeMap.get(symbol) ?? 0;
-      if (vol < CONFIG.MIN_VOLUME_USDT_24H) continue;
+      if (vol < getVolumeThreshold()) continue;
 
       const allHighs = historicalHighService.queryAllHighs(symbol);
 

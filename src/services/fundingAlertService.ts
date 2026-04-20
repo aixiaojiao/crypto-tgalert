@@ -7,6 +7,7 @@ import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { esp32NotificationService } from './esp32';
+import { getVolumeThreshold } from '../config/volumeConfig';
 
 /**
  * 费率报警配置
@@ -19,8 +20,7 @@ import { esp32NotificationService } from './esp32';
  * 同一 symbol + alertType 在 4 小时滑动窗口内只报一次。
  */
 const CONFIG = {
-  // 全局成交量过滤（与其他报警保持一致）
-  MIN_VOLUME_USDT: 30_000_000,
+  // 成交量过滤改为运行时从 volumeConfig.getVolumeThreshold() 读取（保留此处注释以便查找）
 
   // 费率阈值（8h 归一化后的小数值）
   RATE_THRESHOLDS: [
@@ -149,7 +149,7 @@ export class FundingAlertService {
 
       // 全局成交量过滤
       const volume = volumeMap.get(symbol) || 0;
-      if (volume < CONFIG.MIN_VOLUME_USDT) continue;
+      if (volume < getVolumeThreshold()) continue;
 
       // 用户自定义过滤
       if (this.filterManager && userId) {
