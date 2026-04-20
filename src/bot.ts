@@ -11,6 +11,8 @@ import { potentialAlertService } from './services/potentialAlertService';
 import { PotentialAlertModel } from './models/potentialAlertModel';
 import { fundingAlertService } from './services/fundingAlertService';
 import { FundingAlertModel } from './models/fundingAlertModel';
+import { breakoutAlertService } from './services/breakoutAlertService';
+import { BreakoutAlertModel } from './models/breakoutAlertModel';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -1202,6 +1204,54 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         log.info('FundingAlertService disabled by user');
       } catch (error) {
         log.error('funding_alert_off command failed', error);
+        await ctx.reply('❌ 关闭失败');
+      }
+    });
+
+    // ==================== 突破报警推送命令（P2） ====================
+    // 档位：L3 (7d) / L2 (30d) / L1 (180d) / L1 (52w|ATH)；二次确认放量 + 持续
+
+    this.bot.command('breakout_status', async (ctx) => {
+      try {
+        const status = breakoutAlertService.getStatus();
+        let msg = `🚀 *突破报警状态*\n\n`;
+        msg += `🔘 推送: ${status.enabled ? '✅ 已开启' : '❌ 已关闭'}\n`;
+        msg += `⏱ 扫描间隔: ${status.intervalMin} 分钟\n`;
+        msg += `🔄 运行中: ${status.running ? '是' : '否'}\n\n`;
+        msg += `📊 *今日触发:* ${status.todayStats.total} 次\n`;
+        if (status.todayStats.total > 0) {
+          for (const [tier, count] of Object.entries(status.todayStats.byTier)) {
+            msg += `  • ${tier}: ${count}\n`;
+          }
+        }
+        msg += `\n💡 命令：\n`;
+        msg += `\`/breakout_on\` - 开启推送\n`;
+        msg += `\`/breakout_off\` - 关闭推送`;
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        log.error('breakout_status command failed', error);
+        await ctx.reply('❌ 查询状态失败');
+      }
+    });
+
+    this.bot.command('breakout_on', async (ctx) => {
+      try {
+        BreakoutAlertModel.setEnabled(true);
+        await ctx.reply('✅ 突破报警推送已开启\n\n档位: 7d / 30d / 180d / 52w / ATH\n二次确认: 放量 + 持续\n同档位 6h 内不重推；升档立即再推\n下次扫描将在 10 分钟内触发');
+        log.info('BreakoutAlertService enabled by user');
+      } catch (error) {
+        log.error('breakout_on command failed', error);
+        await ctx.reply('❌ 开启失败');
+      }
+    });
+
+    this.bot.command('breakout_off', async (ctx) => {
+      try {
+        BreakoutAlertModel.setEnabled(false);
+        await ctx.reply('🛑 突破报警推送已关闭\n\n定时扫描任务仍在运行但会直接跳过，再开启用 /breakout_on');
+        log.info('BreakoutAlertService disabled by user');
+      } catch (error) {
+        log.error('breakout_off command failed', error);
         await ctx.reply('❌ 关闭失败');
       }
     });

@@ -9,6 +9,8 @@ import { potentialAlertService } from './services/potentialAlertService';
 import { PotentialAlertModel } from './models/potentialAlertModel';
 import { fundingAlertService } from './services/fundingAlertService';
 import { FundingAlertModel } from './models/fundingAlertModel';
+import { breakoutAlertService } from './services/breakoutAlertService';
+import { BreakoutAlertModel } from './models/breakoutAlertModel';
 import { tieredDataManager } from './services/tieredDataManager';
 import { binanceRateLimit } from './utils/ratelimit';
 import { stopBusinessMonitor } from './utils/businessMonitor';
@@ -94,6 +96,12 @@ export class CryptoTgAlertApp {
       FundingAlertModel.initDatabase();
       fundingAlertService.setTelegramBot(this.telegramBot);
       await fundingAlertService.start();
+
+      // 9.7 启动突破报警服务（P2，默认关闭，等 /breakout_on 启用）
+      console.log('🚀 Starting breakout alert service...');
+      BreakoutAlertModel.initDatabase();
+      breakoutAlertService.setTelegramBot(this.telegramBot);
+      await breakoutAlertService.start();
 
       console.log('✅ All systems online!');
 
