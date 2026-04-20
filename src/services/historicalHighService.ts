@@ -13,8 +13,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 // 死币过滤阈值（可调）
-const MIN_VOLUME_USDT_24H = 1_000_000;       // 24h 成交额 < 1M USDT 视为死币
-const MIN_7D_AMPLITUDE_PCT = 5;              // 7d 最大振幅 < 5% 视为死币
+const MIN_VOLUME_USDT_24H = 1_000_000;          // 24h 成交额 < 1M USDT 视为死币
+const HIGH_VOLUME_USDT_24H = 50_000_000;        // 成交额 >= 50M USDT 的币跳过振幅检查（主流币波动小也算活跃）
+const MIN_24H_AMPLITUDE_PCT = 3;                // 24h 振幅 < 3% 且成交额 < 50M 视为死币
 
 // 刷新节奏
 const COLD_REFRESH_INTERVAL_MS = 24 * HOUR_MS;  // 冷层：每 24h 全量重算
@@ -441,14 +442,15 @@ export class HistoricalHighService {
       this.onboardDateCache.set(s.symbol, s.onboardDate);
     }
 
+    // 用 24hr ticker 的 high/low 算 24h 振幅（7d 还没 K 线，启动期就算不到）
     const volumeMap = new Map<string, number>();
-    const amplitudeMap = new Map<string, number>();
+    const amplitude24hMap = new Map<string, number>();
     for (const t of tickers) {
       volumeMap.set(t.symbol, parseFloat(t.quoteVolume));
       const high = parseFloat(t.highPrice);
       const low = parseFloat(t.lowPrice);
       const amp = low > 0 ? ((high - low) / low) * 100 : 0;
-      amplitudeMap.set(t.symbol, amp);
+      amplitude24hMap.set(t.symbol, amp);
     }
 
     // 由 FuturesSymbolInfo 收集 TRADING + 永续 symbol，再走 tokenLists 过滤（去 USDC/季度/下架）
@@ -462,10 +464,15 @@ export class HistoricalHighService {
     for (const symbol of base) {
       if (isRiskyToken(symbol)) continue;
       const vol = volumeMap.get(symbol) ?? 0;
+      // 成交额太低直接剔除
       if (vol < MIN_VOLUME_USDT_24H) continue;
-      const amp = amplitudeMap.get(symbol) ?? 0;
-      // 若 tickers 缺失（例如新上币），保留（让后续 klines 抓数据时自然过滤）
-      if (amp > 0 && amp < MIN_7D_AMPLITUDE_PCT) continue;
+      // 高成交额（主流币/活跃币）跳过振幅检查；中低成交额要求 24h 振幅 >= 3%
+      if (vol < HIGH_VOLUME_USDT_24H) {
+        const amp = amplitude24hMap.get(symbol) ?? 0;
+        // tickers 缺失则 amp=0, 按 0 处理（< 3%）-> 剔除 (保守);
+        // 但若连 tickers 都没有，也说明这币不活跃
+        if (amp < MIN_24H_AMPLITUDE_PCT) continue;
+      }
       active.push(symbol);
     }
 
