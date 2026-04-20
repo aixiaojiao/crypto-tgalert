@@ -1,8 +1,76 @@
 # 警报系统业务优化路线图
 
-> 日期：2026-04-20（晚）  
+> 日期：2026-04-20（起草）  
 > 背景：右侧动量交易者视角，目标是**提升赚钱效率和正确率**；自主交易不做，只优化警报/查询/推送。  
-> 本文档只谈逻辑和方案，不含代码。
+> 本文档讨论方案与进度，不含代码。
+
+---
+
+## 🎯 当前进度总览
+
+所有改动在分支 `feat/alert-optimization`，master 保持稳定。每阶段独立 commit，可单独回退。
+
+| 阶段 | 状态 | 关键交付 | 部署 commit |
+|---|---|---|---|
+| **P1. 高点缓存重建** | ✅ **已完成 + 已部署** | SQLite 表 `historical_highs`, 三层刷新 (冷 24h / 温 1h / 热查询), 死币过滤, 5 档 (7d/30d/180d/52w/ATH), 469 活跃 symbol 全部入库 | `7947120` |
+| **P2. 突破报警服务** | ✅ **已完成 + 已部署 (默认关闭)** | `BreakoutAlertService`, 档位 L3/L2/L1/L1_extreme, 二次确认 (放量+持续+不刚上市), 6h 冷却, 菜单 + 3 个命令, ESP32 `breakthrough` 语音复用 | `c957860` |
+| **P3. Top-N 排序推送** | ⏳ **等 P1+P2 观察稳定后开始** | 价格警报从"凡满足即推"改为候选池打分 + Top N + 同币冷却；预计日推送量 ~200 → ~40 | — |
+| **P4. 共振评级统一分发** | ⏳ **最后一步，大重构** | 通用 `SignalScore` 模块；所有警报统一按 L1/L2/L3 分级分发；potential_alerts 并入 | — |
+
+**当前观察期**：P1 冷刷新按日跑 + 温刷新按小时跑，P2 默认关闭。等用户确认功能符合预期后启用 P2 并观察推送质量。
+
+---
+
+## ✅ P1 完成总结（高点缓存重建）
+
+**为什么要做**：旧 `historicalHighCacheV2` 覆盖不全（仅 160 symbol）、数据陈旧（4+ 天不更新）、时间框架不贴交易（1w/1m/6m/1y/all 语义模糊、`all` 受限合约上线日）、存储格式笨（单个 JSON 全量写）。
+
+**实际交付**：
+- 新表 `historical_highs(symbol, timeframe, high_price, high_at, window_start, window_end, collected_at)`，主键 `(symbol, timeframe)`
+- **活跃 symbol 清单**：从 `exchangeInfo` + 过滤（非 TRADING、USDC/季度/下架、`isRiskyToken`）+ 双阈值死币过滤后约 **469 个**
+- **死币过滤双阈值（hotfix）**：
+  - 24h 成交额 < 1M USDT：直接剔除
+  - 成交额在 [1M, 50M) 区间：要求 24h 振幅 >= 3%
+  - 成交额 >= 50M：跳过振幅检查（主流币低波动也算活跃；首次部署时 BTC/ETH/BNB 被错误剔除的 bug 由此修正）
+- **三层刷新**：
+  - 冷层 24h：遍历全部活跃 symbol，重算 5 档，顺便 prune 死币
+  - 温层 1h：遍历 cached symbol，只比对最新 1h K 线是否破高
+  - 热层：实时价每次查询时从 `binanceClient.getFuturesPrice` 拉
+- **启动非阻塞**：首次冷刷新后台跑，不挡住 app.ts 启动；冷完成耗时约 4 分钟
+- **ATH 定义**：只用合约 1d K 线，从 `onboardDate` 到今天取 max high；**不引入 spot**
+- **查询 API**：`queryHigh(symbol, tf)` / `queryAllHighs(symbol)` / `getRankingByProximityToHigh(tf, limit)`（用实时价计算距离，不从缓存拿当前价）
+
+**引用点改造**：
+- `bot.ts` 的 `/high` `/near_high` 完全委托给 `HighCommandHandler`（删 ~170 行重复代码）；`/cache_status` 换 v3 字段；`/cache_update` 触发 `runColdRefresh()`
+- `BreakthroughDetectionService`（既有用户警报）切到 v3 API + 加旧 timeframe (`1w/1m/6m/1y/all`) → 新 (`7d/30d/180d/52w/ATH`) 映射，不破坏已存在的用户警报数据
+
+**验证**：
+- 18 个测试全过（12 model + 6 service 集成）
+- 服务器 DB 当前 2345 行 / 469 symbols / 5 档齐全
+- BTC ATH = 126208.50 (2025-10-06)，ETH ATH = 4957.67 (2025-08-24)，主流币正确入库
+
+---
+
+## ✅ P2 完成总结（突破报警服务）
+
+**实现概要**：
+- 每 10 分钟扫一次全市场活跃 symbol
+- 流程：批量拉 24h ticker → 对每个 cached symbol 按档位优先级 (`ATH > 52w > 180d > 30d > 7d`) 找**最高破档**（一个 symbol 一次扫只触发最高那一档，避免重复）→ 对候选拉 21 根 1h K 线做二次确认 → 通过 + 未冷却就发
+- **档位映射**：`L3_weak(7d) / L2_mid(30d) / L1_strong(180d) / L1_extreme(52w 或 ATH)`
+- **二次确认**（纯函数，单元测试覆盖）：
+  - 放量：最新 1h `quoteAssetVolume` >= 前 20 根 1h 均量 × **1.5**
+  - 持续：最新 1h 的 `low` > 参考高点（本小时还没跌回）
+  - 不刚上市：合约年龄 >= 档位窗口（ATH 档不限）
+- **冷却**：同 symbol + 同 tier **6 小时**内不重推；升档 (30d → 180d) 立即再推
+- **推送**：Telegram + ESP32 `breakthrough` 类型（已有，复用）
+- **默认关闭**，发 `/breakout_on` 或菜单 toggle 激活
+
+**新增**：
+- 表 `breakout_alerts` + `breakout_alert_config`（开关）
+- 命令 `/breakout_status` `/breakout_on` `/breakout_off`
+- 菜单主页第 4 个 toggle「🚀 突破报警」+ 状态页突破段（含今日档位统计）
+
+**测试**：17 个新测试（10 model + 7 service 纯逻辑）
 
 ---
 
@@ -258,16 +326,6 @@ Top N 推过的币，2 小时内不再进候选池（避免同一波行情反复
 
 ---
 
-## 📝 下一步行动
-
-等明天上班看完后，决定：
-
-- (a) 全套按顺序做
-- (b) 只做某几个步骤
-- (c) 某个方案的逻辑有问题/想法要先讨论
-
----
-
 ## 🌿 执行规划（分支策略 + 阶段交付）
 
 > 本次是对推送/警报机制的大改动，用分支开发，master 保持稳定以便快速回退。
@@ -275,48 +333,43 @@ Top N 推过的币，2 小时内不再进候选池（避免同一波行情反复
 ### 分支
 
 - **工作分支**：`feat/alert-optimization`（从 master `38383c3` 拉出）
-- **主分支**：`master` 保持生产稳定，服务器默认跑它
-- **合并策略**：一次性 squash merge 到 master（全部验证通过后）。期间分支上的每个阶段各自 commit，出问题可 revert 单个 commit
+- **主分支**：`master` 保持稳定；服务器目前已切到 feat 分支运行 P1 + P2
+- **合并策略**：等 P1-P4 全部观察稳定后，一次性 squash merge 回 master
+- **回退**：服务器 `git checkout master && npm run build && pm2 restart crypto-tgalert`（1 分钟回滚）
 
-### 验证路径
+### 阶段交付进度
 
-服务器上目前跑的是 master（pm2 进程 `crypto-tgalert`）。验证新版本的做法：
+| 阶段 | 状态 | commit | 交付内容 | 验证路径 |
+|---|---|---|---|---|
+| **P1: 高点缓存重建** | ✅ 已部署 | `94cd6b2` → `7947120` (hotfix) | SQLite 表 + v3 service + 三层刷新 + 死币过滤；`/high` `/near_high` 切到 v3 | `/high BTCUSDT` 返回 5 档；`/cache_status` 显示新字段；DB 2345 行 / 469 symbols |
+| **P2: 突破信号** | ✅ 已部署 (默认关闭) | `c957860` | `BreakoutAlertService` + 二次确认 + 档位；菜单 + 3 个命令 + ESP32 | 发 `/breakout_on` 激活，观察有突破事件时的推送 |
+| **P3: Top-N 排序** | ⏳ 未开始 | — | 改造价格警报扫描流程（候选池 → 打分 → Top N → 同币冷却）；同方式改造 funding negative；加评分日志 | 日均价格警报从 ~200 → ~40；每条附 "当轮 Top K 之 N" |
+| **P4: 共振评级整合** | ⏳ 未开始 | — | 通用 `SignalScore` 模块（价 / OI / 费率 / 突破 4 维）；所有警报 L1/L2/L3 分发；potential_alerts 并入 | 日总推送大幅下降；L1 语音打断少且都值得看 |
 
-1. 每完成一个阶段，从本地 push `feat/alert-optimization` 分支到 GitHub
-2. 服务器 `cd ~/crypto-tgalert && git fetch && git checkout feat/alert-optimization && npm run build && pm2 restart crypto-tgalert`
-3. 运行 24-48h 观察
-4. 如有问题：`git checkout master && npm run build && pm2 restart crypto-tgalert`（1 分钟回退）
-5. 所有阶段验证 OK → master merge feat 分支，删分支
+**触发 P3 的条件**：P1 冷刷新按日自动跑一轮 OK + P2 在启用后发出的推送质量合理（假阳性少、档位分布正常）。
 
-**不会同时跑两个实例**（避免双份推送打扰你）—— 验证新版本就意味着生产切换到分支版本，有信心再做，有问题立刻回退。
+### 每阶段的工作纪律
 
-### 阶段交付（建议分 4 个 commit，不全糊在一起）
-
-| 阶段 | 交付内容 | 可独立验证的信号 |
-|---|---|---|
-| **P1: 高点缓存重建** | SQLite 新表 + HistoricalHighServiceV3 + 三层刷新 + 死币过滤；替换 `/high` `/near_high` 调用；迁移并删掉 v2 缓存文件 | `/high BTCUSDT` 返回 5 档高点，数据新鲜；`/high near 52w` 能列出接近年高点的活跃币 |
-| **P2: 突破信号** | BreakoutAlertService + 二次确认 + 档位映射；新命令 `/breakout_status` `/breakout_on` `/breakout_off`；`/menu` 加开关 | 真正突破 52w 或 ATH 时推送到 Telegram（正常行情可能 24h 内只推几条，稀缺但都很强） |
-| **P3: Top-N 排序** | 改造价格警报扫描流程（候选池 → 打分 → Top N → 同币冷却）；同方式改造 funding negative；加评分日志便于调参 | 日均价格警报推送从 ~200 → ~40；每条都附"当轮 Top K 之 N" |
-| **P4: 共振评级整合** | 通用 SignalScore 模块（价/OI/费率/突破 4 维）；所有警报走统一 L1/L2/L3 分发；potential_alerts 并入；L1 → ESP32 + TG，L2 → TG，L3 → 静默 + 日报 | 日总推送大幅下降；L1 语音打断变得很少但每次都值得看 |
-
-每个阶段：
 - commit 只改自己阶段的文件，不跨改
-- commit message 统一前缀 `[P1] ...` / `[P2] ...` 方便识别
-- 写新的单元测试（CLAUDE.md 要求）
-- 每个阶段结束前从 master 同步一下防止冲突
+- commit message 统一前缀 `[P1] ...` / `[P2] ...` 方便识别和 revert
+- 必写单元测试（CLAUDE.md 要求）
+- 开发前 `git pull` 同步分支最新
 
 ### 不做的事情
 
 - 不引入 spot 市场数据（ATH 就用合约）
 - 不加 60d / 90d 时间框架
-- 不强行覆盖全市场 500+ symbol（死币过滤后约 200-300）
+- 不强行覆盖全市场 500+ symbol（死币过滤后约 469）
 - 不在 master 上直接改
 - 不 force push（即使分支）
 
-### 启动当日检查
+---
 
-开工前先做：
-1. `git checkout -b feat/alert-optimization`（本地）
-2. `git push -u origin feat/alert-optimization`（推到 GitHub）
-3. 确认服务器 master 仍在运行（`pm2 status`）
-4. 开始 P1
+## 📝 下一步行动
+
+1. **观察期（现在）**：P1 冷刷新每日 04:00、温刷新每小时；P2 可发 `/breakout_on` 激活一并观察
+2. **P3 启动前置**：P1 冷刷新稳定运行一轮完整周期 + P2 推送验证合理
+3. **P4 启动前置**：P3 部署后 Top-N 排序逻辑运行稳定（~1 周）
+4. **合并回 master**：P1-P4 全部验证通过后做一次 squash merge
+
+如观察期内发现问题（阈值不合适、冷却时间需调、档位分布异常等），在分支上做 hotfix commit 即可。
