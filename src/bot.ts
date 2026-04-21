@@ -303,11 +303,13 @@ export class TelegramBot {
       // 设置菜单栏命令（在启动前设置）
       await this.setupMenuCommands();
 
-      await this.bot.launch();
+      // bot.launch() 在 long-polling 模式下不会 resolve，直到 bot.stop() 被调用
+      // 所以 isRunning 必须在 launch() 之前置 true，否则 /status 永远显示"未运行"
       this.status.isRunning = true;
-
       log.info('Telegram bot started successfully');
+      await this.bot.launch();
     } catch (error) {
+      this.status.isRunning = false;
       log.error('Failed to start Telegram bot:', error);
       throw error;
     }
