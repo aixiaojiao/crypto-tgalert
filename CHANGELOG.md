@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.1] - 2026-04-21
+
+### 🧹 日志清理
+
+**priceAlertService 冷却日志去重**
+`src/services/priceAlertService.ts`
+- 原实现在冷却期内每次 WS tick 都打一条 `🚫 30分钟内重复通知` info 日志，单 symbol 1 小时冷却产生 1800+ 行 —— 过去 48 小时累计 ~40 万行污染
+- 在 `recentTriggers` 记录中新增 `cooldownLogged: boolean` 标志；每轮冷却只在首次被挡时打一条日志（消息尾标注 "后续静默至冷却结束"），新触发写入时重置标志
+- 实测：同一 key 在整个冷却周期内只产生 1 条日志（之前 1800 条）
+
+**businessMonitor filter_check 降级**
+`src/utils/businessMonitor.ts`
+- `recordOperation` / `endOperation` 原先以 `success` 布尔值决定日志级别（`success=false → error`），导致用户黑名单/mute 拦截这类**预期行为**被写入 `error.log`
+- 改为：仅当真的传入 `error` 参数（系统异常）时才走 error 级别，否则统一 info
+- 效果：`error.log` 不再被 `filter_check blocked` 事件填满
+
+**数据缓存目录权限收紧**
+- `data/cache/` 从历史遗留的 `drwxrwxrwx` (0777) 调整为 `drwxrwxr-x` (0775)
+- 之前 2026-04-18 的 EACCES 错误已不再出现（权限与 owner 均正常）
+
+---
+
 ## [2.7.0] - 2026-04-20
 
 ### 💧 低成交量全局标记 + 统一阈值体系

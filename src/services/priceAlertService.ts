@@ -54,7 +54,8 @@ export class PriceAlertService extends EventEmitter {
   private timeframes: Map<string, TimeframeData> = new Map();
 
   // 1分钟内防重复通知记录 (symbol:timeframe -> 最后触发时间)
-  private recentTriggers: Map<string, {changePercent: number, price: number, timestamp: number}> = new Map();
+  // cooldownLogged: 该次冷却周期是否已打过日志，避免每秒都打 "重复通知" 刷屏
+  private recentTriggers: Map<string, {changePercent: number, price: number, timestamp: number, cooldownLogged: boolean}> = new Map();
 
   // 所有支持的时间周期到窗口毫秒的映射（按需激活，不再全量初始化）
   private static readonly TIMEFRAME_WINDOW_MS: Record<string, number> = {
@@ -299,8 +300,12 @@ export class PriceAlertService extends EventEmitter {
         const cooldownMinutes = Math.floor(cooldownMs / (60 * 1000)); // 转换为分钟显示
 
         if (globalRecent && now - globalRecent.timestamp < cooldownMs) {
-          const passedSeconds = Math.floor((now - globalRecent.timestamp) / 1000);
-          log.info(`🚫 ${cooldownMinutes}分钟内重复通知 ${symbol} ${config.timeframe}: 距离上次通知 ${passedSeconds}秒`);
+          // 每轮冷却只日志一次：首次被挡时记录，后续静默（避免每秒刷屏）
+          if (!globalRecent.cooldownLogged) {
+            const passedSeconds = Math.floor((now - globalRecent.timestamp) / 1000);
+            log.info(`🚫 ${cooldownMinutes}分钟内重复通知 ${symbol} ${config.timeframe}: 距离上次通知 ${passedSeconds}秒 (后续静默至冷却结束)`);
+            globalRecent.cooldownLogged = true;
+          }
           continue;
         }
 
@@ -309,7 +314,8 @@ export class PriceAlertService extends EventEmitter {
         this.recentTriggers.set(globalKey, {
           changePercent,
           price: currentSnapshot.price,
-          timestamp: triggerTime
+          timestamp: triggerTime,
+          cooldownLogged: false,
         });
 
         // 异步触发报警
