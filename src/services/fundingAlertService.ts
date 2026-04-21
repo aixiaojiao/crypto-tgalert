@@ -30,6 +30,10 @@ const CONFIG = {
     { type: 'rate_-1.5' as FundingAlertType, threshold: -0.015, label: 'L1+ · 费率 -1.5%', icon: '💸' },
   ],
 
+  // negative 档位的最小绝对值门槛：费率抖动在 [-NEGATIVE_MIN_ABS, +∞) 视为"未进入负费率区间"，
+  // 只有跌破 -NEGATIVE_MIN_ABS 才触发报警。避免 0 附近噪音抖动（历史数据 ~84% 属此类）。
+  NEGATIVE_MIN_ABS: 0.0005, // 0.05%
+
   // 周期阈值
   INTERVAL_THRESHOLDS: [
     { type: 'interval_4h' as FundingAlertType, interval: 4, label: 'L2 · 周期异常 4h', icon: '💸' },
@@ -178,7 +182,10 @@ export class FundingAlertService {
       for (const { type, threshold, label, icon } of CONFIG.RATE_THRESHOLDS) {
         let triggered: boolean;
         if (type === 'negative') {
-          triggered = prevRate !== null && prevRate >= 0 && fundingRate8h < 0;
+          // 用 -NEGATIVE_MIN_ABS 作为双侧门槛：prev 处于 "非显著负" 区间且本次跌破门槛
+          triggered = prevRate !== null
+            && prevRate >= -CONFIG.NEGATIVE_MIN_ABS
+            && fundingRate8h < -CONFIG.NEGATIVE_MIN_ABS;
         } else {
           triggered = fundingRate8h <= threshold;
         }
@@ -281,7 +288,7 @@ export class FundingAlertService {
 
     message += `\n⏰ *触发时间:* ${new Date(r.triggeredAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`;
     if (r.alertType === 'negative') {
-      message += `\n💡 _从正/零费率首次转负时触发，持续为负不重复提醒_`;
+      message += `\n💡 _费率跌破 -0.05% 时触发（忽略 0 附近噪音），持续为负不重复提醒_`;
     } else {
       message += `\n💡 _同一币种同一阈值 4 小时内仅报警一次_`;
     }

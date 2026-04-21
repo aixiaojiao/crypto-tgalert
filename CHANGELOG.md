@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.2] - 2026-04-21
+
+### 🔇 费率 negative 档位加最小门槛
+
+`src/services/fundingAlertService.ts`
+- 旧逻辑：`prevRate >= 0 && currentRate < 0` 即触发，跨过 0 线就报警
+- 数据：生产历史 546 条 negative 报警里，`|rate| < 0.01%` 占 69%、`< 0.1%` 占 84% —— 绝大多数是 0 附近的噪音抖动
+- 改为双侧门槛：`prevRate >= -0.0005 && currentRate < -0.0005`，即只有跌破 -0.05% 才算"显著转负"
+- 新增 `CONFIG.NEGATIVE_MIN_ABS = 0.0005`（8h 归一化后的小数值）
+- 推送消息底部提示文案同步更新
+- 预期：过滤掉 ~80% 的噪音报警，保留真正有交易意义的负费率信号
+
+---
+
 ## [2.7.1] - 2026-04-21
 
 ### 🧹 日志清理
