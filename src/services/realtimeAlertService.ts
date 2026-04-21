@@ -8,6 +8,7 @@ import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { esp32NotificationService } from './esp32';
+import { detectL1NewTop } from './realtimeRankingUtils';
 // Utility function for UTC+8 time formatting
 function formatTimeToUTC8(date: Date | number): string {
   const targetDate = typeof date === 'number' ? new Date(date) : date;
@@ -142,8 +143,12 @@ export class RealtimeAlertService {
     if (!this.config.enabled || !this.telegramBot) return;
 
     try {
+      // L1 榜首易主事件：有币进入 #1 且之前不在 #1
+      // 强制判定为重要变化，即使未达到常规阈值（例如 #2→#1 仅 1 位）
+      const l1NewTop = detectL1NewTop(eventData.changes);
+
       const significantChanges = eventData.changes.filter(change =>
-        this.isSignificantChange(change)
+        this.isSignificantChange(change) || change === l1NewTop
       );
 
       if (significantChanges.length === 0) return;
@@ -175,8 +180,9 @@ export class RealtimeAlertService {
       }
 
       // 过滤需要推送的变化（考虑冷却时间和推送限制）
+      // L1 榜首易主事件绕过 symbol 冷却与次数上限
       const pushableChanges = volumeFilteredChanges.filter(change =>
-        this.canPushSymbol(change.symbol)
+        change === l1NewTop || this.canPushSymbol(change.symbol)
       );
 
       if (pushableChanges.length === 0) {
@@ -196,8 +202,9 @@ export class RealtimeAlertService {
         return;
       }
 
-      // 发送推送消息
-      await this.sendRankingAlert(eventData.current, pushableChanges);
+      // 发送推送消息（若 L1 事件穿透所有过滤，则以 L1 形式推送）
+      const l1ForPush = l1NewTop && pushableChanges.includes(l1NewTop) ? l1NewTop : undefined;
+      await this.sendRankingAlert(eventData.current, pushableChanges, l1ForPush);
 
       // 更新推送记录
       pushableChanges.forEach(change => {
@@ -325,7 +332,11 @@ export class RealtimeAlertService {
   /**
    * 发送排名变化推送消息
    */
-  private async sendRankingAlert(currentRankings: RankingResult[], changes: any[]): Promise<void> {
+  private async sendRankingAlert(
+    currentRankings: RankingResult[],
+    changes: any[],
+    l1NewTop?: any
+  ): Promise<void> {
     if (!this.telegramBot) return;
 
     try {
@@ -341,7 +352,14 @@ export class RealtimeAlertService {
       // TODO: Implement proper user preference checking
 
       // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
-      let message = `🏆 *24小时涨幅榜 TOP10*\n\n`;
+      // L1 榜首易主时替换标题为强提醒样式（保留下方 TOP10 列表）
+      let message: string;
+      if (l1NewTop) {
+        const newTopSym = l1NewTop.symbol.replace('USDT', '');
+        message = `🚨 *L1 · 榜首易主 — ${newTopSym}*\n\n`;
+      } else {
+        message = `🏆 *24小时涨幅榜 TOP10*\n\n`;
+      }
 
       // 应用用户过滤设置 - 涨幅榜只过滤下架/系统黑名单，mute/黄名单代币加标识显示
       let filteredRankings = currentRankings;
@@ -472,8 +490,43 @@ export class RealtimeAlertService {
         }
       }
 
-      if (filteredNewEntries.length > 0 || filteredPositionChanges.length > 0) {
+      // L1 榜首易主置顶显示，从常规列表中剔除避免重复
+      if (l1NewTop) {
+        filteredNewEntries = filteredNewEntries.filter(c => c !== l1NewTop);
+        filteredPositionChanges = filteredPositionChanges.filter(c => c !== l1NewTop);
+      }
+
+      if (l1NewTop || filteredNewEntries.length > 0 || filteredPositionChanges.length > 0) {
         message += `\n📊 *本次变化:*\n`;
+
+        // L1 榜首易主（强提醒）
+        if (l1NewTop) {
+          const sym = l1NewTop.symbol.replace('USDT', '');
+          const ticker = realtimeMarketCache.getTickerData(l1NewTop.symbol);
+          const volumeIcon = getVolumeIcon(ticker?.volume);
+          const filterStatus = symbolFilterStatus.get(l1NewTop.symbol);
+          let prefixIcon = '';
+          if (filterStatus) {
+            switch (filterStatus.source) {
+              case 'user_mute':
+                prefixIcon = '🔇';
+                break;
+              case 'system_yellowlist':
+              case 'user_yellowlist':
+                prefixIcon = '🟡';
+                break;
+              case 'user_blacklist':
+                prefixIcon = '🔒';
+                break;
+            }
+          }
+          const prefix = `${volumeIcon}${prefixIcon}`;
+          if (l1NewTop.changeType === 'new_entry') {
+            message += `• 🚨 L1 ${prefix}**${sym}** 新进入榜首 #1\n`;
+          } else {
+            message += `• 🚨 L1 ${prefix}**${sym}** 登顶 (#${l1NewTop.previousPosition}→#1)\n`;
+          }
+        }
 
         // 新进入前10
         if (filteredNewEntries.length > 0) {
@@ -557,9 +610,12 @@ export class RealtimeAlertService {
         });
 
         // ESP32 语音：只念一条最关键的（避免一次 push 播过长）
-        // 优先新入榜，其次排名上升
+        // 优先级：L1 榜首易主 > 新入榜 > 排名上升
         let tts = '';
-        if (filteredNewEntries.length > 0) {
+        if (l1NewTop) {
+          const sym = (l1NewTop.symbol || '').replace(/USDT$/i, '');
+          tts = `L1 榜首易主 ${sym}`;
+        } else if (filteredNewEntries.length > 0) {
           const first = filteredNewEntries[0];
           const sym = ((first as any).symbol || '').replace(/USDT$/i, '');
           tts = `涨幅榜新进入 ${sym}`;
