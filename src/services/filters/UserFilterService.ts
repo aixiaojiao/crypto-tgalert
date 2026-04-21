@@ -335,7 +335,7 @@ export class UserFilterService implements IUserFilterService {
       const now = Date.now();
       const defaults: UserFilterSettings = {
         user_id: userId,
-        volume_threshold: 10000000, // 1千万USDT
+        volume_threshold: 30000000, // 3千万USDT
         enable_auto_filter: false,
         created_at: now,
         updated_at: now

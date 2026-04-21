@@ -8,6 +8,7 @@ import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { esp32NotificationService } from './esp32';
+import { getVolumeThreshold } from '../config/volumeConfig';
 
 /**
  * 潜力币信号扫描参数
@@ -37,8 +38,7 @@ const CONFIG = {
   LEVEL_1_FUNDING: -0.005,  // -0.5%
   LEVEL_2_FUNDING: -0.001,  // -0.1%
 
-  // 筛选
-  MIN_VOLUME_USDT: 30_000_000, // 24h 成交额 >= $30M
+  // 筛选：阈值不再硬编码，改由 getVolumeThreshold() 提供（见 extractCandidates 调用）
 
   // 扫描频率
   SCAN_INTERVAL_MS: 10 * 60 * 1000, // 10 分钟
@@ -230,7 +230,7 @@ export class PotentialAlertService {
       if (isRiskyToken(s.symbol)) continue;
 
       const quoteVolume = parseFloat(s.quoteVolume);
-      if (!Number.isFinite(quoteVolume) || quoteVolume < CONFIG.MIN_VOLUME_USDT) continue;
+      if (!Number.isFinite(quoteVolume) || quoteVolume < getVolumeThreshold()) continue;
       if (parseFloat(s.priceChangePercent) <= 0) continue;
 
       // 用户自定义过滤
@@ -433,7 +433,7 @@ export class PotentialAlertService {
    * 格式化推送消息（参考 /signals 样式）
    */
   private async formatMessage(r: PotentialAlertRecord): Promise<string> {
-    const levelIcon = r.level === 1 ? '🚨' : r.level === 2 ? '⚡' : '📍';
+    const levelIcon = '⚡';
     const levelName = r.level === 1 ? 'L1 极强信号' : r.level === 2 ? 'L2 强信号' : 'L3 潜力信号';
     const displaySymbol = r.symbol.replace('USDT', '');
 

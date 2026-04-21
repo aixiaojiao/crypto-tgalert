@@ -44,7 +44,7 @@ export function getRiskIcon(riskLevel: string): string {
   switch (riskLevel) {
     case 'delisted': return '🚫';
     case 'blacklist': return '⛔';
-    case 'yellowlist': return '⚠️';
+    case 'yellowlist': return '🟡';
     default: return '';
   }
 }

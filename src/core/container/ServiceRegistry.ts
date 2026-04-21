@@ -178,12 +178,12 @@ export class ServiceRegistry {
       ServiceLifetime.SINGLETON
     );
 
-    // 历史高点缓存
+    // 历史高点缓存 (v3)
     this.container.registerFactory(
       SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE,
       (_container) => {
-        const { historicalHighCache } = require('../../services/historicalHighCacheV2');
-        return historicalHighCache;
+        const { historicalHighService } = require('../../services/historicalHighService');
+        return historicalHighService;
       },
       ServiceLifetime.SINGLETON
     );

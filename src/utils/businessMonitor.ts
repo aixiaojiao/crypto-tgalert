@@ -82,7 +82,8 @@ export class BusinessMonitor {
     this.addMetric(metric);
     this.operations.delete(operationId);
 
-    const logLevel = success ? 'info' : 'error';
+    // 只有真正的异常（带 error 参数）才写 error 级别；success=false 只是业务结果，走 info
+    const logLevel = error ? 'error' : 'info';
     const status = success ? '✅' : '❌';
 
     log[logLevel](`${status} 业务监控: 操作完成`, {
@@ -115,7 +116,8 @@ export class BusinessMonitor {
 
     this.addMetric(metric);
 
-    const logLevel = success ? 'info' : 'error';
+    // 只有真正的异常（带 error 参数）才写 error 级别；success=false 只是业务结果，走 info
+    const logLevel = error ? 'error' : 'info';
     const status = success ? '✅' : '❌';
 
     log[logLevel](`${status} 业务监控: ${operationType}`, {

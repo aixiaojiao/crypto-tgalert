@@ -2,18 +2,21 @@ import { TelegramBot } from './bot';
 import { initDatabase } from './database/connection';
 import { BinanceClient, binanceClient } from './services/binance';
 import { PriceMonitorService } from './services/priceMonitor';
-import { historicalHighCache } from './services/historicalHighCacheV2';
+import { historicalHighService } from './services/historicalHighService';
 import { realtimeMarketCache } from './services/realtimeMarketCache';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
 import { PotentialAlertModel } from './models/potentialAlertModel';
 import { fundingAlertService } from './services/fundingAlertService';
 import { FundingAlertModel } from './models/fundingAlertModel';
+import { breakoutAlertService } from './services/breakoutAlertService';
+import { BreakoutAlertModel } from './models/breakoutAlertModel';
 import { tieredDataManager } from './services/tieredDataManager';
 import { binanceRateLimit } from './utils/ratelimit';
 import { stopBusinessMonitor } from './utils/businessMonitor';
 import { getServiceRegistry } from './core/container';
 import { startHealthMonitoring as startHealthMonitoringUtil } from './utils/health';
+import { refreshVolumeThreshold } from './config/volumeConfig';
 
 /**
  * 完整的应用程序类 - 集成所有组件
@@ -40,6 +43,9 @@ export class CryptoTgAlertApp {
       // 1. 初始化数据库
       console.log('📊 Initializing database...');
       await initDatabase();
+
+      // 1.5 加载全局成交量阈值 (用于所有 feature 的 <30M 判定)
+      await refreshVolumeThreshold();
 
       // 2. 初始化服务注册表
       console.log('🔧 Initializing service registry...');
@@ -75,9 +81,9 @@ export class CryptoTgAlertApp {
       console.log('⚡ Starting price monitoring...');
       await this.priceMonitor.startMonitoring();
 
-      // 8. 初始化历史新高缓存
-      console.log('📈 Initializing historical high cache...');
-      await historicalHighCache.initialize();
+      // 8. 启动历史新高缓存 v3（非阻塞：冷刷新在后台跑）
+      console.log('📈 Starting historical high cache service (v3)...');
+      await historicalHighService.start();
 
       // 9. 启动健康监控系统
       console.log('🏥 Starting health monitoring system...');
@@ -94,6 +100,12 @@ export class CryptoTgAlertApp {
       FundingAlertModel.initDatabase();
       fundingAlertService.setTelegramBot(this.telegramBot);
       await fundingAlertService.start();
+
+      // 9.7 启动突破报警服务（P2，默认关闭，等 /breakout_on 启用）
+      console.log('🚀 Starting breakout alert service...');
+      BreakoutAlertModel.initDatabase();
+      breakoutAlertService.setTelegramBot(this.telegramBot);
+      await breakoutAlertService.start();
 
       console.log('✅ All systems online!');
 

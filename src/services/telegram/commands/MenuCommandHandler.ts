@@ -9,6 +9,8 @@ import { IUserFilterService, FilterRule } from '../../filters/UserFilterService'
 import { IAdvancedFilterManager } from '../../filters/AdvancedFilterManager';
 import { fundingAlertService } from '../../fundingAlertService';
 import { potentialAlertService } from '../../potentialAlertService';
+import { breakoutAlertService } from '../../breakoutAlertService';
+import { BreakoutAlertModel } from '../../../models/breakoutAlertModel';
 import { AlertConfig } from '../../alerts/IAlertService';
 import { PersistentAlertService } from '../../alerts/PersistentAlertService';
 import { PriceAlertModel, PriceAlertConfig } from '../../../models/priceAlertModel';
@@ -224,6 +226,12 @@ export class MenuCommandHandler {
       log.info(`menu: esp32 ${next ? 'enabled' : 'disabled'}`);
       return next ? '✅ 已开启' : '🛑 已关闭';
     }
+    if (svc === 'breakout') {
+      const next = !BreakoutAlertModel.isEnabled();
+      BreakoutAlertModel.setEnabled(next);
+      log.info(`menu: breakout alert ${next ? 'enabled' : 'disabled'}`);
+      return next ? '✅ 已开启' : '🛑 已关闭';
+    }
     return '❓ 未知开关';
   }
 
@@ -254,6 +262,7 @@ export class MenuCommandHandler {
   private async renderHome(userId: string): Promise<View> {
     const fundingOn = FundingAlertModel.isEnabled();
     const potentialOn = PotentialAlertModel.isEnabled();
+    const breakoutOn = BreakoutAlertModel.isEnabled();
     let esp32On = false;
     try {
       await esp32NotificationService.ensureRow();
@@ -270,6 +279,7 @@ export class MenuCommandHandler {
       `━━━━━━━━━━━━\n` +
       `🔔 负费率报警: ${badge(fundingOn)}\n` +
       `🎯 潜力币信号: ${badge(potentialOn)}\n` +
+      `🚀 突破报警: ${badge(breakoutOn)}\n` +
       `🔊 ESP32 语音: ${badge(esp32On)}\n` +
       `━━━━━━━━━━━━\n` +
       `点击切换开关；输入阈值/新增条目请继续用斜杠命令（/help）。\n` +
@@ -278,6 +288,7 @@ export class MenuCommandHandler {
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback(`🔔 ${flip(fundingOn)}负费率报警`, `${MenuCommandHandler.PREFIX}toggle:funding`)],
       [Markup.button.callback(`🎯 ${flip(potentialOn)}潜力币信号`, `${MenuCommandHandler.PREFIX}toggle:potential`)],
+      [Markup.button.callback(`🚀 ${flip(breakoutOn)}突破报警`, `${MenuCommandHandler.PREFIX}toggle:breakout`)],
       [Markup.button.callback(`🔊 ${flip(esp32On)}ESP32 语音`, `${MenuCommandHandler.PREFIX}toggle:esp32`)],
       [
         Markup.button.callback('📊 系统状态', `${MenuCommandHandler.PREFIX}nav:status`),
@@ -324,6 +335,21 @@ export class MenuCommandHandler {
       potentialLines.push(`  扫描间隔: ${(ps as any).intervalMin} 分钟`);
     }
 
+    // breakout
+    const bs = breakoutAlertService.getStatus();
+    const breakoutLines = [
+      ``,
+      `🚀 <b>突破报警</b>`,
+      `  状态: ${bs.enabled ? '✅ 开启' : '❌ 关闭'} / ${bs.running ? '运行中' : '未运行'}${bs.scanning ? ' / 扫描中' : ''}`,
+      `  扫描间隔: ${bs.intervalMin} 分钟`,
+      `  今日触发: ${bs.todayStats.total} 次`,
+    ];
+    if (bs.todayStats.total > 0) {
+      for (const [tier, cnt] of Object.entries(bs.todayStats.byTier)) {
+        breakoutLines.push(`    · <code>${htmlEscape(tier)}</code>: ${cnt}`);
+      }
+    }
+
     // esp32
     const esp32Lines: string[] = ['', '🔊 <b>ESP32 语音</b>'];
     try {
@@ -358,7 +384,7 @@ export class MenuCommandHandler {
 
     const text =
       `📊 <b>系统状态</b>\n━━━━━━━━━━━━\n` +
-      [...fundingLines, ...potentialLines, ...esp32Lines, ...alertLines].join('\n');
+      [...fundingLines, ...potentialLines, ...breakoutLines, ...esp32Lines, ...alertLines].join('\n');
 
     const keyboard = Markup.inlineKeyboard([
       [

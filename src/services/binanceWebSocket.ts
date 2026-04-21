@@ -134,7 +134,7 @@ export class BinanceWebSocketClient {
           price: data.c,
           priceChange: data.P,
           priceChangePercent: data.p,
-          volume: data.v,
+          volume: data.q,  // 使用 quote volume (USDT)，非 base volume (token 数量)
           timestamp: data.E
         };
         callback(tickerData);
@@ -285,7 +285,7 @@ export class BinanceWebSocketClient {
           price: ticker.c,
           priceChange: ticker.p,
           priceChangePercent: ticker.P,
-          volume: ticker.v,
+          volume: ticker.q,  // 使用 quote volume (USDT)，非 base volume (token 数量)
           timestamp: ticker.E
         }));
 
@@ -322,7 +322,7 @@ export class BinanceWebSocketClient {
           price: ticker.c,
           priceChange: ticker.p,
           priceChangePercent: ticker.P,
-          volume: ticker.v,
+          volume: ticker.q,  // 使用 quote volume (USDT)，非 base volume (token 数量)
           timestamp: ticker.E
         }));
 

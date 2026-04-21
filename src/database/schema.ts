@@ -98,7 +98,7 @@ export const createTables = `
 
   CREATE TABLE IF NOT EXISTS user_filter_settings (
     user_id TEXT PRIMARY KEY,
-    volume_threshold INTEGER DEFAULT 10000000,
+    volume_threshold INTEGER DEFAULT 30000000,
     enable_auto_filter BOOLEAN DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,

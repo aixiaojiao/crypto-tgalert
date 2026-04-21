@@ -42,6 +42,16 @@ Using the test-runner agent ensures:
 
 This is a crypto-tgalert project for Telegram alerts related to cryptocurrency.
 
+### Adding a new Telegram command
+
+Whenever a new `this.bot.command('xxx', ...)` is added in `src/bot.ts`, you MUST also update these three places in the same change — otherwise the command is silently unreachable from the UI:
+
+1. **Start welcome message** — the template literal inside `this.bot.start(...)` handler (around line ~465). Add the new command under the appropriate section.
+2. **`/help` content** — the return value of `generateHelpContent()`. Add the new command with a short description under the right section.
+3. **Telegram menu bar** — the `commands` array in `setupMenuCommands()`. Add a `{ command, description }` entry so it shows up in the Telegram command menu.
+
+Also update `getSimilarCommands()`'s `availableCommands` list so typo suggestions work for the new command.
+
 ## Tone and Behavior
 
 - Criticism is welcome. Please tell me when I am wrong or mistaken, or even when you think I might be wrong or mistaken.

@@ -4,13 +4,18 @@ import { authMiddleware } from './middleware/auth';
 import { BotContext, BotStatus } from './types';
 import { BinanceClient, binanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
+import { getVolumeIcon } from './config/volumeConfig';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
+import { CoinNoteModel } from './models/coinNoteModel';
+import { DebugReportModel } from './models/debugReportModel';
 import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
 import { PotentialAlertModel } from './models/potentialAlertModel';
 import { fundingAlertService } from './services/fundingAlertService';
 import { FundingAlertModel } from './models/fundingAlertModel';
+import { breakoutAlertService } from './services/breakoutAlertService';
+import { BreakoutAlertModel } from './models/breakoutAlertModel';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -36,7 +41,8 @@ import { YellowlistCommandHandler } from './services/telegram/commands/Yellowlis
 import { MuteCommandHandler } from './services/telegram/commands/MuteCommandHandler';
 import { FilterCommandHandler } from './services/telegram/commands/FilterCommandHandler';
 import { MenuCommandHandler } from './services/telegram/commands/MenuCommandHandler';
-import { historicalHighCache } from './services/historicalHighCacheV2';
+import { historicalHighService } from './services/historicalHighService';
+import { HighCommandHandler } from './services/telegram/commands/HighCommandHandler';
 import { esp32NotificationService, ESP32_ALERT_TYPES } from './services/esp32';
 
 export class TelegramBot {
@@ -51,6 +57,7 @@ export class TelegramBot {
   private muteCommandHandler: MuteCommandHandler;
   private filterCommandHandler: FilterCommandHandler;
   private menuCommandHandler: MenuCommandHandler;
+  private highCommandHandler: HighCommandHandler;
 
   constructor() {
     this.bot = new Telegraf<BotContext>(config.telegram.botToken);
@@ -76,6 +83,7 @@ export class TelegramBot {
     this.filterCommandHandler = new FilterCommandHandler(null, log, filterManager, userFilterService);
     this.menuCommandHandler = new MenuCommandHandler(userFilterService, filterManager, this.unifiedAlertService);
     this.menuCommandHandler.register(this.bot);
+    this.highCommandHandler = new HighCommandHandler(null, log, historicalHighService);
 
     this.setupMiddleware();
     this.setupCommands();
@@ -88,6 +96,8 @@ export class TelegramBot {
 
     // Initialize databases
     TimeRangeAlertModel.initDatabase();
+    CoinNoteModel.initDatabase();
+    DebugReportModel.initDatabase();
 
     // 注意：实时服务初始化已移到 initializeRealtimeServices()，
     // 必须在 app.start() 中显式 await 调用，避免静默失败
@@ -237,7 +247,9 @@ export class TelegramBot {
   private getSimilarCommands(unknownCommand: string): string[] {
     const availableCommands = [
       'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
-      'debug', 'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential',
+      'debug', 'debug_list', 'debug_remove',
+      'note', 'notes', 'note_remove',
+      'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential',
       'funding_alert_on', 'funding_alert_off', 'funding_alert_status',
       'alert_list', 'alert_remove', 'alert_toggle', 'alert_history', 'alert_bt'
     ];
@@ -340,10 +352,10 @@ export class TelegramBot {
         { command: 'black_list', description: '🛡️ 查看黑名单' },
         { command: 'black_remove', description: '🛡️ 移除黑名单' },
         { command: 'black_clear', description: '🛡️ 清空黑名单' },
-        { command: 'yellow', description: '⚠️ 添加黄名单 /yellow <symbol>' },
-        { command: 'yellow_list', description: '⚠️ 查看黄名单' },
-        { command: 'yellow_remove', description: '⚠️ 移除黄名单' },
-        { command: 'yellow_clear', description: '⚠️ 清空黄名单' },
+        { command: 'yellow', description: '🟡 添加黄名单 /yellow <symbol>' },
+        { command: 'yellow_list', description: '🟡 查看黄名单' },
+        { command: 'yellow_remove', description: '🟡 移除黄名单' },
+        { command: 'yellow_clear', description: '🟡 清空黄名单' },
         { command: 'mute', description: '🔇 屏蔽 /mute <symbol> <时长>' },
         { command: 'mute_list', description: '🔇 查看屏蔽列表' },
         { command: 'mute_remove', description: '🔇 解除屏蔽' },
@@ -351,7 +363,13 @@ export class TelegramBot {
         { command: 'filter_settings', description: '⚙️ 过滤设置管理' },
         { command: 'filter_volume', description: '⚙️ 设置交易量阈值' },
         { command: 'filter_auto', description: '⚙️ 启用/禁用自动过滤' },
-        { command: 'status', description: '⚙️ 查看系统状态' }
+        { command: 'status', description: '⚙️ 查看系统状态' },
+        { command: 'note', description: '📝 记录币种点评 /note <币> <内容>' },
+        { command: 'notes', description: '📝 查看币种点评历史 /notes <币>' },
+        { command: 'note_remove', description: '📝 删除点评 /note_remove <ID>' },
+        { command: 'debug', description: '🐛 记录遇到的问题 /debug <描述>' },
+        { command: 'debug_list', description: '🐛 查看未处理的 Debug 列表' },
+        { command: 'debug_remove', description: '🐛 删除 Debug 记录 /debug_remove <ID>' }
       ];
 
       console.log('📋 设置菜单命令:', commands);
@@ -486,6 +504,11 @@ export class TelegramBot {
 /black_list - 查看黑名单
 /filter_settings - 查看过滤设置
 /filter_auto on - 启用自动过滤
+
+📝 *点评 & 反馈:*
+/note btc 突破前高 - 记录点评(自动存价格+排名)
+/notes btc - 查看BTC点评历史
+/debug <问题> - 记录遇到的问题, 下次会话统一处理
 
 🤖 机器人已准备就绪！
       `;
@@ -642,7 +665,7 @@ export class TelegramBot {
             if (systemRiskIcon) {
               riskIcon = systemRiskIcon + ' ';
             } else if (isInUserYellowlist) {
-              riskIcon = '⚠️ ';
+              riskIcon = '🟡 ';
             }
           } catch (riskError: any) {
             console.log('Risk check failed:', riskError?.message || riskError);
@@ -697,6 +720,257 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
       }
     });
 
+    // 币种点评 - 记录点评内容 + 当时价格/费率/排名
+    this.bot.command('note', async (ctx) => {
+      try {
+        const raw = ctx.message?.text || '';
+        const rest = raw.replace(/^\/note(@\S+)?\s*/, '').trim();
+        const parts = rest.split(/\s+/);
+        if (parts.length < 2 || !parts[0]) {
+          await ctx.reply(
+            '💡 用法: /note <币种> <点评内容>\n' +
+            '示例: /note btc 突破前高，观察回踩是否站稳'
+          );
+          return;
+        }
+
+        const symbolInput = parts[0].toUpperCase();
+        const noteText = rest.slice(parts[0].length).trim();
+        if (!noteText) {
+          await ctx.reply('❌ 点评内容不能为空');
+          return;
+        }
+
+        const symbol = symbolInput.endsWith('USDT') ? symbolInput : symbolInput + 'USDT';
+        const userId = String(ctx.from?.id || 'unknown');
+
+        let price: number | null = null;
+        let priceChange24h: number | null = null;
+        let fundingRate: number | null = null;
+
+        try {
+          const stats = await tieredDataManager.getTicker24hr(symbol);
+          if (stats) {
+            price = parseFloat(stats.lastPrice);
+            priceChange24h = parseFloat(stats.priceChangePercent);
+          }
+        } catch (_e) { /* ignore price fetch failure */ }
+
+        try {
+          const fr = await tieredDataManager.getFundingRate(symbol);
+          if (fr && fr.fundingRate !== undefined && fr.fundingRate !== null) {
+            fundingRate = parseFloat(String(fr.fundingRate));
+          }
+        } catch (_e) { /* ignore */ }
+
+        let rankType: 'gainers' | 'losers' | null = null;
+        let rankPosition: number | null = null;
+        try {
+          const gainers = realtimeMarketCache.getTopGainers(10, 0) || [];
+          const gi = gainers.findIndex((t: any) => t.symbol === symbol);
+          if (gi >= 0) {
+            rankType = 'gainers';
+            rankPosition = gi + 1;
+          } else {
+            const losers = realtimeMarketCache.getTopLosers(10, 0) || [];
+            const li = losers.findIndex((t: any) => t.symbol === symbol);
+            if (li >= 0) {
+              rankType = 'losers';
+              rankPosition = li + 1;
+            }
+          }
+        } catch (_e) { /* ignore ranking failure */ }
+
+        const id = CoinNoteModel.add({
+          userId,
+          symbol,
+          note: noteText,
+          price,
+          priceChange24h,
+          fundingRate,
+          rankType,
+          rankPosition,
+        });
+
+        const displaySymbol = symbol.replace(/USDT$/, '');
+        let reply = `📝 已记录点评 #${id}\n\n`;
+        reply += `🪙 ${displaySymbol}\n`;
+        reply += `💬 ${noteText}\n`;
+        if (price !== null) {
+          const priceText = await formatPriceWithSeparators(String(price), symbol).catch(() => String(price));
+          reply += `💰 价格: $${priceText}`;
+          if (priceChange24h !== null) {
+            reply += ` (24h ${priceChange24h >= 0 ? '+' : ''}${priceChange24h.toFixed(2)}%)`;
+          }
+          reply += '\n';
+        }
+        if (fundingRate !== null) {
+          reply += `💸 资金费率: ${(fundingRate * 100).toFixed(4)}%\n`;
+        }
+        if (rankType && rankPosition) {
+          const label = rankType === 'gainers' ? '涨幅榜' : '跌幅榜';
+          reply += `📊 当前排名: ${label} #${rankPosition}\n`;
+        }
+        reply += `⏰ ${formatTimeToUTC8(new Date())}`;
+
+        await ctx.reply(reply);
+      } catch (error) {
+        console.error('Note add error:', error);
+        await ctx.reply('❌ 点评记录失败，请稍后重试');
+      }
+    });
+
+    // 查看币种点评历史
+    this.bot.command('notes', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1) || [];
+        if (args.length === 0) {
+          await ctx.reply('💡 用法: /notes <币种>\n示例: /notes btc');
+          return;
+        }
+        const symbolInput = args[0].toUpperCase();
+        const symbol = symbolInput.endsWith('USDT') ? symbolInput : symbolInput + 'USDT';
+        const displaySymbol = symbol.replace(/USDT$/, '');
+
+        const notes = CoinNoteModel.listBySymbol(symbol, 20);
+        if (notes.length === 0) {
+          await ctx.reply(`📭 ${displaySymbol} 暂无点评记录`);
+          return;
+        }
+
+        let message = `📚 *${displaySymbol} 点评记录 (${notes.length})*\n\n`;
+        for (const n of notes) {
+          const time = formatTimeToUTC8(new Date(n.createdAt + 'Z'));
+          message += `🔖 *#${n.id}* · ${time}\n`;
+          message += `💬 ${n.note}\n`;
+          const meta: string[] = [];
+          if (n.price !== null) {
+            let priceText: string;
+            try {
+              priceText = await formatPriceWithSeparators(String(n.price), n.symbol);
+            } catch {
+              priceText = String(n.price);
+            }
+            let s = `💰 $${priceText}`;
+            if (n.priceChange24h !== null) {
+              s += ` (${n.priceChange24h >= 0 ? '+' : ''}${n.priceChange24h.toFixed(2)}%)`;
+            }
+            meta.push(s);
+          }
+          if (n.fundingRate !== null) {
+            meta.push(`费率 ${(n.fundingRate * 100).toFixed(3)}%`);
+          }
+          if (n.rankType && n.rankPosition) {
+            const label = n.rankType === 'gainers' ? '涨幅' : '跌幅';
+            meta.push(`${label}榜#${n.rankPosition}`);
+          }
+          if (meta.length) message += meta.join(' · ') + '\n';
+          message += '\n';
+        }
+        message += `💡 删除: /note_remove <ID>`;
+        await ctx.replyWithMarkdown(message);
+      } catch (error) {
+        console.error('Notes list error:', error);
+        await ctx.reply('❌ 查询点评记录失败');
+      }
+    });
+
+    // 删除点评
+    this.bot.command('note_remove', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1) || [];
+        const id = parseInt(args[0], 10);
+        if (!id || isNaN(id)) {
+          await ctx.reply('💡 用法: /note_remove <ID>\n示例: /note_remove 3');
+          return;
+        }
+        const existing = CoinNoteModel.getById(id);
+        if (!existing) {
+          await ctx.reply(`❌ 未找到点评 #${id}`);
+          return;
+        }
+        const ok = CoinNoteModel.remove(id);
+        if (ok) {
+          const displaySymbol = existing.symbol.replace(/USDT$/, '');
+          await ctx.reply(`✅ 已删除 ${displaySymbol} 的点评 #${id}`);
+        } else {
+          await ctx.reply(`❌ 删除失败`);
+        }
+      } catch (error) {
+        console.error('Note remove error:', error);
+        await ctx.reply('❌ 删除点评失败');
+      }
+    });
+
+    // Debug 反馈 - 用户随手记录遇到的问题，下次会话统一处理
+    this.bot.command('debug', async (ctx) => {
+      try {
+        const raw = ctx.message?.text || '';
+        const content = raw.replace(/^\/debug(@\S+)?\s*/, '').trim();
+        if (!content) {
+          await ctx.reply(
+            '💡 用法: /debug <遇到的问题描述>\n' +
+            '示例: /debug /signals btc 报错 "cannot read undefined"\n\n' +
+            '其他: /debug_list 查看未处理列表 · /debug_remove <ID> 删除'
+          );
+          return;
+        }
+        const userId = String(ctx.from?.id || 'unknown');
+        const id = DebugReportModel.add(userId, content);
+        await ctx.reply(
+          `🐛 已记录 Debug 报告 #${id}\n\n` +
+          `📝 ${content}\n` +
+          `⏰ ${formatTimeToUTC8(new Date())}\n\n` +
+          `💡 下次会话时我会统一查看 /debug_list`
+        );
+      } catch (error) {
+        console.error('Debug add error:', error);
+        await ctx.reply('❌ Debug 记录失败');
+      }
+    });
+
+    this.bot.command('debug_list', async (ctx) => {
+      try {
+        const reports = DebugReportModel.listOpen(50);
+        if (reports.length === 0) {
+          await ctx.reply('📭 暂无未处理的 Debug 报告');
+          return;
+        }
+        let message = `🐛 *未处理的 Debug 报告 (${reports.length})*\n\n`;
+        for (const r of reports) {
+          const time = formatTimeToUTC8(new Date(r.createdAt + 'Z'));
+          message += `🔖 *#${r.id}* · ${time}\n`;
+          message += `📝 ${r.content}\n\n`;
+        }
+        message += `💡 删除: /debug_remove <ID>`;
+        await ctx.replyWithMarkdown(message);
+      } catch (error) {
+        console.error('Debug list error:', error);
+        await ctx.reply('❌ 查询 Debug 列表失败');
+      }
+    });
+
+    this.bot.command('debug_remove', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1) || [];
+        const id = parseInt(args[0], 10);
+        if (!id || isNaN(id)) {
+          await ctx.reply('💡 用法: /debug_remove <ID>');
+          return;
+        }
+        const existing = DebugReportModel.getById(id);
+        if (!existing) {
+          await ctx.reply(`❌ 未找到 Debug #${id}`);
+          return;
+        }
+        DebugReportModel.remove(id);
+        await ctx.reply(`✅ 已删除 Debug #${id}`);
+      } catch (error) {
+        console.error('Debug remove error:', error);
+        await ctx.reply('❌ 删除 Debug 记录失败');
+      }
+    });
+
     // 状态命令
     this.bot.command('status', async (ctx) => {
       try {
@@ -739,7 +1013,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         const volumeStats = volumeClassifier.getVolumeStats();
 
         // 获取历史高价缓存状态
-        const highCacheStatus = historicalHighCache.getCacheStatus();
+        const highCacheStatus = historicalHighService.getCacheStatus();
 
         let statusMessage = `
 📊 *缓存系统状态*
@@ -762,26 +1036,27 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 • 低频更新: ${refreshStats.low.updated}/${refreshStats.low.requested} (跳过:${refreshStats.low.skipped})
 `;
 
-        // 添加历史高价缓存状态
-        if (highCacheStatus.totalEntries > 0) {
-          const avgAgeHours = Math.floor(highCacheStatus.averageAge / (60 * 60 * 1000));
-          const healthEmoji = highCacheStatus.cacheHealthy ? '✅' : '⚠️';
+        // 添加历史高价缓存状态（v3）
+        if (highCacheStatus.cachedRows > 0) {
+          const now = Date.now();
+          const newest = highCacheStatus.newestCollectedAt ?? 0;
+          const ageHours = newest > 0 ? Math.floor((now - newest) / (60 * 60 * 1000)) : -1;
+          const healthy = ageHours >= 0 && ageHours < 48;
+          const healthEmoji = healthy ? '✅' : '⚠️';
           statusMessage += `
-📊 *历史高价缓存:*
-• 总条目数: ${highCacheStatus.totalEntries.toLocaleString()}
-• 数据健康: ${healthEmoji} ${highCacheStatus.cacheHealthy ? '健康' : '需要更新'}
-• 平均年龄: ${avgAgeHours} 小时
-• 最旧数据: ${new Date(highCacheStatus.oldestUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
-• 最新数据: ${new Date(highCacheStatus.newestUpdate).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
+📊 *历史高价缓存 (v3):*
+• 覆盖 symbol: ${highCacheStatus.cachedSymbols}  总行数: ${highCacheStatus.cachedRows}
+• 数据健康: ${healthEmoji} ${healthy ? '健康' : '需要刷新'}
+• 最新 collected: ${newest ? new Date(newest).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : 'n/a'}
+• 冷刷新进行中: ${highCacheStatus.coldInProgress ? '是' : '否'}  温刷新进行中: ${highCacheStatus.warmInProgress ? '是' : '否'}
 `;
-
-          if (!highCacheStatus.cacheHealthy) {
-            statusMessage += `• 💡 建议: 使用 /cache_update 更新数据\n`;
+          if (!healthy) {
+            statusMessage += `• 💡 建议: 使用 /cache_update 触发冷刷新\n`;
           }
         } else {
           statusMessage += `
-📊 *历史高价缓存:*
-• ❌ 未初始化或无数据
+📊 *历史高价缓存 (v3):*
+• ❌ 未初始化或无数据（冷刷新尚未完成）
 `;
         }
 
@@ -904,7 +1179,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
             priceText = '';
           }
 
-          return `${index + 1}. ${icon} ${riskIcon}**${symbol}** ${fundingPercent}%${priceText}\n`;
+          const volumeIcon = getVolumeIcon(realtimeMarketCache.getTickerData(rate.symbol)?.volume);
+          return `${index + 1}. ${icon} ${volumeIcon}${riskIcon}**${symbol}** ${fundingPercent}%${priceText}\n`;
         });
 
         const formattedEntries = await Promise.all(pricePromises);
@@ -1142,7 +1418,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         for (const r of results) {
           const icon = r.level === 1 ? '🚨' : r.level === 2 ? '⚡' : '📍';
           const name = r.symbol.replace('USDT', '');
-          summary += `${icon} L${r.level} ${name} | 价${r.priceChange1h.toFixed(1)}% OI${r.oiChange1h.toFixed(1)}% 费率${(r.fundingRate8h * 100).toFixed(3)}%`;
+          const volumeIcon = getVolumeIcon(realtimeMarketCache.getTickerData(r.symbol)?.volume);
+          summary += `${icon} L${r.level} ${volumeIcon}${name} | 价${r.priceChange1h.toFixed(1)}% OI${r.oiChange1h.toFixed(1)}% 费率${(r.fundingRate8h * 100).toFixed(3)}%`;
           if (r.fundingIntervalHours !== 8) summary += ` ⚠️${r.fundingIntervalHours}h`;
           summary += `\n`;
         }
@@ -1198,6 +1475,54 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         log.info('FundingAlertService disabled by user');
       } catch (error) {
         log.error('funding_alert_off command failed', error);
+        await ctx.reply('❌ 关闭失败');
+      }
+    });
+
+    // ==================== 突破报警推送命令（P2） ====================
+    // 档位：L3 (7d) / L2 (30d) / L1 (180d) / L1 (52w|ATH)；二次确认放量 + 持续
+
+    this.bot.command('breakout_status', async (ctx) => {
+      try {
+        const status = breakoutAlertService.getStatus();
+        let msg = `🚀 *突破报警状态*\n\n`;
+        msg += `🔘 推送: ${status.enabled ? '✅ 已开启' : '❌ 已关闭'}\n`;
+        msg += `⏱ 扫描间隔: ${status.intervalMin} 分钟\n`;
+        msg += `🔄 运行中: ${status.running ? '是' : '否'}\n\n`;
+        msg += `📊 *今日触发:* ${status.todayStats.total} 次\n`;
+        if (status.todayStats.total > 0) {
+          for (const [tier, count] of Object.entries(status.todayStats.byTier)) {
+            msg += `  • ${tier}: ${count}\n`;
+          }
+        }
+        msg += `\n💡 命令：\n`;
+        msg += `\`/breakout_on\` - 开启推送\n`;
+        msg += `\`/breakout_off\` - 关闭推送`;
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        log.error('breakout_status command failed', error);
+        await ctx.reply('❌ 查询状态失败');
+      }
+    });
+
+    this.bot.command('breakout_on', async (ctx) => {
+      try {
+        BreakoutAlertModel.setEnabled(true);
+        await ctx.reply('✅ 突破报警推送已开启\n\n档位: 7d / 30d / 180d / 52w / ATH\n二次确认: 放量 + 持续\n同档位 6h 内不重推；升档立即再推\n下次扫描将在 10 分钟内触发');
+        log.info('BreakoutAlertService enabled by user');
+      } catch (error) {
+        log.error('breakout_on command failed', error);
+        await ctx.reply('❌ 开启失败');
+      }
+    });
+
+    this.bot.command('breakout_off', async (ctx) => {
+      try {
+        BreakoutAlertModel.setEnabled(false);
+        await ctx.reply('🛑 突破报警推送已关闭\n\n定时扫描任务仍在运行但会直接跳过，再开启用 /breakout_on');
+        log.info('BreakoutAlertService disabled by user');
+      } catch (error) {
+        log.error('breakout_off command failed', error);
         await ctx.reply('❌ 关闭失败');
       }
     });
@@ -1619,7 +1944,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
 
       displayData.forEach((result, index) => {
         const changeIcon = result.change >= 0 ? '📈' : '📉';
-        message += `${index + 1}. ${changeIcon} **${result.symbol}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
+        const riskIcon = getRiskIcon(getTokenRiskLevel(result.symbol));
+        const volumeIcon = getVolumeIcon(realtimeMarketCache.getTickerData(result.symbol)?.volume);
+        const symbolDisplay = result.symbol.replace('USDT', '');
+        message += `${index + 1}. ${changeIcon} ${volumeIcon}${riskIcon}**${symbolDisplay}** ${result.change >= 0 ? '+' : ''}${result.change.toFixed(2)}% (${result.currentOI.toFixed(1)}M)\n`;
       });
 
       message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
@@ -1637,10 +1965,10 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
    */
   private async handleRankingCommand(ctx: any, type: string, period: string, count: number): Promise<void> {
     try {
-      // 优先使用 WebSocket 实时缓存数据，避免 REST API 调用触发频率限制
+      // 优先使用 WebSocket 实时缓存数据。用户主动查询展示全部（0 阈值），低成交量行另加 💧
       const rankings = type === 'gainers'
-        ? realtimeMarketCache.getTopGainers(count, 10000)
-        : realtimeMarketCache.getTopLosers(count, 10000);
+        ? realtimeMarketCache.getTopGainers(count, 0)
+        : realtimeMarketCache.getTopLosers(count, 0);
 
       if (!rankings || rankings.length === 0) {
         await ctx.reply(`❌ 实时数据尚未就绪，请稍后重试`);
@@ -1664,7 +1992,8 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
           priceText = '';
         }
 
-        message += `${i + 1}. ${changeIcon} ${ticker.riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
+        const volumeIcon = getVolumeIcon(ticker.volume);
+        message += `${i + 1}. ${changeIcon} ${volumeIcon}${ticker.riskIcon}**${symbol}** ${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%${priceText}\n`;
       }
 
       message += `\n⏰ 更新时间: ${formatTimeToUTC8(new Date())}`;
@@ -2278,7 +2607,7 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 /black_list - 查看
 /black_clear - 清空
 
-⚠️ 黄名单(警告标记):
+🟡 黄名单(警告标记):
 /yellow <symbol> [reason] - 添加黄名单
 /yellow_remove <symbol> - 移除
 /yellow_list - 查看
@@ -2294,6 +2623,16 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 /filter_settings - 查看过滤设置
 /filter_volume <amount> - 设置交易量阈值
 /filter_auto on/off - 启用/禁用自动过滤
+
+📝 币种点评:
+/note <币> <内容> - 记录点评 (自动存价格+24h涨跌+资金费率, 若在前10榜单也存排名)
+/notes <币> - 查看该币最近20条点评
+/note_remove <ID> - 删除一条点评
+
+🐛 Debug 反馈 (随手记问题，下次会话统一处理):
+/debug <问题描述> - 记录遇到的问题
+/debug_list - 查看未处理的 Debug 列表
+/debug_remove <ID> - 删除 Debug 记录
 
 ⚙️ 系统:
 /status - 系统状态
@@ -2497,187 +2836,19 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 
     // 历史相关下划线命令
     this.bot.command('high', async (ctx) => {
-      try {
-        const args = ctx.message?.text.split(' ').slice(1);
-
-        if (args.length === 0) {
-          const helpMessage = `**📊 历史高价查询命令帮助**
-
-**代币查询:**
-• \`/high <symbol>\` - 查看代币历史最高价
-• \`/high <symbol> <timeframe>\` - 查看指定时间框架历史高价
-• \`/high <timeframe> all\` - 查看该时间框架排名
-
-**接近高点查询(新功能):**
-• \`/high near\` - 查看接近历史高点的币种
-• \`/high near <timeframe>\` - 查看接近指定时间框架高点的币种
-• \`/high list <timeframe>\` - 同上(别名)
-
-**示例:**
-• \`/high sol\` - SOL的历史最高价
-• \`/high btc 1m\` - BTC的1个月历史高价
-• \`/high 1w all\` - 1周历史高价排名
-• \`/high near\` - 最接近历史高点的币种
-• \`/high near 1m\` - 最接近1个月高点的币种
-
-**时间框架:**
-\`1w\` (1周) | \`1m\` (1个月) | \`6m\` (6个月) | \`1y\` (1年) | \`all\` (全部历史)`;
-
-          await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
-          return;
-        }
-
-        const firstArg = args[0].toLowerCase();
-        const secondArg = args[1]?.toLowerCase();
-
-        // 新功能：/high near [timeframe] - 查看接近高点的币种
-        if (firstArg === 'near' || firstArg === 'list') {
-          const timeframe = secondArg || 'all'; // 默认历史高点
-          return this.handleNearHighCommand(ctx, timeframe);
-        }
-
-        const symbol = firstArg;
-        const param = secondArg;
-
-        // 特殊处理 "all" 命令：/high sol all
-        if (param === 'all') {
-          const timeframe = symbol;
-          const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
-
-          if (!validTimeframes.includes(timeframe)) {
-            await ctx.reply(`❌ 排名查询的时间框架无效: ${timeframe}\\n有效选项: ${validTimeframes.join(', ')}`, { parse_mode: 'Markdown' });
-            return;
-          }
-
-          await ctx.reply('📊 正在查询历史高价排名...');
-
-          // 获取排名数据（限制前20个）
-          const rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 20);
-
-          if (rankings.length === 0) {
-            await ctx.reply(`❌ 时间框架 ${timeframe} 暂无排名数据`);
-            return;
-          }
-
-          // 格式化排名消息
-          const timeframeNames: Record<string, string> = {
-            '1w': '1周',
-            '1m': '1个月',
-            '6m': '6个月',
-            '1y': '1年',
-            'all': '历史'
-          };
-
-          let message = `📊 **${timeframeNames[timeframe]}历史高价排名 TOP${Math.min(rankings.length, 15)}**\n\n`;
-          message += `_按需要涨幅由小到大排序_\n\n`;
-
-          rankings.slice(0, 15).forEach((item: any, index: number) => {
-            const symbolName = item.symbol.replace('USDT', '');
-            const emoji = item.neededGainPercent === 0 ? '🚀' : index < 3 ? '🔥' : '📈';
-            const gainText = item.neededGainPercent === 0
-              ? `新高🎉`
-              : `需涨${item.neededGainPercent.toFixed(1)}%`;
-
-            message += `${emoji} **${index + 1}. ${symbolName}** ${gainText}\n`;
-            message += `   $${item.currentPrice.toFixed(6)} (最高: $${item.highPrice.toFixed(6)})\n\n`;
-          });
-
-          if (rankings.length > 15) {
-            message += `_... 还有 ${rankings.length - 15} 个代币_\n\n`;
-          }
-
-          // 添加缓存时间显示 - 取第一个代币的缓存时间作为代表
-          if (rankings.length > 0 && rankings[0].lastUpdated) {
-            const cacheUpdateTime = new Date(rankings[0].lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-            message += `\n🕒 **数据时间**: ${cacheUpdateTime}`;
-          }
-
-          await ctx.reply(message, { parse_mode: 'Markdown' });
-
-        } else {
-          // 处理单个代币查询：/high sol 或 /high sol 1w
-          const timeframe = param || 'all'; // 默认历史全部
-          const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
-
-          if (!validTimeframes.includes(timeframe)) {
-            await ctx.reply(`❌ 无效的时间框架: ${timeframe}\\n有效选项: ${validTimeframes.join(', ')}`, { parse_mode: 'Markdown' });
-            return;
-          }
-
-          // 标准化代币符号
-          let normalizedSymbol = symbol.toUpperCase();
-          if (!normalizedSymbol.endsWith('USDT') && !normalizedSymbol.endsWith('USD')) {
-            normalizedSymbol = normalizedSymbol + 'USDT';
-          }
-
-          await ctx.reply(`📈 正在查询 ${normalizedSymbol} 的${timeframe === 'all' ? '历史最高价' : timeframe + '高价'}...`);
-
-          // 查询历史高价数据
-          const data = historicalHighCache.queryHistoricalHigh(normalizedSymbol, timeframe);
-
-          if (!data) {
-            await ctx.reply(`❌ 未找到 ${normalizedSymbol} 的历史高价数据 (${timeframe})`);
-            return;
-          }
-
-          // 格式化响应消息
-          const {
-            currentPrice,
-            highPrice,
-            highTimestamp,
-            neededGainPercent
-          } = data;
-
-          const timeframeNames: Record<string, string> = {
-            '1w': '1周',
-            '1m': '1个月',
-            '6m': '6个月',
-            '1y': '1年',
-            'all': '历史'
-          };
-
-          const highDate = new Date(highTimestamp).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-          const distanceEmoji = neededGainPercent === 0 ? '🚀' : '📊';
-
-          let message = `${distanceEmoji} **${normalizedSymbol} - ${timeframeNames[timeframe]}历史高价分析**\n\n`;
-          message += `💰 **当前价格**: $${currentPrice.toFixed(6)}\n`;
-          message += `🎯 **历史最高**: $${highPrice.toFixed(6)} (${highDate})\n`;
-
-          if (neededGainPercent === 0) {
-            message += `🎉 **已创新高**: 当前价格就是${timeframeNames[timeframe]}最高价!\n`;
-          } else {
-            message += `📈 **需要涨幅**: ${neededGainPercent.toFixed(2)}% 回到${timeframeNames[timeframe]}高点\n`;
-            const daysDiff = Math.floor((Date.now() - highTimestamp) / (24 * 60 * 60 * 1000));
-            message += `⏰ **时间差**: ${daysDiff}天前\n`;
-          }
-
-          // 添加缓存更新时间
-          const cacheUpdateTime = new Date(data.lastUpdated).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-          message += `\n🕒 **数据时间**: ${cacheUpdateTime}`;
-
-          await ctx.reply(message, { parse_mode: 'Markdown' });
-        }
-
-      } catch (error) {
-        log.error('Historical high query failed:', error);
-        await ctx.reply('❌ 历史高价查询失败，请稍后重试');
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      const result = await this.highCommandHandler.handle(ctx, args);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
     this.bot.command('near_high', async (ctx) => {
-      try {
-        const args = ctx.message?.text.split(' ').slice(1);
-        const timeframe = args[0] || 'all'; // 默认历史高点
-
-        // 重定向用户使用新命令并执行功能
-        await ctx.reply(`💡 **命令已升级！** 建议使用新的命令格式：\n\`/high near ${timeframe}\`\n\n正在为您查询...`);
-
-        // 调用新的处理逻辑
-        await this.handleNearHighCommand(ctx, timeframe);
-
-      } catch (error) {
-        log.error('near_high命令处理失败:', error);
-        await ctx.reply('❌ 查询失败，请使用新命令: /high near [timeframe]');
+      const args = ctx.message?.text.split(' ').slice(1) || [];
+      const tf = args[0] || 'ATH';
+      const result = await this.highCommandHandler.handle(ctx, ['near', tf]);
+      if (result.shouldReply && result.message) {
+        await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
     });
 
@@ -2927,7 +3098,7 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
       }
     });
 
-    // Cache update 命令 - 手动更新缓存数据
+    // Cache update 命令 - 手动触发 v3 冷刷新
     this.bot.command('cache_update', async (ctx) => {
       try {
         const userId = ctx.from?.id?.toString();
@@ -2936,161 +3107,31 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
           return;
         }
 
-        const args = ctx.message?.text.split(' ').slice(1);
-        const hoursThreshold = args[0] ? parseInt(args[0]) : 24;
+        const before = historicalHighService.getCacheStatus();
+        await ctx.reply(
+          `🔄 开始触发高点缓存冷刷新...\n\n` +
+          `📊 当前：symbol ${before.cachedSymbols} / 行数 ${before.cachedRows}\n` +
+          `🕒 最新 collected: ${before.newestCollectedAt ? new Date(before.newestCollectedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : 'n/a'}\n` +
+          `_冷刷新会遍历活跃 symbol 全部 5 档，预计 3-6 分钟_`,
+          { parse_mode: 'Markdown' }
+        );
 
-        if (isNaN(hoursThreshold) || hoursThreshold <= 0 || hoursThreshold > 168) {
-          await ctx.reply('❌ 时间阈值必须是1-168小时之间的数字\n\n用法：/cache_update [小时数]\n示例：/cache_update 12 （更新12小时前的数据）');
-          return;
-        }
+        const result = await historicalHighService.runColdRefresh();
 
-        await ctx.reply(`🔄 开始检查和更新 ${hoursThreshold} 小时前的缓存数据...`);
-
-        // 获取缓存状态
-        const status = historicalHighCache.getCacheStatus();
-        const statusMessage = `📊 **当前缓存状态**\n\n` +
-          `📈 **总条目数**: ${status.totalEntries.toLocaleString()}\n` +
-          `🕒 **数据健康**: ${status.cacheHealthy ? '✅ 健康' : '⚠️ 需要更新'}\n` +
-          `📅 **平均数据年龄**: ${Math.floor(status.averageAge / (60 * 60 * 1000))} 小时\n` +
-          `🔄 **最旧数据**: ${new Date(status.oldestUpdate).toLocaleString('zh-CN')}\n` +
-          `🆕 **最新数据**: ${new Date(status.newestUpdate).toLocaleString('zh-CN')}\n\n`;
-
-        await ctx.reply(statusMessage, { parse_mode: 'Markdown' });
-
-        // 执行手动更新
-        const updateResult = await historicalHighCache.triggerManualUpdate(hoursThreshold);
-
-        if (updateResult.success) {
-          let resultMessage = `✅ **缓存更新完成！**\n\n${updateResult.message}`;
-
-          if (updateResult.updateResult) {
-            const { failed, newHighs, totalUpdated } = updateResult.updateResult;
-            resultMessage += `\n\n📊 **详细统计**:\n`;
-            resultMessage += `✅ 成功更新: ${totalUpdated} 个币种\n`;
-            resultMessage += `❌ 更新失败: ${failed.length} 个币种\n`;
-            resultMessage += `🎉 发现新高: ${newHighs.length} 个币种\n`;
-
-            if (newHighs.length > 0) {
-              resultMessage += `\n🚀 **新高币种**: ${newHighs.slice(0, 10).join(', ')}`;
-              if (newHighs.length > 10) {
-                resultMessage += ` 等${newHighs.length}个`;
-              }
-            }
-
-            if (failed.length > 0 && failed.length <= 5) {
-              resultMessage += `\n⚠️ **失败币种**: ${failed.join(', ')}`;
-            }
-          }
-
-          await ctx.reply(resultMessage, { parse_mode: 'Markdown' });
-        } else {
-          await ctx.reply(`❌ **缓存更新失败**\n\n${updateResult.message}`, { parse_mode: 'Markdown' });
-        }
-
+        const after = historicalHighService.getCacheStatus();
+        let msg = `✅ **冷刷新完成**\n\n`;
+        msg += `🔄 刷新 symbol: ${result.refreshed}\n`;
+        msg += `⚠️ 跳过 symbol: ${result.skipped}\n`;
+        msg += `🗑 清理死币: ${result.pruned}\n\n`;
+        msg += `📊 覆盖 symbol: ${after.cachedSymbols}  总行数: ${after.cachedRows}\n`;
+        msg += `🕒 最新 collected: ${after.newestCollectedAt ? new Date(after.newestCollectedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : 'n/a'}`;
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
       } catch (error) {
-        log.error('Cache update命令处理失败:', error);
-        await ctx.reply('❌ 缓存更新失败，请稍后重试');
+        log.error('Cache update 命令处理失败:', error);
+        await ctx.reply('❌ 冷刷新触发失败，请查看日志');
       }
     });
 
-  }
-
-  /**
-   * 处理接近高点查询的逻辑
-   */
-  private async handleNearHighCommand(ctx: any, timeframe: string): Promise<void> {
-    try {
-      // 验证时间框架
-      const validTimeframes = ['1w', '1m', '6m', '1y', 'all'];
-      if (!validTimeframes.includes(timeframe)) {
-        await ctx.reply(`❌ 无效的时间框架: ${timeframe}\n有效选项: ${validTimeframes.join(', ')}`);
-        return;
-      }
-
-      // 时间框架名称映射
-      const timeframeNames: Record<string, string> = {
-        '1w': '1周',
-        '1m': '1个月',
-        '6m': '6个月',
-        '1y': '1年',
-        'all': '历史'
-      };
-
-      await ctx.reply(`📈 正在查询接近${timeframeNames[timeframe]}高点的币种...`);
-
-      // 获取排名数据
-      let rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 100);
-
-      if (rankings.length === 0) {
-        await ctx.reply(`❌ 时间框架 ${timeframe} 暂无数据`);
-        return;
-      }
-
-      // 批量更新前20个币种的实时价格
-      try {
-        await ctx.reply('📈 正在获取实时价格...');
-
-        const symbolsToUpdate = rankings.slice(0, 20).map(r => r.symbol);
-        console.log(`🔄 Updating real-time prices for near-high command: ${symbolsToUpdate.length} symbols`);
-
-        const updateResult = await historicalHighCache.batchIncrementalUpdate(symbolsToUpdate, 1);
-        console.log(`✅ Updated ${updateResult.success.length} symbols for near-high command`);
-
-        // 重新获取更新后的排名
-        rankings = historicalHighCache.getRankingByProximityToHigh(timeframe, 100);
-      } catch (updateError) {
-        console.warn('Failed to update prices for near-high command, using cached data:', updateError);
-      }
-
-      // 筛选接近高点的币种（需要涨幅小于20%）
-      const nearHighCoins = rankings.filter(coin =>
-        coin &&
-        coin.neededGainPercent != null &&
-        coin.neededGainPercent > 0 &&
-        coin.neededGainPercent <= 20 &&
-        coin.currentPrice != null &&
-        coin.highPrice != null
-      ).slice(0, 15);
-
-      if (nearHighCoins.length === 0) {
-        await ctx.reply(`📊 当前没有币种接近${timeframeNames[timeframe]}高点\n(定义：距离高点20%以内)`);
-        return;
-      }
-
-      // 格式化消息
-      let message = `🎯 **接近${timeframeNames[timeframe]}高点的币种 TOP${nearHighCoins.length}**\n\n`;
-      message += `_需要涨幅20%以内，按接近程度排序_\n\n`;
-
-      nearHighCoins.forEach((coin, index) => {
-        const symbol = coin.symbol.replace('USDT', '');
-        const emoji = coin.neededGainPercent <= 5 ? '🔥' : coin.neededGainPercent <= 10 ? '⚡' : '📈';
-        const neededGain = (coin.neededGainPercent || 0).toFixed(2);
-
-        // 安全的价格格式化
-        const currentPriceStr = coin.currentPrice ? coin.currentPrice.toFixed(6) : '0.000000';
-        const highPriceStr = coin.highPrice ? coin.highPrice.toFixed(6) : '0.000000';
-
-        message += `${emoji} **${index + 1}. ${symbol}** 还需涨 ${neededGain}%\n`;
-        message += `   $${currentPriceStr} → $${highPriceStr}\n\n`;
-      });
-
-      // 添加统计信息
-      const veryClose = nearHighCoins.filter(c => c && c.neededGainPercent != null && c.neededGainPercent <= 5).length;
-      const close = nearHighCoins.filter(c => c && c.neededGainPercent != null && c.neededGainPercent <= 10).length;
-
-      message += `📊 **距离统计**\n`;
-      message += `🔥 5%以内: ${veryClose}个  ⚡ 10%以内: ${close}个\n\n`;
-
-      // 显示实时更新时间
-      const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-      message += `🕒 **数据时间**: ${now} ⚡`;
-
-      await ctx.replyWithMarkdown(message);
-
-    } catch (error) {
-      log.error('接近高点查询失败:', error);
-      await ctx.reply('❌ 接近高点查询失败，请稍后重试');
-    }
   }
 
   /**

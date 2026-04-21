@@ -117,11 +117,11 @@ export class ApplicationBootstrap {
         log.warn('⚠️ Binance connection test failed, but continuing', { error: error instanceof Error ? error.message : String(error) });
       }
 
-      // 预热历史高点缓存
-      const historicalHighCache = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE) as any;
-      if (historicalHighCache && typeof historicalHighCache.initialize === 'function') {
-        await historicalHighCache.initialize();
-        log.info('✅ Historical high cache initialized');
+      // 历史高点缓存 v3：非阻塞启动，冷刷新在后台
+      const historicalHighSvc = this.serviceRegistry.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE) as any;
+      if (historicalHighSvc && typeof historicalHighSvc.start === 'function') {
+        await historicalHighSvc.start();
+        log.info('✅ Historical high cache service (v3) started');
       }
 
     } catch (error) {
@@ -186,9 +186,8 @@ export class ApplicationBootstrap {
       const { HighCommandHandler } = require('../services/telegram');
       const messageFormatter = container.resolve('MESSAGE_FORMATTER');
       const logger = container.resolve(SERVICE_IDENTIFIERS.LOGGER);
-      const historicalHighCache = container.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE);
-      const tieredDataManager = container.resolve(SERVICE_IDENTIFIERS.TIERED_DATA_MANAGER);
-      return new HighCommandHandler(messageFormatter, logger, historicalHighCache, tieredDataManager);
+      const highService = container.resolve(SERVICE_IDENTIFIERS.HISTORICAL_HIGH_CACHE);
+      return new HighCommandHandler(messageFormatter, logger, highService);
     });
 
     log.debug('✅ Additional services registered');

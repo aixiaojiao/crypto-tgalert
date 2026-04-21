@@ -2,6 +2,7 @@ import { BaseCommandHandler } from './BaseCommandHandler';
 import { BotContext, CommandResult } from '../ICommandHandler';
 import { IAdvancedFilterManager } from '../../filters/AdvancedFilterManager';
 import { IUserFilterService } from '../../filters/UserFilterService';
+import { refreshVolumeThreshold } from '../../../config/volumeConfig';
 
 /**
  * 过滤设置命令处理器
@@ -147,6 +148,9 @@ export class FilterCommandHandler extends BaseCommandHandler {
         volume_threshold: volumeThreshold
       });
 
+      // 运行时服务使用的是内存缓存的阈值，写完 DB 后必须立即刷新，否则下次撞库前仍是旧值
+      await refreshVolumeThreshold();
+
       const displayVolume = (volumeThreshold / 1000000).toFixed(0);
       let message = `✅ 交易量阈值已设置为 ${displayVolume}M USDT`;
 
@@ -266,7 +270,7 @@ export class FilterCommandHandler extends BaseCommandHandler {
       message += '🏛️ **系统级过滤:**\n';
       message += `• 🚫 已下架代币: ${summary.systemFilters.delisted}个\n`;
       message += `• ⛔ 风险代币: ${summary.systemFilters.blacklist}个\n`;
-      message += `• ⚠️ 警告代币: ${summary.systemFilters.yellowlist}个\n`;
+      message += `• 🟡 警告代币: ${summary.systemFilters.yellowlist}个\n`;
       message += `• 小计: ${summary.systemFilters.delisted + summary.systemFilters.blacklist + summary.systemFilters.yellowlist}个\n\n`;
 
       // 用户级过滤详情

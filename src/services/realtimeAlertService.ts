@@ -3,6 +3,7 @@ import { log } from '../utils/logger';
 import { realtimeMarketCache, RankingResult } from './realtimeMarketCache';
 import { formatPriceWithSeparators, formatPriceChange } from '../utils/priceFormatter';
 import { getRiskIcon, getTokenRiskLevel, isRiskyToken } from '../config/tokenLists';
+import { isLowVolume, getVolumeIcon } from '../config/volumeConfig';
 import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
@@ -159,8 +160,22 @@ export class RealtimeAlertService {
         return;
       }
 
+      // 全局规则：<30M 低成交量币不作为推送触发源（榜单展示时仍会显示并加 💧）
+      const volumeFilteredChanges = userFilteredChanges.filter(change => {
+        const ticker = realtimeMarketCache.getTickerData(change.symbol);
+        return ticker ? !isLowVolume(ticker.volume) : false;
+      });
+
+      if (volumeFilteredChanges.length === 0) {
+        log.debug('All significant changes are low-volume (<threshold), skip push', {
+          total: userFilteredChanges.length,
+          symbols: userFilteredChanges.map(c => c.symbol)
+        });
+        return;
+      }
+
       // 过滤需要推送的变化（考虑冷却时间和推送限制）
-      const pushableChanges = userFilteredChanges.filter(change =>
+      const pushableChanges = volumeFilteredChanges.filter(change =>
         this.canPushSymbol(change.symbol)
       );
 
@@ -326,7 +341,7 @@ export class RealtimeAlertService {
       // TODO: Implement proper user preference checking
 
       // 构建完整的TOP10排行榜消息，与/gainers命令格式一致
-      let message = `🚀 *24小时涨幅榜 TOP10*\n\n`;
+      let message = `🏆 *24小时涨幅榜 TOP10*\n\n`;
 
       // 应用用户过滤设置 - 涨幅榜只过滤下架/系统黑名单，mute/黄名单代币加标识显示
       let filteredRankings = currentRankings;
@@ -388,7 +403,7 @@ export class RealtimeAlertService {
               break;
             case 'system_yellowlist':
             case 'user_yellowlist':
-              prefixIcon = '⚠️'; // 黄名单代币显示警告图标
+              prefixIcon = '🟡'; // 黄名单代币
               break;
             case 'user_blacklist':
               prefixIcon = '🔒'; // 用户黑名单显示锁定图标
@@ -397,7 +412,8 @@ export class RealtimeAlertService {
           }
         }
 
-        const prefix = prefixIcon ? `${prefixIcon}` : '';
+        const volumeIcon = getVolumeIcon(ranking.volume);
+        const prefix = `${volumeIcon}${prefixIcon || ''}`;
         const sign = ranking.priceChangePercent >= 0 ? '+' : '';
         return `${index + 1}. ${prefix}**${symbol}** ${sign}${changePercent}% ($${formattedPrice})\n`;
       });
@@ -457,7 +473,7 @@ export class RealtimeAlertService {
       }
 
       if (filteredNewEntries.length > 0 || filteredPositionChanges.length > 0) {
-        message += `\n🔥 *本次变化:*\n`;
+        message += `\n📊 *本次变化:*\n`;
 
         // 新进入前10
         if (filteredNewEntries.length > 0) {
@@ -474,7 +490,7 @@ export class RealtimeAlertService {
                   break;
                 case 'system_yellowlist':
                 case 'user_yellowlist':
-                  prefixIcon = '⚠️';
+                  prefixIcon = '🟡';
                   break;
                 case 'user_blacklist':
                   prefixIcon = '🔒';
@@ -482,7 +498,9 @@ export class RealtimeAlertService {
               }
             }
 
-            const prefix = prefixIcon ? `${prefixIcon}` : '';
+            const ticker = realtimeMarketCache.getTickerData(change.symbol);
+            const volumeIcon = getVolumeIcon(ticker?.volume);
+            const prefix = `${volumeIcon}${prefixIcon || ''}`;
             message += `• 🆕 ${prefix}**${symbol}** 新进入#${change.currentPosition}\n`;
           }
         }
@@ -502,7 +520,7 @@ export class RealtimeAlertService {
                   break;
                 case 'system_yellowlist':
                 case 'user_yellowlist':
-                  prefixIcon = '⚠️';
+                  prefixIcon = '🟡';
                   break;
                 case 'user_blacklist':
                   prefixIcon = '🔒';
@@ -510,7 +528,9 @@ export class RealtimeAlertService {
               }
             }
 
-            const prefix = prefixIcon ? `${prefixIcon}` : '';
+            const ticker = realtimeMarketCache.getTickerData(change.symbol);
+            const volumeIcon = getVolumeIcon(ticker?.volume);
+            const prefix = `${volumeIcon}${prefixIcon || ''}`;
             const moveDirection = change.changeValue > 0 ? '⬆️' : '⬇️';
             const moveText = change.changeValue > 0 ? '上升' : '下降';
             message += `• ${moveDirection} ${prefix}**${symbol}** ${moveText}${Math.abs(change.changeValue)}位 (#${change.previousPosition}→#${change.currentPosition})\n`;

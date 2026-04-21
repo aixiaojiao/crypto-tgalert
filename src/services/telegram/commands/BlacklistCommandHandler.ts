@@ -269,7 +269,7 @@ export class BlacklistCommandHandler extends BaseCommandHandler {
       }
 
       // 警告代币
-      message += '⚠️ **警告代币 (谨慎交易):**\n';
+      message += '🟡 **警告代币 (谨慎交易):**\n';
       if (systemFilters.yellowlist.length > 0) {
         message += `   ${systemFilters.yellowlist.join(', ')}\n\n`;
       } else {

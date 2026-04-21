@@ -2,6 +2,158 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.0] - 2026-04-21
+
+本版本是 `feat/alert-optimization` 分支的合并 release，在 2.6.9 之后累积了 10 个 commit。核心是两条告警线（突破 + 潜力币）、ESP32 语音播报、过滤/冷却/日志的系统性修复，以及文档大扫除。
+
+### ✨ 新增
+
+- **[P1] 高点缓存重建**（`src/services/highPointCache/`）：SQLite 持久化 + 三层刷新策略（冷启动/定时/按需），新增 5 档时间框架 `7d / 30d / 180d / 52w / ATH`，并加入死币过滤（主流币因 24h 振幅低被误剔除的 hotfix 已修复）。
+- **[P2] 突破告警服务**（`breakoutAlertService.ts`）：依赖 P1 高点缓存，支持 `/alert_bt <symbol> <tf>` 和全市场扫描。突破事件走统一的 UnifiedAlertService，去重/冷却/ESP32 推送一次到位。
+- **潜力币信号推送**（`potentialAlertService.ts`）：`/potential*` 命令族。24h 窗口扫描 "价↑ + OI↑ + Funding 负/松动"，分 L1/L2/L3 三级（funding ≤ -0.5% / ≤ -0.1% / 其他）。同级 2 小时冷却，等级升高立即推。
+- **费率周期告警（边沿触发）**：`interval_4h` / `interval_1h` 采用边沿触发，交易所把结算周期压到 4h/1h 时才报，反映极端行情。
+- **ESP32 语音播报**（`src/services/esp32/`）：6 类告警（price / pump_dump / breakthrough / potential / funding / ranking）全量接入欧雨网关 TTS 设备。每类独立订阅、全局冷却、静音时段、文本去 Markdown 清洗，失败静默不影响 Telegram。命令：`/esp32_status`、`/esp32_on`、`/esp32_off`、`/esp32_test`、`/esp32_cooldown`、`/esp32_quiet`。
+- **黄名单管理**（三级过滤补齐）：`/yellow`、`/yellow_remove`、`/yellow_list`、`/yellow_clear`。推送时自动加 🟡 标识（本版本统一到全量报警）。
+- **/note 币种点评**：`/note <币> <内容>` 记录点评时自动快照当前价格/24h 涨跌/资金费率，若该币在前 10 榜单中同步存排名。`/notes <币>` 回看最近点评。
+- **/debug 问题反馈**：`/debug <描述>`、`/debug_list`、`/debug_remove` 随手记 bug，下次会话统一处理。
+- **/menu 交互菜单**：Inline keyboard 快捷入口，覆盖价格警报管理、系统状态、过滤器总览、名单浏览。
+
+### 🔧 优化
+
+- **低成交量全局标记**（v2.7.0）：以 `user_filter_settings.volume_threshold` 为单一真源（默认 30M USDT），取代散落 6 处的硬编码阈值。低于阈值的币不主动推送，被动查询榜单时加 💧 标签。修复了 `binanceWebSocket` 错用 `data.v`（token 数）而非 `data.q`（USDT 金额）导致 GUN/TRADOOR 这类币标记反转的 bug。
+- **费率 negative 档位加最小门槛 -0.05%**（v2.7.2）：基于 546 条历史报警数据，69% 的负费率跨越 0 线事件 `|rate| < 0.01%`，改为双侧门槛 `-0.0005` 过滤掉 80% 的 0 附近噪音。
+- **动态告警冷却**（v2.6.8 系列）+ **冷却日志去重**（v2.7.1）：priceAlertService 过去 48h 累计 40 万行 `🚫 冷却中` 日志污染，引入 `cooldownLogged` 标志，每轮冷却只在首次触发时打一条日志。
+- **businessMonitor filter_check 降级**（v2.7.1）：用户黑名单/mute 拦截是预期行为，不再写入 `error.log`。
+- **涨跌榜实时推送不再被用户过滤器误拦截**，`data/cache/` 权限从 0777 收紧到 0775。
+- **告警前缀 emoji 统一规划**，黄名单标识全量统一为 🟡。
+
+### 🗂️ 文档
+
+- 删除 8 份历史遗留文档：`DEPLOYMENT.md`（shell 部署已被 Docker 替代）、`DOCKER_DEPLOY.md`（与 `DEPLOYMENT_DOCKER.md` 重复）、`DOCKER_CLOUD_DEPLOYMENT_v2.6.9.md`（版本快照）、`PHASE2_TECHNICAL_INDICATORS.md`（2025-09 规划稿）、`REFACTORING_PREP.md`（DI 重构完成记录）、`TEST_ISSUES_REPORT.md`（58KB 旧测试日志）、`WORK_PROGRESS.md`（22KB v2.6.2 进度）、`DIAGNOSTIC_SYSTEM.md`（描述了未实现的 `/diagnostic` 命令）。
+- `README.md` 整体重写，命令/功能/模块结构全部对齐 v2.8.0。
+- `TECHNICAL_INDICATORS_SYSTEM_DOC.md` 精简为 `/signals` 命令文档（~50 行），明确标注哪些是已实现、哪些是骨架。
+- `DEPLOYMENT_DOCKER.md` 示例版本号升至 v2.8.0，补齐 `OUYU_GATEWAY_URL` / `OUYU_DEVICE_ID` 环境变量。
+
+---
+
+## [2.7.2] - 2026-04-21
+
+### 🔇 费率 negative 档位加最小门槛
+
+`src/services/fundingAlertService.ts`
+- 旧逻辑：`prevRate >= 0 && currentRate < 0` 即触发，跨过 0 线就报警
+- 数据：生产历史 546 条 negative 报警里，`|rate| < 0.01%` 占 69%、`< 0.1%` 占 84% —— 绝大多数是 0 附近的噪音抖动
+- 改为双侧门槛：`prevRate >= -0.0005 && currentRate < -0.0005`，即只有跌破 -0.05% 才算"显著转负"
+- 新增 `CONFIG.NEGATIVE_MIN_ABS = 0.0005`（8h 归一化后的小数值）
+- 推送消息底部提示文案同步更新
+- 预期：过滤掉 ~80% 的噪音报警，保留真正有交易意义的负费率信号
+
+---
+
+## [2.7.1] - 2026-04-21
+
+### 🧹 日志清理
+
+**priceAlertService 冷却日志去重**
+`src/services/priceAlertService.ts`
+- 原实现在冷却期内每次 WS tick 都打一条 `🚫 30分钟内重复通知` info 日志，单 symbol 1 小时冷却产生 1800+ 行 —— 过去 48 小时累计 ~40 万行污染
+- 在 `recentTriggers` 记录中新增 `cooldownLogged: boolean` 标志；每轮冷却只在首次被挡时打一条日志（消息尾标注 "后续静默至冷却结束"），新触发写入时重置标志
+- 实测：同一 key 在整个冷却周期内只产生 1 条日志（之前 1800 条）
+
+**businessMonitor filter_check 降级**
+`src/utils/businessMonitor.ts`
+- `recordOperation` / `endOperation` 原先以 `success` 布尔值决定日志级别（`success=false → error`），导致用户黑名单/mute 拦截这类**预期行为**被写入 `error.log`
+- 改为：仅当真的传入 `error` 参数（系统异常）时才走 error 级别，否则统一 info
+- 效果：`error.log` 不再被 `filter_check blocked` 事件填满
+
+**数据缓存目录权限收紧**
+- `data/cache/` 从历史遗留的 `drwxrwxrwx` (0777) 调整为 `drwxrwxr-x` (0775)
+- 之前 2026-04-18 的 EACCES 错误已不再出现（权限与 owner 均正常）
+
+---
+
+## [2.7.0] - 2026-04-20
+
+### 💧 低成交量全局标记 + 统一阈值体系
+
+新增以 `user_filter_settings.volume_threshold` 为单一真源的全局成交量阈值（默认 30M USDT），取代此前散落 6 处的硬编码阈值。低于阈值的代币：(a) 不触发任何主动推送；(b) 出现在用户主动查询的榜单中时仍显示，但统一加 💧 标记。
+
+**新增模块**: `src/config/volumeConfig.ts`
+- `refreshVolumeThreshold()` — 从 DB 读取并缓存阈值（`max(volume_threshold)`，默认 30M）
+- `getVolumeThreshold()` / `isLowVolume(v)` / `getVolumeIcon(v)` — 运行时查询接口
+- `/filter_volume <N>` 更新 DB 后立即调用 `refreshVolumeThreshold()` 刷新内存缓存，无需重启
+
+**🐛 关键 Bug：Binance `!ticker@arr` 使用了错误的 volume 字段**
+- `binanceWebSocket.ts:137/288/325` 此前取 `data.v`（base 成交量，token 数量），与 30M USDT 阈值比较语义错误
+- 现象：`GUN`（单价 $0.024，token 数 >30M）被当成高流动性漏标；`TRADOOR`（单价 $7.77，token 数 <30M）被正确标记
+- 修复：改用 `data.q`（quote 成交量，USDT 金额）
+
+**推送硬拦截（<30M 不推）**
+- `priceAlertService.ts:checkAlertConditions` 前置 `isLowVolume(volume24h)` 判断 → 直接 return，不触发、不占 cooldown
+- `realtimeAlertService.ts:handleRankingChangeEvent` 排名变化事件过滤低量币，若过滤后无可推变化则放弃本次推送
+
+**展示标记（💧 前缀）**
+- `bot.ts`: `/rank_gainers` / `/rank_losers` / `/funding` / `/oi` / `/potential` 五处榜单渲染
+- `realtimeAlertService.ts`: 实时涨幅榜 TOP10 行、🆕 新进入、⬆️/⬇️ 排名大幅变化 三处渲染
+- `/oi` 顺手补上此前缺失的 `riskIcon`
+- `/rank_gainers` / `/rank_losers` 取消硬编码 10K USDT 下限（传 0），改为全展示 + 低量加 💧
+
+**统一四服务阈值来源**
+| 服务 | 原硬编码 | 改动 |
+|---|---|---|
+| `potentialAlertService.ts` | 30M | → `getVolumeThreshold()` |
+| `fundingAlertService.ts` | 30M | → `getVolumeThreshold()` |
+| `breakoutAlertService.ts` | 1M | → `getVolumeThreshold()` |
+| `historicalHighService.ts` | 1M | → `getVolumeThreshold()` |
+
+**DB 迁移**
+- `schema.ts` 默认值 `10000000` → `30000000`
+- `UserFilterService.ts` 新建记录默认值同步
+- 生产库单一已有用户记录从 10M 迁移到 30M
+
+---
+
+### 🧠 PriceAlertService 内存优化（timeframes 按需激活）
+
+#### 问题
+- 服务对 8 个时间框架（1m/5m/15m/30m/1h/4h/24h/3d）全量缓存 710+ 交易对的 price snapshots，不论配置中是否启用
+- PM2 配置 `max_memory_restart: '500M'`，每 1.5-2 小时被动重启一次（日志显示过去 48 小时内 30 次 max-memory-restart 事件）
+- 实测内存增速 **7.8 MB/min**，90 分钟后撞 500MB 上限
+
+#### 修复
+`src/services/priceAlertService.ts`
+- 删除构造函数中无条件的 `initializeTimeframes()`
+- 新增 `syncTimeframesToConfigs()`：按 `alertConfigs` 中启用配置动态增删 timeframe 桶；被删除的桶同步清空 snapshots Map 释放内存
+- 挂接点：`start()`（loadAlertConfigs 之后）、`reloadConfigs()`（用户 CRUD 后）
+- 生产只有 1 条 1h 配置启用 → timeframe 从 8 个压到 1 个
+
+#### 效果
+- 增速降至 **4.7 MB/min**（-40%），撞 500MB 延后至 ~85 分钟
+- 残余内存增长源（realtimeMarketCache / WebSocket 订阅累积等）待后续排查
+
+---
+
+### 🐛 PriceAlertService 冷却清理 Bug 修复
+
+#### 问题
+`cleanupExpiredCooldowns()` 硬编码保留 5 分钟记录，但 1h 时间框架冷却为 30 分钟、4h 为 2 小时。5 分钟后记录被清空 → `globalRecent` 为 undefined → 绕过冷却，重复推送。
+
+实测：`GUNUSDT 1h` 冷却本应 30 分钟，实际 14:01 → 14:08 → 14:25 → 14:33 连续四次触发（间隔 7-17 分钟），日志显示 `MUSDT` 单小时推送 40 次。
+
+#### 修复
+`src/services/priceAlertService.ts:cleanupExpiredCooldowns`
+```ts
+// 按每个 key 自身的 calculateCooldownMs(timeframe) 判断过期，
+// 不再硬编码 5 分钟
+const timeframe = key.split(':')[1];
+const cooldownMs = this.calculateCooldownMs(timeframe);
+if (now - record.timestamp > cooldownMs) {
+  this.recentTriggers.delete(key);
+}
+```
+
+---
+
 ## [2.6.9] - 2025-09-23
 
 ### 🔧 **系统级过滤机制优化与统一**
