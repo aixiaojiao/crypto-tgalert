@@ -365,7 +365,7 @@ export class TelegramBot {
         { command: 'filter_auto', description: '⚙️ 启用/禁用自动过滤' },
         { command: 'status', description: '⚙️ 查看系统状态' },
         { command: 'note', description: '📝 记录币种点评 /note <币> <内容>' },
-        { command: 'notes', description: '📝 查看币种点评历史 /notes <币>' },
+        { command: 'notes', description: '📝 点评: /notes 全部分页 · /notes <币> 单币' },
         { command: 'note_remove', description: '📝 删除点评 /note_remove <ID>' },
         { command: 'debug', description: '🐛 记录遇到的问题 /debug <描述>' },
         { command: 'debug_list', description: '🐛 查看未处理的 Debug 列表' },
@@ -507,6 +507,7 @@ export class TelegramBot {
 
 📝 *点评 & 反馈:*
 /note btc 突破前高 - 记录点评(自动存价格+排名)
+/notes - 查看全部点评(分页, /notes 2 翻页)
 /notes btc - 查看BTC点评历史
 /debug <问题> - 记录遇到的问题, 下次会话统一处理
 
@@ -820,15 +821,69 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
       }
     });
 
-    // 查看币种点评历史
+    // 查看点评历史: 无参数或数字参数 = 全部分页; 符号参数 = 单币
     this.bot.command('notes', async (ctx) => {
       try {
         const args = ctx.message?.text.split(' ').slice(1) || [];
-        if (args.length === 0) {
-          await ctx.reply('💡 用法: /notes <币种>\n示例: /notes btc');
+        const firstArg = args[0] || '';
+        const isPageArg = firstArg === '' || /^\d+$/.test(firstArg);
+
+        if (isPageArg) {
+          const pageSize = 10;
+          const page = firstArg === '' ? 1 : Math.max(1, parseInt(firstArg, 10));
+          const total = CoinNoteModel.countAll();
+          if (total === 0) {
+            await ctx.reply('📭 暂无任何点评记录');
+            return;
+          }
+          const totalPages = Math.ceil(total / pageSize);
+          if (page > totalPages) {
+            await ctx.reply(`❌ 页码超出范围 (共 ${totalPages} 页)`);
+            return;
+          }
+          const offset = (page - 1) * pageSize;
+          const notes = CoinNoteModel.listAll(pageSize, offset);
+
+          let message = `📚 *全部点评 第 ${page}/${totalPages} 页* (共 ${total} 条)\n\n`;
+          for (const n of notes) {
+            const time = formatTimeToUTC8(new Date(n.createdAt + 'Z'));
+            const displaySymbol = n.symbol.replace(/USDT$/, '');
+            message += `🔖 *#${n.id}* · *${displaySymbol}* · ${time}\n`;
+            message += `💬 ${n.note}\n`;
+            const meta: string[] = [];
+            if (n.price !== null) {
+              let priceText: string;
+              try {
+                priceText = await formatPriceWithSeparators(String(n.price), n.symbol);
+              } catch {
+                priceText = String(n.price);
+              }
+              let s = `💰 $${priceText}`;
+              if (n.priceChange24h !== null) {
+                s += ` (${n.priceChange24h >= 0 ? '+' : ''}${n.priceChange24h.toFixed(2)}%)`;
+              }
+              meta.push(s);
+            }
+            if (n.fundingRate !== null) {
+              meta.push(`费率 ${(n.fundingRate * 100).toFixed(3)}%`);
+            }
+            if (n.rankType && n.rankPosition) {
+              const label = n.rankType === 'gainers' ? '涨幅' : '跌幅';
+              meta.push(`${label}榜#${n.rankPosition}`);
+            }
+            if (meta.length) message += meta.join(' · ') + '\n';
+            message += '\n';
+          }
+          const nav: string[] = [];
+          if (page < totalPages) nav.push(`下一页: /notes ${page + 1}`);
+          if (page > 1) nav.push(`上一页: /notes ${page - 1}`);
+          nav.push('单币查看: /notes <币>');
+          message += `💡 ${nav.join(' · ')}`;
+          await ctx.replyWithMarkdown(message);
           return;
         }
-        const symbolInput = args[0].toUpperCase();
+
+        const symbolInput = firstArg.toUpperCase();
         const symbol = symbolInput.endsWith('USDT') ? symbolInput : symbolInput + 'USDT';
         const displaySymbol = symbol.replace(/USDT$/, '');
 
@@ -2626,6 +2681,7 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 
 📝 币种点评:
 /note <币> <内容> - 记录点评 (自动存价格+24h涨跌+资金费率, 若在前10榜单也存排名)
+/notes - 查看全部点评 (分页, 每页10条; /notes 2 看第2页)
 /notes <币> - 查看该币最近20条点评
 /note_remove <ID> - 删除一条点评
 

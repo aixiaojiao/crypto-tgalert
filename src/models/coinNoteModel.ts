@@ -91,6 +91,24 @@ export class CoinNoteModel {
     return rows as CoinNote[];
   }
 
+  static listAll(limit: number, offset: number): CoinNote[] {
+    const rows = this.db.prepare(`
+      SELECT id, user_id AS userId, symbol, note, price,
+             price_change_24h AS priceChange24h, funding_rate AS fundingRate,
+             rank_type AS rankType, rank_position AS rankPosition,
+             created_at AS createdAt
+      FROM coin_notes
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+    return rows as CoinNote[];
+  }
+
+  static countAll(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS c FROM coin_notes`).get() as { c: number };
+    return row.c;
+  }
+
   static getById(id: number): CoinNote | undefined {
     const row = this.db.prepare(`
       SELECT id, user_id AS userId, symbol, note, price,
