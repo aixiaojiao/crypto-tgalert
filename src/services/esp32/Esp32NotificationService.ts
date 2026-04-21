@@ -43,12 +43,16 @@ export interface Esp32ConfigSnapshot {
 }
 
 const DEFAULT_COOLDOWN_SECONDS = 60;
+const MAX_QUEUE_SIZE = 20;
 
 export class Esp32NotificationService {
   private readonly client: OuyuPushClient;
   private readonly userId: string;
   // 内存态全局最近一次推送时间戳（防并发打断），每进程独立
   private lastPushAtMs = 0;
+  // 冷却期内待播队列：按入队顺序依次播报，避免直接丢弃重要信息
+  private readonly queue: string[] = [];
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(client: OuyuPushClient, userId: string) {
     this.client = client;
@@ -168,8 +172,11 @@ export class Esp32NotificationService {
   }
 
   /**
-   * 核心：告警 hook 调用入口。应用"总开关 → 类型过滤 → 静音时段 → 冷却 → 清洗文本 → 推送"。
+   * 核心：告警 hook 调用入口。应用"总开关 → 类型过滤 → 静音时段 → 清洗文本 → (立即推 | 入队)"。
    * 失败吞掉，永不抛。
+   *
+   * 冷却处理：不再直接丢弃。冷却期内消息入队，由定时器按 cooldown 间隔依次播报。
+   * 队列上限 MAX_QUEUE_SIZE，溢出时丢弃最旧项（保留最新市场状态）。
    */
   async pushAlert(alertType: Esp32AlertType, text: string): Promise<OuyuPushResult> {
     try {
@@ -178,19 +185,35 @@ export class Esp32NotificationService {
       if (!cfg.enabledTypes.includes(alertType)) return skip(`type ${alertType} not enabled`);
       if (isInQuietHours(cfg.quietStart, cfg.quietEnd, new Date())) return skip('quiet hours');
 
-      const now = Date.now();
-      if (now - this.lastPushAtMs < cfg.cooldownSeconds * 1000) {
-        return skip(`cooldown ${cfg.cooldownSeconds}s`);
-      }
-
       const cleaned = cleanForTts(text);
       if (!cleaned) return skip('empty after clean');
 
-      // 关键：冷却在**入口**就占住，而不是等 push 成功后才占。
-      // 否则 3 条告警并发时都能绕过冷却（都在 await client.push 时各自的
-      // lastPushAtMs 仍是旧值），导致设备端三段 TTS 叠播。
-      this.lastPushAtMs = now;
-      return await this.client.push(cleaned);
+      const cooldownMs = cfg.cooldownSeconds * 1000;
+      const now = Date.now();
+      const canSendNow =
+        this.queue.length === 0 &&
+        this.pendingTimer === null &&
+        now - this.lastPushAtMs >= cooldownMs;
+
+      if (canSendNow) {
+        // 关键：冷却在**入口**就占住，而不是等 push 成功后才占。
+        // 否则 3 条告警并发时都能绕过冷却（都在 await client.push 时各自的
+        // lastPushAtMs 仍是旧值），导致设备端三段 TTS 叠播。
+        this.lastPushAtMs = now;
+        return await this.client.push(cleaned);
+      }
+
+      // 冷却期内：入队等待播报
+      if (this.queue.length >= MAX_QUEUE_SIZE) {
+        const dropped = this.queue.shift();
+        log.warn('Esp32 queue overflow, dropped oldest', {
+          dropped,
+          queueSize: this.queue.length,
+        });
+      }
+      this.queue.push(cleaned);
+      this.scheduleDrain(cooldownMs);
+      return { success: true, error: `queued (pos=${this.queue.length})` };
     } catch (err: any) {
       // 任何意外异常都吞掉
       log.error('Esp32NotificationService.pushAlert unexpected error', {
@@ -198,6 +221,48 @@ export class Esp32NotificationService {
         error: err?.message || String(err),
       });
       return { success: false, error: err?.message || String(err) };
+    }
+  }
+
+  /**
+   * 调度下一次队列播报。单例 timer，避免重复调度。
+   */
+  private scheduleDrain(cooldownMs: number): void {
+    if (this.pendingTimer || this.queue.length === 0) return;
+    const delay = Math.max(0, this.lastPushAtMs + cooldownMs - Date.now());
+    this.pendingTimer = setTimeout(() => {
+      this.pendingTimer = null;
+      this.drainOne(cooldownMs).catch((err) => {
+        log.error('Esp32 queue drain error', { error: err?.message || String(err) });
+      });
+    }, delay);
+  }
+
+  /**
+   * 从队列取一条播报，播完继续调度下一条。
+   * 播报前重新读配置：若总开关已关闭则清空队列彻底静默。
+   */
+  private async drainOne(cooldownMs: number): Promise<void> {
+    const text = this.queue.shift();
+    if (!text) return;
+
+    const cfg = await this.getConfig();
+    if (!cfg.enabled) {
+      const flushed = this.queue.length + 1;
+      this.queue.length = 0;
+      log.debug('Esp32 queue flushed (master switch off)', { flushed });
+      return;
+    }
+
+    this.lastPushAtMs = Date.now();
+    try {
+      await this.client.push(text);
+    } catch (err: any) {
+      log.error('Esp32 queued push failed', { error: err?.message || String(err) });
+    }
+
+    if (this.queue.length > 0) {
+      this.scheduleDrain(cooldownMs);
     }
   }
 

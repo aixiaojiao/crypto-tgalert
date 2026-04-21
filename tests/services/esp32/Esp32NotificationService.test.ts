@@ -75,7 +75,7 @@ describe('Esp32NotificationService', () => {
       await svc.enableTypes(['all']);
       const cfg = await svc.getConfig();
       expect(cfg.enabledTypes.sort()).toEqual(
-        ['breakthrough', 'potential', 'price', 'pump_dump', 'ranking'].sort()
+        ['breakthrough', 'funding', 'potential', 'price', 'pump_dump', 'ranking'].sort()
       );
     });
 
@@ -156,7 +156,7 @@ describe('Esp32NotificationService', () => {
       expect(client.calls[0]).toBe('BTC 突破新高');
     });
 
-    test('cooldown blocks rapid second push', async () => {
+    test('cooldown queues rapid second push instead of dropping', async () => {
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
       await svc.setCooldownSeconds(60);
@@ -164,9 +164,12 @@ describe('Esp32NotificationService', () => {
       const r1 = await svc.pushAlert('potential', 'first');
       const r2 = await svc.pushAlert('potential', 'second');
       expect(r1.success).toBe(true);
-      expect(r2.success).toBe(false);
-      expect(r2.error).toContain('cooldown');
+      // 入队也算接受，返回 success，只是 error 字段带 queued 标识
+      expect(r2.success).toBe(true);
+      expect(r2.error).toContain('queued');
+      // 只立即发了第一条；第二条在队列里等冷却结束
       expect(client.calls.length).toBe(1);
+      expect(client.calls[0]).toBe('first');
     });
 
     test('zero cooldown allows back-to-back pushes', async () => {
@@ -181,8 +184,7 @@ describe('Esp32NotificationService', () => {
 
     test('cooldown is consumed at entry (engaged before push, survives failure)', async () => {
       // 入口就占冷却：防止并发时多条告警都绕过冷却、设备端叠播。
-      // 代价：如果一条失败（设备离线），紧接着那条也会被冷却挡掉。可接受，
-      // 因为告警有时效性，过期即弃（Q4 策略 A）。
+      // 失败也会占住冷却窗口，紧接着的那条进入队列（不再直接丢）。
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
       await svc.setCooldownSeconds(60);
@@ -193,13 +195,13 @@ describe('Esp32NotificationService', () => {
 
       client.nextResult = { success: true, status: 200 };
       const r2 = await svc.pushAlert('potential', 'second');
-      expect(r2.success).toBe(false);
-      expect(r2.error).toContain('cooldown');
-      expect(client.calls.length).toBe(1); // second never hit the client
+      expect(r2.success).toBe(true);
+      expect(r2.error).toContain('queued');
+      expect(client.calls.length).toBe(1); // second 待在队列里，未立即发
     });
 
-    test('concurrent pushes within cooldown: only first goes through', async () => {
-      // 回归：3 条 potential 并发时，只播一次，不叠播。
+    test('concurrent pushes within cooldown: first immediate, rest queued', async () => {
+      // 回归：3 条 potential 并发时只立即播 1 条，其余入队而不是被丢弃。
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
       await svc.setCooldownSeconds(60);
@@ -209,10 +211,72 @@ describe('Esp32NotificationService', () => {
         svc.pushAlert('potential', 'alert B'),
         svc.pushAlert('potential', 'alert C'),
       ]);
-      const successes = results.filter((r) => r.success);
-      expect(successes.length).toBe(1);
+      // 全部 success=true（立即发 1 + 入队 2）
+      expect(results.every((r) => r.success)).toBe(true);
+      // 仅第一条立即发到设备
       expect(client.calls.length).toBe(1);
+      // 后 2 条 error 字段标注 queued
+      const queued = results.filter((r) => r.error?.includes('queued'));
+      expect(queued.length).toBe(2);
     });
+
+    test('queue drains one by one after cooldown elapses', async () => {
+      await svc.setEnabled(true);
+      await svc.enableTypes(['potential']);
+      await svc.setCooldownSeconds(1); // 1s 冷却以便真实计时器能快速验证
+
+      await svc.pushAlert('potential', 'A');
+      await svc.pushAlert('potential', 'B');
+      await svc.pushAlert('potential', 'C');
+      expect(client.calls).toEqual(['A']);
+
+      // 第一次冷却到期 → 应播 B
+      await new Promise((r) => setTimeout(r, 1100));
+      expect(client.calls).toEqual(['A', 'B']);
+
+      // 再等一个冷却周期 → 应播 C
+      await new Promise((r) => setTimeout(r, 1100));
+      expect(client.calls).toEqual(['A', 'B', 'C']);
+    }, 10000);
+
+    test('queue overflow drops oldest', async () => {
+      await svc.setEnabled(true);
+      await svc.enableTypes(['potential']);
+      await svc.setCooldownSeconds(60);
+
+      // 先发 1 条占住冷却，然后塞入 MAX_QUEUE_SIZE(20) + 1 条
+      await svc.pushAlert('potential', 'initial');
+      for (let i = 0; i < 21; i++) {
+        await svc.pushAlert('potential', `item-${i}`);
+      }
+
+      // 立即发的只有 'initial'；其余 21 条尝试入队，队列上限 20 → 溢出丢最旧 item-0
+      expect(client.calls).toEqual(['initial']);
+      const queue: string[] = (svc as any).queue;
+      expect(queue.length).toBe(20);
+      expect(queue[0]).toBe('item-1'); // item-0 被挤出
+      expect(queue[19]).toBe('item-20');
+    });
+
+    test('setEnabled(false) mid-queue flushes pending items', async () => {
+      await svc.setEnabled(true);
+      await svc.enableTypes(['potential']);
+      await svc.setCooldownSeconds(1);
+
+      await svc.pushAlert('potential', 'A');
+      await svc.pushAlert('potential', 'B');
+      await svc.pushAlert('potential', 'C');
+      expect(client.calls).toEqual(['A']);
+      expect(((svc as any).queue as string[]).length).toBe(2);
+
+      // 总开关关闭
+      await svc.setEnabled(false);
+
+      // 冷却到期时 drainOne 检测到 enabled=false → 清空队列
+      await new Promise((r) => setTimeout(r, 1100));
+      expect(client.calls).toEqual(['A']);
+      expect(((svc as any).queue as string[]).length).toBe(0);
+    }, 10000);
 
     test('never throws even if downstream throws', async () => {
       await svc.setEnabled(true);
