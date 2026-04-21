@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.0] - 2026-04-21
+
+本版本是 `feat/alert-optimization` 分支的合并 release，在 2.6.9 之后累积了 10 个 commit。核心是两条告警线（突破 + 潜力币）、ESP32 语音播报、过滤/冷却/日志的系统性修复，以及文档大扫除。
+
+### ✨ 新增
+
+- **[P1] 高点缓存重建**（`src/services/highPointCache/`）：SQLite 持久化 + 三层刷新策略（冷启动/定时/按需），新增 5 档时间框架 `7d / 30d / 180d / 52w / ATH`，并加入死币过滤（主流币因 24h 振幅低被误剔除的 hotfix 已修复）。
+- **[P2] 突破告警服务**（`breakoutAlertService.ts`）：依赖 P1 高点缓存，支持 `/alert_bt <symbol> <tf>` 和全市场扫描。突破事件走统一的 UnifiedAlertService，去重/冷却/ESP32 推送一次到位。
+- **潜力币信号推送**（`potentialAlertService.ts`）：`/potential*` 命令族。24h 窗口扫描 "价↑ + OI↑ + Funding 负/松动"，分 L1/L2/L3 三级（funding ≤ -0.5% / ≤ -0.1% / 其他）。同级 2 小时冷却，等级升高立即推。
+- **费率周期告警（边沿触发）**：`interval_4h` / `interval_1h` 采用边沿触发，交易所把结算周期压到 4h/1h 时才报，反映极端行情。
+- **ESP32 语音播报**（`src/services/esp32/`）：6 类告警（price / pump_dump / breakthrough / potential / funding / ranking）全量接入欧雨网关 TTS 设备。每类独立订阅、全局冷却、静音时段、文本去 Markdown 清洗，失败静默不影响 Telegram。命令：`/esp32_status`、`/esp32_on`、`/esp32_off`、`/esp32_test`、`/esp32_cooldown`、`/esp32_quiet`。
+- **黄名单管理**（三级过滤补齐）：`/yellow`、`/yellow_remove`、`/yellow_list`、`/yellow_clear`。推送时自动加 🟡 标识（本版本统一到全量报警）。
+- **/note 币种点评**：`/note <币> <内容>` 记录点评时自动快照当前价格/24h 涨跌/资金费率，若该币在前 10 榜单中同步存排名。`/notes <币>` 回看最近点评。
+- **/debug 问题反馈**：`/debug <描述>`、`/debug_list`、`/debug_remove` 随手记 bug，下次会话统一处理。
+- **/menu 交互菜单**：Inline keyboard 快捷入口，覆盖价格警报管理、系统状态、过滤器总览、名单浏览。
+
+### 🔧 优化
+
+- **低成交量全局标记**（v2.7.0）：以 `user_filter_settings.volume_threshold` 为单一真源（默认 30M USDT），取代散落 6 处的硬编码阈值。低于阈值的币不主动推送，被动查询榜单时加 💧 标签。修复了 `binanceWebSocket` 错用 `data.v`（token 数）而非 `data.q`（USDT 金额）导致 GUN/TRADOOR 这类币标记反转的 bug。
+- **费率 negative 档位加最小门槛 -0.05%**（v2.7.2）：基于 546 条历史报警数据，69% 的负费率跨越 0 线事件 `|rate| < 0.01%`，改为双侧门槛 `-0.0005` 过滤掉 80% 的 0 附近噪音。
+- **动态告警冷却**（v2.6.8 系列）+ **冷却日志去重**（v2.7.1）：priceAlertService 过去 48h 累计 40 万行 `🚫 冷却中` 日志污染，引入 `cooldownLogged` 标志，每轮冷却只在首次触发时打一条日志。
+- **businessMonitor filter_check 降级**（v2.7.1）：用户黑名单/mute 拦截是预期行为，不再写入 `error.log`。
+- **涨跌榜实时推送不再被用户过滤器误拦截**，`data/cache/` 权限从 0777 收紧到 0775。
+- **告警前缀 emoji 统一规划**，黄名单标识全量统一为 🟡。
+
+### 🗂️ 文档
+
+- 删除 8 份历史遗留文档：`DEPLOYMENT.md`（shell 部署已被 Docker 替代）、`DOCKER_DEPLOY.md`（与 `DEPLOYMENT_DOCKER.md` 重复）、`DOCKER_CLOUD_DEPLOYMENT_v2.6.9.md`（版本快照）、`PHASE2_TECHNICAL_INDICATORS.md`（2025-09 规划稿）、`REFACTORING_PREP.md`（DI 重构完成记录）、`TEST_ISSUES_REPORT.md`（58KB 旧测试日志）、`WORK_PROGRESS.md`（22KB v2.6.2 进度）、`DIAGNOSTIC_SYSTEM.md`（描述了未实现的 `/diagnostic` 命令）。
+- `README.md` 整体重写，命令/功能/模块结构全部对齐 v2.8.0。
+- `TECHNICAL_INDICATORS_SYSTEM_DOC.md` 精简为 `/signals` 命令文档（~50 行），明确标注哪些是已实现、哪些是骨架。
+- `DEPLOYMENT_DOCKER.md` 示例版本号升至 v2.8.0，补齐 `OUYU_GATEWAY_URL` / `OUYU_DEVICE_ID` 环境变量。
+
+---
+
 ## [2.7.2] - 2026-04-21
 
 ### 🔇 费率 negative 档位加最小门槛

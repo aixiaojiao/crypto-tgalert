@@ -32,8 +32,8 @@ mkdir -p logs
 # 5. 安装并启动定时任务
 ./scripts/setup-cron.sh
 
-# 6. 立即部署v2.6.6
-./scripts/docker-deploy.sh deploy-v2.6.7
+# 6. 立即部署到目标版本
+./scripts/docker-deploy.sh deploy-v2.8.0
 ```
 
 ### 全新安装（如果是新服务器）
@@ -48,19 +48,24 @@ touch USE_DOCKER
 
 # 3. 创建环境变量文件
 cat > .env << 'EOF'
+# --- 必填 ---
 TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
+TELEGRAM_USER_ID=your_telegram_user_id
 BINANCE_API_KEY=your_binance_api_key
 BINANCE_API_SECRET=your_binance_secret_key
 DATABASE_PATH=./data/crypto-tgalert.db
 NODE_ENV=production
+
+# --- 可选：ESP32 语音播报（欧雨网关） ---
+OUYU_GATEWAY_URL=http://<esp32-gateway-ip>
+OUYU_DEVICE_ID=<esp32-mac-address>
 EOF
 
 # 4. 设置权限并部署
 chmod +x scripts/*.sh
 mkdir -p logs
 ./scripts/setup-cron.sh
-./scripts/docker-deploy.sh deploy-v2.6.7
+./scripts/docker-deploy.sh deploy-v2.8.0
 ```
 
 ## 系统架构
@@ -99,8 +104,8 @@ git commit -m "feat: 新功能"
 git push origin master
 
 # 2. 创建部署标签
-git tag deploy-v2.6.7
-git push origin deploy-v2.6.7
+git tag deploy-v2.8.0
+git push origin deploy-v2.8.0
 ```
 
 ### 自动部署
@@ -161,7 +166,7 @@ docker run -d --name crypto-tgalert --restart unless-stopped \
   -v /home/ubuntu/crypto-tgalert-data/data:/app/data \
   -v /home/ubuntu/crypto-tgalert-data/logs:/app/logs \
   --env-file /home/ubuntu/crypto-tgalert/.env \
-  crypto-tgalert:deploy-v2.6.5
+  crypto-tgalert:deploy-v2.7.2   # 替换为你要回滚到的版本 tag
 ```
 
 ## 故障排查

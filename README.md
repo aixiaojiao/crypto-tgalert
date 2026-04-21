@@ -1,212 +1,144 @@
 # Crypto TG Alert Bot
 
-一个专业的加密货币期货交易Telegram机器人，专注于期货合约数据分析和实时监控。
+一个聚焦币安 U 本位永续合约的 Telegram 机器人：实时行情、多维度告警、ESP32 语音播报、过滤器与点评系统。
 
-## ✨ 主要功能
+当前版本: **v2.8.0**
 
-### 📊 期货数据查询
-- **实时价格查询**: 优先显示期货合约价格、资金费率、持仓量数据
-- **24h涨跌榜**: 自动过滤已下架代币，显示风险等级图标
-- **资金费率排行**: 专注负费率代币，发现套利机会
-- **持仓量增长榜**: 支持24h/4h/1h时间维度分析
-- **单币OI查询**: `/oi <symbol>` 查询单个代币的持仓变化趋势
+---
 
-### 🛡️ 智能风险管理
-- **代币分类系统**: 已下架、黑名单、黄名单智能过滤
-- **风险等级显示**: 自动标注高风险代币（⛔⚠️）
-- **交易对过滤**: 只显示USDT永续合约，过滤季度合约和USDC交易对
+## ✨ 核心能力
 
-### 🔔 多时间周期报警系统 🆕
-- **时间周期支持**: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d 八个时间维度
-- **报警类型**: 涨幅/跌幅/双向报警，用户自定义阈值
-- **实时监控**: WebSocket实时数据驱动，毫秒级响应
-- **智能管理**: 完整的报警配置、历史记录和状态管理
-- **代币筛选**: 支持单币种监控或全市场监控
+### 📊 行情查询
+- **/price `<symbol>`** — 期货价格 + 资金费率 + 24h 持仓量
+- **/signals `<symbol>`** — 基于价格动量 + 成交量的基础技术信号
+- **/rank_gainers**, **/rank_losers** — 多周期涨跌榜（1h/4h/24h …）
+- **/funding** — 负费率排行（套利/情绪参考）
+- **/oi_1h**, **/oi_4h**, **/oi_24h** — 持仓量增长榜
+- **/oi `<symbol>`** — 单币 OI 变化
+- **/high `<symbol> <tf>`**, **/near_high** — 历史高点 / 接近高点
 
-### 🤖 用户体验
-- **命令菜单**: 左侧菜单栏快速访问所有功能
-- **启动通知**: 机器人重启时自动发送通知
-- **权限控制**: 仅授权用户可使用
+### ⚡ 告警系统
+- **价格告警** (`/alert`) — `/alert btc > 50000`、`/alert eth < 3000`、`/alert doge change 5%`
+- **急涨急跌告警** (`/alert_<tf>_<dir>_<pct>_<sym>`) — 例 `/alert_5m_gain_3_all`
+- **突破告警** (`/alert_bt`) — 7d/30d/180d/52w/ATH 五档时间框架，由 SQLite 高点缓存驱动
+- **潜力币信号** (`/potential*`) — 24h 价格↑ + OI↑ + Funding 负/松动，分 L1/L2/L3 等级
+- **费率告警** (`/funding_alert_*`) — 负费率 (-0.05% / -0.5% / -1% / -1.5%) + 结算周期边沿 (4h/1h)
+- **排行榜实时推送** — 进入/离开涨跌榜自动播报
+- **统一 ID 管理** — ID 前缀 P/B/V/T，`/alert_list`、`/alert_remove`、`/alert_toggle`、`/alert_history`
 
-### 🐛 远程调试系统
-- **问题记录**: `/debug` 命令远程记录bug和优化建议
-- **上下文捕获**: 回复bot消息使用debug命令，自动记录完整上下文
-- **智能分析**: `npm run analyze-debug` 分析收集的问题并生成修复建议
-- **分类优先级**: 自动对问题分类和优先级排序
-- **结构化存储**: Markdown格式存储，便于人工和机器分析
+### 🔊 ESP32 语音播报
+- 所有 6 类告警（price / pump_dump / breakthrough / potential / funding / ranking）可推送到局域网 ESP32 设备做 TTS 播报
+- 每类独立开关、全局冷却、静音时段、去 Markdown 清洗
+- 命令：`/esp32_status`, `/esp32_on [types]`, `/esp32_off`, `/esp32_test`, `/esp32_cooldown`, `/esp32_quiet`
+- 详细设计见 [docs/ESP32_PUSH_FEATURE.md](docs/ESP32_PUSH_FEATURE.md)
+
+### 🛡️ 三级过滤 + 低成交量统一
+- **黑名单** (`/black*`) — 完全屏蔽
+- **黄名单** (`/yellow*`) — 推送时加 🟡 警告标记
+- **临时静音** (`/mute*`) — 定时解除
+- **低成交量标记** (`/filter_volume <N>`) — 低于阈值的币不触发主动推送，被动查询时加 💧 标记
+
+### 📝 点评与反馈
+- **/note `<币> <内容>`** — 记录点评，自动快照价格/涨跌/费率/排名
+- **/notes `<币>`** — 查看该币最近点评
+- **/debug `<问题描述>`** — 随手记 Bug，下次会话统一处理
+
+### 🎛️ 交互菜单
+- **/menu** — Inline keyboard 快捷菜单：价格警报管理、系统状态、过滤器总览、名单浏览
+
+---
 
 ## 🚀 快速开始
 
 ### 环境要求
-- Node.js >= 16.0.0
-- TypeScript >= 4.5.0
+- Node.js >= 16
+- TypeScript >= 4.5
 - SQLite3
+- 可选：Docker（推荐生产部署）
 
-### 安装步骤
-
-1. **克隆项目**
+### 本地启动
 ```bash
-git clone https://github.com/your-username/crypto-tgalert.git
-cd crypto-tgalert
-```
-
-2. **安装依赖**
-```bash
+git clone <your-fork-url> && cd crypto-tgalert
 npm install
+cp .env.example .env        # 填入 bot token / 用户 ID / 可选的币安 API key / 可选的 ESP32 网关
+npm run build && npm start  # 或 npm run dev 热重载
 ```
 
-3. **配置环境变量**
-```bash
-cp .env.example .env
-```
-
-编辑 `.env` 文件，添加必要配置：
+### 必要环境变量
 ```env
-# Telegram Bot配置
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_USER_ID=your_user_id_here
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_USER_ID=...         # 授权用户 ID，非该用户的消息一律拒绝
 
-# 币安API配置（可选，用于更高请求限制）
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_SECRET_KEY=your_binance_secret_key
-
-# 应用配置
+# 可选
+BINANCE_API_KEY=...
+BINANCE_SECRET_KEY=...
+OUYU_GATEWAY_URL=http://<esp32-gateway-ip>
+OUYU_DEVICE_ID=<esp32-mac-address>
 NODE_ENV=production
 LOG_LEVEL=info
 ```
 
-4. **构建和启动**
-```bash
-npm run build
-npm start
-```
-
-### 开发模式
-```bash
-npm run dev
-```
-
-### Debug分析
-当收集了debug记录后，可以运行分析脚本：
-```bash
-npm run analyze-debug
-```
-这将分析`logs/debug-records.md`中的所有记录，生成智能分析报告和修复建议。
-
-## 📱 可用命令
-
-### 📊 基础查询命令
-| 命令 | 功能 | 示例 |
-|------|------|------|
-| `/price <symbol>` | 查询期货价格+资金费率+持仓量 | `/price btc` |
-| `/gainers` | 24小时涨幅榜 TOP10 | |
-| `/losers` | 24小时跌幅榜 TOP10 | |
-| `/funding` | 负资金费率排行榜 | |
-| `/oi24h` | 24小时持仓量增长榜 | |
-| `/oi4h` | 4小时持仓量增长榜 | |
-| `/oi1h` | 1小时持仓量增长榜 | |
-| `/oi <symbol>` | 单个代币OI持仓数据查询 | 显示1h/4h/24h持仓变化 |
-
-### 🔔 多时间周期报警命令 🆕
-| 命令 | 功能 | 示例 |
-|------|------|------|
-| `/add_alert <时间> <类型> <阈值> [币种]` | 添加时间周期报警 | `/add_alert 1h gain 15 btc` |
-| `/my_alerts` | 查看我的报警配置 | |
-| `/toggle_alert <ID>` | 启用/禁用报警 | `/toggle_alert 1` |
-| `/delete_alert <ID>` | 删除报警配置 | `/delete_alert 1` |
-| `/alert_history` | 查看报警触发历史 | |
-
-**支持的时间周期**: 1m, 5m, 15m, 30m, 1h, 4h, 24h, 3d
-**支持的报警类型**: gain(涨幅), loss(跌幅), both(双向)
-
-### 🛠️ 系统命令
-| 命令 | 功能 | 示例 |
-|------|------|------|
-| `/debug <问题描述>` | 记录bug和优化建议 | `/debug 价格查询太慢` |
-| `/status` | 查看系统运行状态 | |
-| `/help` | 完整帮助文档 | |
-
-## 🔧 配置文件
-
-### 代币分类配置 (`src/config/tokenLists.ts`)
-- **DELISTED_TOKENS**: 已下架代币黑名单
-- **BLACKLIST_TOKENS**: 高风险代币黑名单  
-- **YELLOWLIST_TOKENS**: 高波动性代币警告名单
-
-可根据市场变化手动维护这些列表。
-
-### 功能特色
-- 🎯 **专注期货**: 优先显示期货合约数据而非现货
-- 🔍 **智能过滤**: 自动过滤已下架和高风险代币
-- 📈 **实时监控**: 支持多时间维度的持仓量变化追踪
-- 💡 **负费率挖掘**: 专门显示负资金费率代币，发现套利机会
-- 🛡️ **风险提示**: 自动标注代币风险等级
-
-## 🏗️ 项目结构
-
-```
-src/
-├── bot.ts              # Telegram机器人主逻辑
-├── services/
-│   ├── binance.ts      # 币安API客户端
-│   ├── debugService.ts # Debug记录管理服务
-│   └── database.ts     # 数据库服务
-├── config/
-│   ├── index.ts        # 配置管理
-│   └── tokenLists.ts   # 代币分类配置
-├── types/              # TypeScript类型定义
-├── middleware/         # 中间件
-├── utils/              # 工具函数
-└── scripts/
-    └── analyze-debug.ts # Debug分析脚本
-```
-
-## 🔒 安全注意事项
-
-- ✅ 所有敏感信息通过环境变量管理
-- ✅ 用户权限验证，仅授权用户可使用
-- ✅ API密钥加密存储（如果配置）
-- ✅ 数据库文件已添加到.gitignore
-
-**请确保：**
-1. 不要将 `.env` 文件提交到代码仓库
-2. 定期更换API密钥
-3. 仅向可信用户提供机器人访问权限
-
-## 📊 监控和日志
-
-系统提供详细的运行日志：
-- API请求响应时间监控
-- 错误和异常自动记录
-- 用户操作审计日志
-- 系统性能指标追踪
-
-## 🤝 贡献指南
-
-1. Fork本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启Pull Request
-
-## 📄 许可证
-
-本项目采用MIT许可证。详见 [LICENSE](LICENSE) 文件。
-
-## ⚡ 性能优化
-
-- 内置请求频率限制器
-- 智能缓存机制
-- 并发请求优化
-- 内存使用监控
-
-## 📞 支持
-
-如遇到问题或需要功能请求，请：
-1. 查看 [Issues](https://github.com/your-username/crypto-tgalert/issues)
-2. 提交新的Issue描述问题
-3. 加入社区讨论
+### Docker 部署
+见 [DEPLOYMENT_DOCKER.md](DEPLOYMENT_DOCKER.md)。生产机通过 `deploy-vX.Y.Z` tag 触发自动拉取 + 构建 + 热替换。
 
 ---
 
-⚠️ **风险提示**: 本工具仅供数据分析参考，不构成投资建议。加密货币交易存在高风险，请谨慎决策。
+## 📱 命令速查
+
+完整列表在 bot 内 `/help`。下面只列类别：
+
+| 类别 | 主要命令 |
+|---|---|
+| 行情 | `/price`, `/signals`, `/rank_gainers`, `/rank_losers`, `/funding`, `/oi*`, `/high*` |
+| 价格/突破告警 | `/alert`, `/alert_bt`, `/alert_<tf>_<dir>_<pct>_<sym>`, `/alert_list`, `/alert_remove`, `/alert_toggle`, `/alert_history` |
+| 潜力/费率告警 | `/potential*`, `/funding_alert_*`, `/breakout_*` |
+| ESP32 语音 | `/esp32_status`, `/esp32_on`, `/esp32_off`, `/esp32_test`, `/esp32_cooldown`, `/esp32_quiet` |
+| 过滤器 | `/black*`, `/yellow*`, `/mute*`, `/filter_settings`, `/filter_volume`, `/filter_auto` |
+| 点评/Debug | `/note`, `/notes`, `/note_remove`, `/debug`, `/debug_list`, `/debug_remove` |
+| 系统 | `/menu`, `/status`, `/cache_status`, `/cache_update`, `/push_status`, `/help` |
+
+---
+
+## 🏗️ 关键模块
+
+```
+src/
+├── bot.ts                      # Telegram 入口 + 命令路由（70 个命令）
+├── services/
+│   ├── priceMonitor.ts         # 价格告警
+│   ├── priceAlertService.ts    # 急涨急跌告警（WS 驱动）
+│   ├── breakoutAlertService.ts # 突破告警（P2）
+│   ├── potentialAlertService.ts# 潜力币信号
+│   ├── fundingAlertService.ts  # 费率告警
+│   ├── realtimeAlertService.ts # 排行榜实时推送
+│   ├── alerts/UnifiedAlertService.ts  # 告警统一入口
+│   ├── esp32/                  # ESP32 语音推送
+│   ├── highPointCache/         # 高点缓存（P1，SQLite）
+│   ├── binance*.ts             # REST + WebSocket
+│   └── ...
+├── config/
+│   ├── volumeConfig.ts         # 全局成交量阈值（单一真源）
+│   └── tokenLists.ts           # 代币列表基础配置
+├── indicators/                 # /signals 使用的轻量指标计算
+└── utils/
+```
+
+---
+
+## 🔒 安全
+- 授权用户白名单（`TELEGRAM_USER_ID`），未授权消息直接拒绝
+- `.env` 必须设 600 权限且不入仓
+- API key 加密存储（若配置）
+- SQLite 数据和 `.env` 都已在 `.gitignore`
+
+## 📊 日志与监控
+- 应用日志：`logs/`
+- 数据：`data/crypto-tgalert.db`（SQLite）
+- 所有告警自动写入 `*_alerts` 表 + 冷却去重
+
+## 📄 License
+MIT — 见 [LICENSE](LICENSE)
+
+---
+
+⚠️ **风险提示**：本工具仅用于行情监控和数据分析，不构成投资建议。加密货币交易存在高风险，请谨慎决策。
