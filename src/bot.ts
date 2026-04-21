@@ -6,6 +6,8 @@ import { BinanceClient, binanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
 import { getVolumeIcon } from './config/volumeConfig';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
+import { CoinNoteModel } from './models/coinNoteModel';
+import { DebugReportModel } from './models/debugReportModel';
 import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
@@ -94,6 +96,8 @@ export class TelegramBot {
 
     // Initialize databases
     TimeRangeAlertModel.initDatabase();
+    CoinNoteModel.initDatabase();
+    DebugReportModel.initDatabase();
 
     // 注意：实时服务初始化已移到 initializeRealtimeServices()，
     // 必须在 app.start() 中显式 await 调用，避免静默失败
@@ -243,7 +247,9 @@ export class TelegramBot {
   private getSimilarCommands(unknownCommand: string): string[] {
     const availableCommands = [
       'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
-      'debug', 'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential',
+      'debug', 'debug_list', 'debug_remove',
+      'note', 'notes', 'note_remove',
+      'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential',
       'funding_alert_on', 'funding_alert_off', 'funding_alert_status',
       'alert_list', 'alert_remove', 'alert_toggle', 'alert_history', 'alert_bt'
     ];
@@ -357,7 +363,13 @@ export class TelegramBot {
         { command: 'filter_settings', description: '⚙️ 过滤设置管理' },
         { command: 'filter_volume', description: '⚙️ 设置交易量阈值' },
         { command: 'filter_auto', description: '⚙️ 启用/禁用自动过滤' },
-        { command: 'status', description: '⚙️ 查看系统状态' }
+        { command: 'status', description: '⚙️ 查看系统状态' },
+        { command: 'note', description: '📝 记录币种点评 /note <币> <内容>' },
+        { command: 'notes', description: '📝 查看币种点评历史 /notes <币>' },
+        { command: 'note_remove', description: '📝 删除点评 /note_remove <ID>' },
+        { command: 'debug', description: '🐛 记录遇到的问题 /debug <描述>' },
+        { command: 'debug_list', description: '🐛 查看未处理的 Debug 列表' },
+        { command: 'debug_remove', description: '🐛 删除 Debug 记录 /debug_remove <ID>' }
       ];
 
       console.log('📋 设置菜单命令:', commands);
@@ -492,6 +504,11 @@ export class TelegramBot {
 /black_list - 查看黑名单
 /filter_settings - 查看过滤设置
 /filter_auto on - 启用自动过滤
+
+📝 *点评 & 反馈:*
+/note btc 突破前高 - 记录点评(自动存价格+排名)
+/notes btc - 查看BTC点评历史
+/debug <问题> - 记录遇到的问题, 下次会话统一处理
 
 🤖 机器人已准备就绪！
       `;
@@ -700,6 +717,257 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
       } catch (error) {
         console.error('Price query error:', error);
         await ctx.reply('❌ 查询失败，请检查币种名称是否正确');
+      }
+    });
+
+    // 币种点评 - 记录点评内容 + 当时价格/费率/排名
+    this.bot.command('note', async (ctx) => {
+      try {
+        const raw = ctx.message?.text || '';
+        const rest = raw.replace(/^\/note(@\S+)?\s*/, '').trim();
+        const parts = rest.split(/\s+/);
+        if (parts.length < 2 || !parts[0]) {
+          await ctx.reply(
+            '💡 用法: /note <币种> <点评内容>\n' +
+            '示例: /note btc 突破前高，观察回踩是否站稳'
+          );
+          return;
+        }
+
+        const symbolInput = parts[0].toUpperCase();
+        const noteText = rest.slice(parts[0].length).trim();
+        if (!noteText) {
+          await ctx.reply('❌ 点评内容不能为空');
+          return;
+        }
+
+        const symbol = symbolInput.endsWith('USDT') ? symbolInput : symbolInput + 'USDT';
+        const userId = String(ctx.from?.id || 'unknown');
+
+        let price: number | null = null;
+        let priceChange24h: number | null = null;
+        let fundingRate: number | null = null;
+
+        try {
+          const stats = await tieredDataManager.getTicker24hr(symbol);
+          if (stats) {
+            price = parseFloat(stats.lastPrice);
+            priceChange24h = parseFloat(stats.priceChangePercent);
+          }
+        } catch (_e) { /* ignore price fetch failure */ }
+
+        try {
+          const fr = await tieredDataManager.getFundingRate(symbol);
+          if (fr && fr.fundingRate !== undefined && fr.fundingRate !== null) {
+            fundingRate = parseFloat(String(fr.fundingRate));
+          }
+        } catch (_e) { /* ignore */ }
+
+        let rankType: 'gainers' | 'losers' | null = null;
+        let rankPosition: number | null = null;
+        try {
+          const gainers = realtimeMarketCache.getTopGainers(10, 0) || [];
+          const gi = gainers.findIndex((t: any) => t.symbol === symbol);
+          if (gi >= 0) {
+            rankType = 'gainers';
+            rankPosition = gi + 1;
+          } else {
+            const losers = realtimeMarketCache.getTopLosers(10, 0) || [];
+            const li = losers.findIndex((t: any) => t.symbol === symbol);
+            if (li >= 0) {
+              rankType = 'losers';
+              rankPosition = li + 1;
+            }
+          }
+        } catch (_e) { /* ignore ranking failure */ }
+
+        const id = CoinNoteModel.add({
+          userId,
+          symbol,
+          note: noteText,
+          price,
+          priceChange24h,
+          fundingRate,
+          rankType,
+          rankPosition,
+        });
+
+        const displaySymbol = symbol.replace(/USDT$/, '');
+        let reply = `📝 已记录点评 #${id}\n\n`;
+        reply += `🪙 ${displaySymbol}\n`;
+        reply += `💬 ${noteText}\n`;
+        if (price !== null) {
+          const priceText = await formatPriceWithSeparators(String(price), symbol).catch(() => String(price));
+          reply += `💰 价格: $${priceText}`;
+          if (priceChange24h !== null) {
+            reply += ` (24h ${priceChange24h >= 0 ? '+' : ''}${priceChange24h.toFixed(2)}%)`;
+          }
+          reply += '\n';
+        }
+        if (fundingRate !== null) {
+          reply += `💸 资金费率: ${(fundingRate * 100).toFixed(4)}%\n`;
+        }
+        if (rankType && rankPosition) {
+          const label = rankType === 'gainers' ? '涨幅榜' : '跌幅榜';
+          reply += `📊 当前排名: ${label} #${rankPosition}\n`;
+        }
+        reply += `⏰ ${formatTimeToUTC8(new Date())}`;
+
+        await ctx.reply(reply);
+      } catch (error) {
+        console.error('Note add error:', error);
+        await ctx.reply('❌ 点评记录失败，请稍后重试');
+      }
+    });
+
+    // 查看币种点评历史
+    this.bot.command('notes', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1) || [];
+        if (args.length === 0) {
+          await ctx.reply('💡 用法: /notes <币种>\n示例: /notes btc');
+          return;
+        }
+        const symbolInput = args[0].toUpperCase();
+        const symbol = symbolInput.endsWith('USDT') ? symbolInput : symbolInput + 'USDT';
+        const displaySymbol = symbol.replace(/USDT$/, '');
+
+        const notes = CoinNoteModel.listBySymbol(symbol, 20);
+        if (notes.length === 0) {
+          await ctx.reply(`📭 ${displaySymbol} 暂无点评记录`);
+          return;
+        }
+
+        let message = `📚 *${displaySymbol} 点评记录 (${notes.length})*\n\n`;
+        for (const n of notes) {
+          const time = formatTimeToUTC8(new Date(n.createdAt + 'Z'));
+          message += `🔖 *#${n.id}* · ${time}\n`;
+          message += `💬 ${n.note}\n`;
+          const meta: string[] = [];
+          if (n.price !== null) {
+            let priceText: string;
+            try {
+              priceText = await formatPriceWithSeparators(String(n.price), n.symbol);
+            } catch {
+              priceText = String(n.price);
+            }
+            let s = `💰 $${priceText}`;
+            if (n.priceChange24h !== null) {
+              s += ` (${n.priceChange24h >= 0 ? '+' : ''}${n.priceChange24h.toFixed(2)}%)`;
+            }
+            meta.push(s);
+          }
+          if (n.fundingRate !== null) {
+            meta.push(`费率 ${(n.fundingRate * 100).toFixed(3)}%`);
+          }
+          if (n.rankType && n.rankPosition) {
+            const label = n.rankType === 'gainers' ? '涨幅' : '跌幅';
+            meta.push(`${label}榜#${n.rankPosition}`);
+          }
+          if (meta.length) message += meta.join(' · ') + '\n';
+          message += '\n';
+        }
+        message += `💡 删除: /note_remove <ID>`;
+        await ctx.replyWithMarkdown(message);
+      } catch (error) {
+        console.error('Notes list error:', error);
+        await ctx.reply('❌ 查询点评记录失败');
+      }
+    });
+
+    // 删除点评
+    this.bot.command('note_remove', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1) || [];
+        const id = parseInt(args[0], 10);
+        if (!id || isNaN(id)) {
+          await ctx.reply('💡 用法: /note_remove <ID>\n示例: /note_remove 3');
+          return;
+        }
+        const existing = CoinNoteModel.getById(id);
+        if (!existing) {
+          await ctx.reply(`❌ 未找到点评 #${id}`);
+          return;
+        }
+        const ok = CoinNoteModel.remove(id);
+        if (ok) {
+          const displaySymbol = existing.symbol.replace(/USDT$/, '');
+          await ctx.reply(`✅ 已删除 ${displaySymbol} 的点评 #${id}`);
+        } else {
+          await ctx.reply(`❌ 删除失败`);
+        }
+      } catch (error) {
+        console.error('Note remove error:', error);
+        await ctx.reply('❌ 删除点评失败');
+      }
+    });
+
+    // Debug 反馈 - 用户随手记录遇到的问题，下次会话统一处理
+    this.bot.command('debug', async (ctx) => {
+      try {
+        const raw = ctx.message?.text || '';
+        const content = raw.replace(/^\/debug(@\S+)?\s*/, '').trim();
+        if (!content) {
+          await ctx.reply(
+            '💡 用法: /debug <遇到的问题描述>\n' +
+            '示例: /debug /signals btc 报错 "cannot read undefined"\n\n' +
+            '其他: /debug_list 查看未处理列表 · /debug_remove <ID> 删除'
+          );
+          return;
+        }
+        const userId = String(ctx.from?.id || 'unknown');
+        const id = DebugReportModel.add(userId, content);
+        await ctx.reply(
+          `🐛 已记录 Debug 报告 #${id}\n\n` +
+          `📝 ${content}\n` +
+          `⏰ ${formatTimeToUTC8(new Date())}\n\n` +
+          `💡 下次会话时我会统一查看 /debug_list`
+        );
+      } catch (error) {
+        console.error('Debug add error:', error);
+        await ctx.reply('❌ Debug 记录失败');
+      }
+    });
+
+    this.bot.command('debug_list', async (ctx) => {
+      try {
+        const reports = DebugReportModel.listOpen(50);
+        if (reports.length === 0) {
+          await ctx.reply('📭 暂无未处理的 Debug 报告');
+          return;
+        }
+        let message = `🐛 *未处理的 Debug 报告 (${reports.length})*\n\n`;
+        for (const r of reports) {
+          const time = formatTimeToUTC8(new Date(r.createdAt + 'Z'));
+          message += `🔖 *#${r.id}* · ${time}\n`;
+          message += `📝 ${r.content}\n\n`;
+        }
+        message += `💡 删除: /debug_remove <ID>`;
+        await ctx.replyWithMarkdown(message);
+      } catch (error) {
+        console.error('Debug list error:', error);
+        await ctx.reply('❌ 查询 Debug 列表失败');
+      }
+    });
+
+    this.bot.command('debug_remove', async (ctx) => {
+      try {
+        const args = ctx.message?.text.split(' ').slice(1) || [];
+        const id = parseInt(args[0], 10);
+        if (!id || isNaN(id)) {
+          await ctx.reply('💡 用法: /debug_remove <ID>');
+          return;
+        }
+        const existing = DebugReportModel.getById(id);
+        if (!existing) {
+          await ctx.reply(`❌ 未找到 Debug #${id}`);
+          return;
+        }
+        DebugReportModel.remove(id);
+        await ctx.reply(`✅ 已删除 Debug #${id}`);
+      } catch (error) {
+        console.error('Debug remove error:', error);
+        await ctx.reply('❌ 删除 Debug 记录失败');
       }
     });
 
@@ -2355,6 +2623,16 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 /filter_settings - 查看过滤设置
 /filter_volume <amount> - 设置交易量阈值
 /filter_auto on/off - 启用/禁用自动过滤
+
+📝 币种点评:
+/note <币> <内容> - 记录点评 (自动存价格+24h涨跌+资金费率, 若在前10榜单也存排名)
+/notes <币> - 查看该币最近20条点评
+/note_remove <ID> - 删除一条点评
+
+🐛 Debug 反馈 (随手记问题，下次会话统一处理):
+/debug <问题描述> - 记录遇到的问题
+/debug_list - 查看未处理的 Debug 列表
+/debug_remove <ID> - 删除 Debug 记录
 
 ⚙️ 系统:
 /status - 系统状态
