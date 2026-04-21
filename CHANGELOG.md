@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.1] - 2026-04-22
+
+### ✨ 新增
+
+- **涨幅榜 #1 易主 L1 强提醒**（`realtimeAlertService.ts`）：任何币进入榜首（new_entry 直达 #1 或从其他位置上升至 #1）判为 L1 级，消息标题替换为 `🚨 L1 · 榜首易主 — SYM`，"本次变化"段置顶并从常规列表去重，ESP32 TTS 优先播 `L1 榜首易主 SYM`。L1 事件绕过 symbol 冷却与次数上限，即使 #2→#1 只有 1 位变动也强制判定为重要变化。抽 `detectL1NewTop` 到独立 `realtimeRankingUtils.ts` 并补 8 个单测。
+
+### 🔧 优化
+
+- **ESP32 冷却改为队列串行播报**（`Esp32NotificationService.ts`）：原逻辑冷却期内第二条直接丢弃（`skipped: cooldown 60s`），可能漏掉重要信息。改为入队，由定时器按估算 TTS 时长依次播出队。队列上限 20 条，溢出丢最旧（保留最新市场状态）。drainOne 触发时重读配置，总开关关闭则清空队列彻底静默。
+- **冷却间隔改为按文本长度估算**：原固定 60s 全局冷却在队列化后会让第二条等整整 60s。改为 `estimateTtsDelayMs(text) = clamp(text.length × 350ms + 2000ms, 3000, 15000)`，即按预估 TTS 时长 + 2s 缓冲决定下一条可播时点。典型情况："L1 榜首易主 BTC" (11 字符) → 5.85s 后播下一条。
+
+### ⚠️ 移除
+
+- `/esp32_cooldown` 命令、菜单栏条目、`/esp32_status` 的冷却显示行全部删除。
+- `Esp32NotificationService.setCooldownSeconds()` 方法与 `Esp32ConfigSnapshot.cooldownSeconds` 字段删除。
+- `DEFAULT_COOLDOWN_SECONDS` 常量删除。
+- DB 列 `esp32_config.cooldown_seconds` 保留（避免 schema 迁移），新建行时写入 0 占位，不再读取。
+
+---
+
 ## [2.8.0] - 2026-04-21
 
 本版本是 `feat/alert-optimization` 分支的合并 release，在 2.6.9 之后累积了 10 个 commit。核心是两条告警线（突破 + 潜力币）、ESP32 语音播报、过滤/冷却/日志的系统性修复，以及文档大扫除。

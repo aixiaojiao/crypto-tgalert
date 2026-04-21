@@ -1,6 +1,6 @@
 {
   "name": "crypto-tgalert",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "description": "Personal crypto intelligence terminal via Telegram",
   "main": "dist/index.js",
   "scripts": {
