@@ -2,6 +2,7 @@ import { initDatabase, closeDatabase } from '../../../src/database/connection';
 import {
   Esp32NotificationService,
   cleanForTts,
+  estimateTtsDelayMs,
   isInQuietHours,
 } from '../../../src/services/esp32/Esp32NotificationService';
 import { OuyuPushClient } from '../../../src/services/esp32/OuyuPushClient';
@@ -50,7 +51,6 @@ describe('Esp32NotificationService', () => {
       const cfg = await svc.getConfig();
       expect(cfg.enabled).toBe(false);
       expect(cfg.enabledTypes).toEqual([]);
-      expect(cfg.cooldownSeconds).toBe(60);
       expect(cfg.quietStart).toBeNull();
       expect(cfg.quietEnd).toBeNull();
     });
@@ -100,18 +100,7 @@ describe('Esp32NotificationService', () => {
     });
   });
 
-  describe('setCooldownSeconds / setQuietHours', () => {
-    test('accepts valid cooldown and persists', async () => {
-      await svc.setCooldownSeconds(30);
-      const cfg = await svc.getConfig();
-      expect(cfg.cooldownSeconds).toBe(30);
-    });
-
-    test('rejects negative or absurd cooldown', async () => {
-      await expect(svc.setCooldownSeconds(-1)).rejects.toThrow();
-      await expect(svc.setCooldownSeconds(99999)).rejects.toThrow();
-    });
-
+  describe('setQuietHours', () => {
     test('setQuietHours accepts HH:MM-HH:MM and clears on null/off', async () => {
       await svc.setQuietHours('23:00-08:00');
       let cfg = await svc.getConfig();
@@ -156,10 +145,9 @@ describe('Esp32NotificationService', () => {
       expect(client.calls[0]).toBe('BTC 突破新高');
     });
 
-    test('cooldown queues rapid second push instead of dropping', async () => {
+    test('rapid second push is queued instead of dropped', async () => {
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(60);
 
       const r1 = await svc.pushAlert('potential', 'first');
       const r2 = await svc.pushAlert('potential', 'second');
@@ -167,27 +155,16 @@ describe('Esp32NotificationService', () => {
       // 入队也算接受，返回 success，只是 error 字段带 queued 标识
       expect(r2.success).toBe(true);
       expect(r2.error).toContain('queued');
-      // 只立即发了第一条；第二条在队列里等冷却结束
+      // 只立即发了第一条；第二条在队列里等上一条估算 TTS 时长结束
       expect(client.calls.length).toBe(1);
       expect(client.calls[0]).toBe('first');
     });
 
-    test('zero cooldown allows back-to-back pushes', async () => {
+    test('slot is consumed at entry (engaged before push, survives failure)', async () => {
+      // 入口就占位：防止并发时多条告警都绕过等待、设备端叠播。
+      // 失败也会占住窗口，紧接着的那条进入队列（不再直接丢）。
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(0);
-
-      await svc.pushAlert('potential', 'a');
-      await svc.pushAlert('potential', 'b');
-      expect(client.calls.length).toBe(2);
-    });
-
-    test('cooldown is consumed at entry (engaged before push, survives failure)', async () => {
-      // 入口就占冷却：防止并发时多条告警都绕过冷却、设备端叠播。
-      // 失败也会占住冷却窗口，紧接着的那条进入队列（不再直接丢）。
-      await svc.setEnabled(true);
-      await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(60);
       client.nextResult = { success: false, status: 404, error: 'offline' };
 
       const r1 = await svc.pushAlert('potential', 'first');
@@ -200,11 +177,10 @@ describe('Esp32NotificationService', () => {
       expect(client.calls.length).toBe(1); // second 待在队列里，未立即发
     });
 
-    test('concurrent pushes within cooldown: first immediate, rest queued', async () => {
+    test('concurrent pushes within slot: first immediate, rest queued', async () => {
       // 回归：3 条 potential 并发时只立即播 1 条，其余入队而不是被丢弃。
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(60);
 
       const results = await Promise.all([
         svc.pushAlert('potential', 'alert A'),
@@ -220,31 +196,30 @@ describe('Esp32NotificationService', () => {
       expect(queued.length).toBe(2);
     });
 
-    test('queue drains one by one after cooldown elapses', async () => {
+    test('queue drains one by one after estimated TTS delay', async () => {
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(1); // 1s 冷却以便真实计时器能快速验证
 
+      // 短文本 'A' / 'B' / 'C' → estimateTtsDelayMs 下限 3000ms
       await svc.pushAlert('potential', 'A');
       await svc.pushAlert('potential', 'B');
       await svc.pushAlert('potential', 'C');
       expect(client.calls).toEqual(['A']);
 
-      // 第一次冷却到期 → 应播 B
-      await new Promise((r) => setTimeout(r, 1100));
+      // 第一条估算播完 → 应播 B
+      await new Promise((r) => setTimeout(r, 3100));
       expect(client.calls).toEqual(['A', 'B']);
 
-      // 再等一个冷却周期 → 应播 C
-      await new Promise((r) => setTimeout(r, 1100));
+      // 再等一个周期 → 应播 C
+      await new Promise((r) => setTimeout(r, 3100));
       expect(client.calls).toEqual(['A', 'B', 'C']);
-    }, 10000);
+    }, 15000);
 
     test('queue overflow drops oldest', async () => {
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(60);
 
-      // 先发 1 条占住冷却，然后塞入 MAX_QUEUE_SIZE(20) + 1 条
+      // 先发 1 条占住窗口，然后塞入 MAX_QUEUE_SIZE(20) + 1 条
       await svc.pushAlert('potential', 'initial');
       for (let i = 0; i < 21; i++) {
         await svc.pushAlert('potential', `item-${i}`);
@@ -261,7 +236,6 @@ describe('Esp32NotificationService', () => {
     test('setEnabled(false) mid-queue flushes pending items', async () => {
       await svc.setEnabled(true);
       await svc.enableTypes(['potential']);
-      await svc.setCooldownSeconds(1);
 
       await svc.pushAlert('potential', 'A');
       await svc.pushAlert('potential', 'B');
@@ -272,11 +246,11 @@ describe('Esp32NotificationService', () => {
       // 总开关关闭
       await svc.setEnabled(false);
 
-      // 冷却到期时 drainOne 检测到 enabled=false → 清空队列
-      await new Promise((r) => setTimeout(r, 1100));
+      // 估算延迟到期时 drainOne 检测到 enabled=false → 清空队列
+      await new Promise((r) => setTimeout(r, 3100));
       expect(client.calls).toEqual(['A']);
       expect(((svc as any).queue as string[]).length).toBe(0);
-    }, 10000);
+    }, 15000);
 
     test('never throws even if downstream throws', async () => {
       await svc.setEnabled(true);
@@ -337,5 +311,40 @@ describe('isInQuietHours', () => {
 
   test('start === end → never in quiet', () => {
     expect(isInQuietHours('10:00', '10:00', at(10, 0))).toBe(false);
+  });
+});
+
+describe('estimateTtsDelayMs', () => {
+  test('short text clamps to lower bound 3s', () => {
+    expect(estimateTtsDelayMs('')).toBe(3000);
+    expect(estimateTtsDelayMs('A')).toBe(3000); // 1*350+2000 = 2350 < 3000
+    expect(estimateTtsDelayMs('BTC')).toBe(3050); // 3*350+2000 = 3050，刚超过下限
+  });
+
+  test('medium text uses 350ms/char + 2s buffer', () => {
+    // "L1 榜首易主 BTC" 11 字符 → 11*350 + 2000 = 5850
+    expect(estimateTtsDelayMs('L1 榜首易主 BTC')).toBe(5850);
+    // "涨幅榜新进入 DOGE" 11 字符（含 1 空格） → 5850
+    expect(estimateTtsDelayMs('涨幅榜新进入 DOGE')).toBe(5850);
+    // 10 字符 → 10*350 + 2000 = 5500
+    expect(estimateTtsDelayMs('ABCDEFGHIJ')).toBe(5500);
+  });
+
+  test('long text clamps to upper bound 15s', () => {
+    const longText = 'x'.repeat(100); // 100*350+2000=37000，超过上限
+    expect(estimateTtsDelayMs(longText)).toBe(15000);
+  });
+
+  test('boundary: exactly 3000 lower bound', () => {
+    // 3*350 + 2000 = 3050，略超 3000
+    expect(estimateTtsDelayMs('ABC')).toBe(3050);
+    // 2*350 + 2000 = 2700 < 3000，被 clamp 到 3000
+    expect(estimateTtsDelayMs('AB')).toBe(3000);
+  });
+
+  test('boundary: exactly 15000 upper bound', () => {
+    // (15000-2000)/350 = 37.14 → 38 chars 刚超上限
+    expect(estimateTtsDelayMs('x'.repeat(37))).toBe(14950);
+    expect(estimateTtsDelayMs('x'.repeat(38))).toBe(15000);
   });
 });

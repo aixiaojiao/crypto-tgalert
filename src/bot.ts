@@ -346,7 +346,6 @@ export class TelegramBot {
         { command: 'esp32_on', description: '🔊 开启 ESP32 语音推送（可附类型）' },
         { command: 'esp32_off', description: '🔊 关闭 ESP32 语音推送（可附类型）' },
         { command: 'esp32_test', description: '🔊 ESP32 推送测试' },
-        { command: 'esp32_cooldown', description: '🔊 设置 ESP32 全局冷却秒数' },
         { command: 'esp32_quiet', description: '🔊 设置 ESP32 静音时段 HH:MM-HH:MM' },
         { command: 'black', description: '🛡️ 添加黑名单 /black <symbol>' },
         { command: 'black_list', description: '🛡️ 查看黑名单' },
@@ -1595,7 +1594,6 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
         let msg = `${icon} *ESP32 语音推送*\n\n`;
         msg += `• 总开关: ${cfg.enabled ? '启用' : '禁用'}\n`;
         msg += `• 订阅类型: ${typesStr}\n`;
-        msg += `• 全局冷却: ${cfg.cooldownSeconds} 秒\n`;
         msg += `• 静音时段: ${quietStr}\n`;
         msg += `• 设备 ID: \`${cfg.deviceId || '(未配置)'}\`\n`;
         msg += `• 网关: \`${cfg.gatewayUrl || '(未配置)'}\`\n`;
@@ -1672,28 +1670,6 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
       } catch (error) {
         log.error('esp32_test command failed', error);
         await ctx.reply('❌ 测试失败');
-      }
-    });
-
-    this.bot.command('esp32_cooldown', async (ctx) => {
-      try {
-        await esp32NotificationService.ensureRow();
-        const args = (ctx.message?.text || '').split(/\s+/).slice(1);
-        if (args.length === 0) {
-          const cfg = await esp32NotificationService.getConfig();
-          await ctx.reply(`当前全局冷却: ${cfg.cooldownSeconds} 秒\n用法: /esp32_cooldown <秒数 0~3600>`);
-          return;
-        }
-        const n = parseInt(args[0], 10);
-        if (!Number.isFinite(n)) {
-          await ctx.reply('❌ 参数必须是整数秒');
-          return;
-        }
-        await esp32NotificationService.setCooldownSeconds(n);
-        await ctx.reply(`✅ 全局冷却设置为 ${n} 秒`);
-      } catch (error) {
-        log.error('esp32_cooldown command failed', error);
-        await ctx.reply('❌ 设置失败: ' + (error instanceof Error ? error.message : '未知错误'));
       }
     });
 

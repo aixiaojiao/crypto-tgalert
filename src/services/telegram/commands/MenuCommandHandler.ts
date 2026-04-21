@@ -359,9 +359,6 @@ export class MenuCommandHandler {
       if (Array.isArray(cfg.enabledTypes) && cfg.enabledTypes.length > 0) {
         esp32Lines.push(`  允许类型: ${htmlEscape(cfg.enabledTypes.join(', '))}`);
       }
-      if (cfg.cooldownSeconds !== undefined) {
-        esp32Lines.push(`  冷却: ${cfg.cooldownSeconds}s`);
-      }
       if (cfg.quietStart && cfg.quietEnd) {
         esp32Lines.push(`  静音时段: ${htmlEscape(cfg.quietStart)} - ${htmlEscape(cfg.quietEnd)}`);
       }
