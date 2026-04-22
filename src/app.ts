@@ -11,6 +11,7 @@ import { fundingAlertService } from './services/fundingAlertService';
 import { FundingAlertModel } from './models/fundingAlertModel';
 import { breakoutAlertService } from './services/breakoutAlertService';
 import { BreakoutAlertModel } from './models/breakoutAlertModel';
+import { AutoObservedLogModel } from './models/autoObservedLogModel';
 import { tieredDataManager } from './services/tieredDataManager';
 import { binanceRateLimit } from './utils/ratelimit';
 import { stopBusinessMonitor } from './utils/businessMonitor';
@@ -106,6 +107,9 @@ export class CryptoTgAlertApp {
       BreakoutAlertModel.initDatabase();
       breakoutAlertService.setTelegramBot(this.telegramBot);
       await breakoutAlertService.start();
+
+      // 9.8 初始化自动观察日志表（🔎 静默记录 5m 最大回撤 ≥10% 的币）
+      AutoObservedLogModel.initDatabase();
 
       console.log('✅ All systems online!');
 

@@ -2,6 +2,7 @@ import { BaseCommandHandler } from './BaseCommandHandler';
 import { BotContext, CommandResult } from '../ICommandHandler';
 import { IAdvancedFilterManager } from '../../filters/AdvancedFilterManager';
 import { IUserFilterService } from '../../filters/UserFilterService';
+import { AutoObservedLogModel } from '../../../models/autoObservedLogModel';
 
 /**
  * 黄名单管理命令处理器
@@ -191,6 +192,25 @@ export class YellowlistCommandHandler extends BaseCommandHandler {
         message += '\n';
       } else {
         message += '🟡 **个人黄名单:** 空\n\n';
+      }
+
+      // 自动观察（🔎）：过去 24h 内 5m 最大回撤 ≥10% 的币，按触发次数降序
+      if (AutoObservedLogModel.isDatabaseInitialized()) {
+        const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
+        const observed = AutoObservedLogModel.summarizeSince(sinceMs);
+        if (observed.length > 0) {
+          message += '🔎 **自动观察 (24h · 5m回撤≥10%):**\n';
+          observed.forEach((s, index) => {
+            const sym = s.symbol.replace(/USDT$/, '');
+            const max = s.maxDrawdown.toFixed(2);
+            const latest = s.latestDrawdown.toFixed(2);
+            const maxLatestLabel = s.count > 1 ? ` (最大${max}% · 最近${latest}%)` : ` (${latest}%)`;
+            message += `   ${index + 1}. ${sym} · ${s.count}次${maxLatestLabel}\n`;
+          });
+          message += '\n';
+        } else {
+          message += '🔎 **自动观察 (24h):** 无\n\n';
+        }
       }
 
       // 临时屏蔽

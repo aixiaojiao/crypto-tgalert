@@ -10,6 +10,7 @@ import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { realtimeMarketCache } from './realtimeMarketCache';
 import { esp32NotificationService } from './esp32';
 import { isLowVolume } from '../config/volumeConfig';
+import { AutoObservedLogModel } from '../models/autoObservedLogModel';
 
 export interface PriceSnapshot {
   symbol: string;
@@ -69,6 +70,10 @@ export class PriceAlertService extends EventEmitter {
     '3d': 3 * 24 * 60 * 60 * 1000,
   };
 
+  // 自动观察（🔎）常量：5m 窗口内 peak → 后续 trough 的最大回撤 ≥ 10% 即静默落库
+  private static readonly AUTO_OBSERVE_TIMEFRAME = '5m';
+  private static readonly AUTO_OBSERVE_DRAWDOWN_THRESHOLD = 10;
+
   constructor() {
     super();
 
@@ -88,6 +93,8 @@ export class PriceAlertService extends EventEmitter {
    */
   private syncTimeframesToConfigs(): void {
     const neededTimeframes = new Set<string>();
+    // 自动观察功能常驻 5m 窗口，即便没有任何用户价格报警配置 5m
+    neededTimeframes.add(PriceAlertService.AUTO_OBSERVE_TIMEFRAME);
     for (const config of this.alertConfigs.values()) {
       if (config.isEnabled && config.timeframe) {
         neededTimeframes.add(config.timeframe);
@@ -223,6 +230,105 @@ export class PriceAlertService extends EventEmitter {
 
     // 检查报警条件
     await this.checkAlertConditions(symbol, snapshot);
+
+    // 检查自动观察（🔎）：5m 内最大回撤 ≥ 10% 则静默落库
+    this.checkAutoObserved(symbol, snapshot);
+  }
+
+  /**
+   * 自动观察：在 5m 窗口内计算 peak → 后续 trough 的最大回撤
+   * 达阈值则 append 一条 auto_observed_log 记录。
+   * 完全静默：不推送、不语音、不影响任何现有报警行为。
+   *
+   * 去重策略：同 symbol 在 COOLDOWN_MS 内只记一次（避免同一次下跌被多 tick 重复落库）。
+   *
+   * 用户后续根据日志聚合结果（次数+最大回撤）半自动决定升级哪些币到黄名单。
+   */
+  private checkAutoObserved(symbol: string, currentSnapshot: PriceSnapshot): void {
+    try {
+      // 沿用全局低成交量过滤：<30M 不观察
+      if (isLowVolume(currentSnapshot.volume24h)) return;
+
+      if (!AutoObservedLogModel.isDatabaseInitialized()) return;
+
+      const tfData = this.timeframes.get(PriceAlertService.AUTO_OBSERVE_TIMEFRAME);
+      if (!tfData) return;
+
+      const snapshots = tfData.snapshots.get(symbol);
+      if (!snapshots || snapshots.length < 2) return;
+
+      // 同 symbol 5 分钟内已记过 → 跳过，避免同一事件重复落库
+      if (AutoObservedLogModel.wasObservedRecently(symbol)) return;
+
+      // 扫描窗口：维护 running peak，计算每一帧相对 running peak 的回撤，取最大
+      const dd = PriceAlertService.computeMaxDrawdown(snapshots);
+      if (dd.drawdownPercent < PriceAlertService.AUTO_OBSERVE_DRAWDOWN_THRESHOLD) return;
+
+      AutoObservedLogModel.recordObservation({
+        symbol,
+        triggeredAt: currentSnapshot.timestamp,
+        drawdownPercent: dd.drawdownPercent,
+        peakPrice: dd.peakPrice,
+        troughPrice: dd.troughPrice,
+        peakAt: dd.peakAt,
+        troughAt: dd.troughAt,
+        volume24h: currentSnapshot.volume24h,
+      });
+
+      log.info(`🔎 Auto-observed ${symbol} 5m drawdown ${dd.drawdownPercent.toFixed(2)}%`, {
+        peak: dd.peakPrice,
+        trough: dd.troughPrice,
+      });
+    } catch (error) {
+      // 静默模式：观察失败不能影响现有报警链路
+      log.error('checkAutoObserved failed', { symbol, error });
+    }
+  }
+
+  /**
+   * 在时间序列快照里寻找 peak（历史最高）→ 之后的 trough（相对 peak 跌最多）的组合，
+   * 返回其中最大的回撤百分比。
+   * 若只有单调上涨，返回 0。
+   */
+  static computeMaxDrawdown(snapshots: PriceSnapshot[]): {
+    drawdownPercent: number;
+    peakPrice: number;
+    troughPrice: number;
+    peakAt: number;
+    troughAt: number;
+  } {
+    let peakPrice = snapshots[0].price;
+    let peakAt = snapshots[0].timestamp;
+    let maxDrawdown = 0;
+    let bestPeakPrice = peakPrice;
+    let bestPeakAt = peakAt;
+    let bestTroughPrice = peakPrice;
+    let bestTroughAt = peakAt;
+
+    for (let i = 1; i < snapshots.length; i++) {
+      const s = snapshots[i];
+      if (s.price > peakPrice) {
+        peakPrice = s.price;
+        peakAt = s.timestamp;
+        continue;
+      }
+      const dd = ((peakPrice - s.price) / peakPrice) * 100;
+      if (dd > maxDrawdown) {
+        maxDrawdown = dd;
+        bestPeakPrice = peakPrice;
+        bestPeakAt = peakAt;
+        bestTroughPrice = s.price;
+        bestTroughAt = s.timestamp;
+      }
+    }
+
+    return {
+      drawdownPercent: maxDrawdown,
+      peakPrice: bestPeakPrice,
+      troughPrice: bestTroughPrice,
+      peakAt: bestPeakAt,
+      troughAt: bestTroughAt,
+    };
   }
 
   /**

@@ -17,6 +17,7 @@ import { fundingAlertService } from './services/fundingAlertService';
 import { FundingAlertModel } from './models/fundingAlertModel';
 import { breakoutAlertService } from './services/breakoutAlertService';
 import { BreakoutAlertModel } from './models/breakoutAlertModel';
+import { AutoObservedLogModel } from './models/autoObservedLogModel';
 import { formatPriceWithSeparators, formatPriceChange } from './utils/priceFormatter';
 
 // 统一时间格式化函数 - UTC+8时区
@@ -974,8 +975,11 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
         const fundingLt1 = FundingAlertModel.listSince(sinceMs).filter(r =>
           r.alertType === 'rate_-1' || r.alertType === 'rate_-1.5'
         );
+        const autoObserved = AutoObservedLogModel.isDatabaseInitialized()
+          ? AutoObservedLogModel.summarizeSince(sinceMs)
+          : [];
 
-        const total = rankingAlerts.length + breakoutAlerts.length + potentialL1.length + fundingLt1.length;
+        const total = rankingAlerts.length + breakoutAlerts.length + potentialL1.length + fundingLt1.length + autoObserved.length;
 
         let msg = `📰 *早报 · ${formatTimeToUTC8(new Date())}*\n`;
         msg += `过去 24h 重点信号（共 ${total} 条）\n`;
@@ -1033,6 +1037,19 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
             const sym = dispSym(r.symbol);
             const rate = (r.fundingRate8h * 100).toFixed(3);
             msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  ${rate}% (8h归一)\n`;
+          }
+        }
+
+        if (autoObserved.length > 0) {
+          msg += `\n🔎 *自动观察* (${autoObserved.length} 币 · 5m回撤≥10%):\n`;
+          for (const s of autoObserved) {
+            const sym = dispSym(s.symbol);
+            const max = s.maxDrawdown.toFixed(2);
+            const latest = s.latestDrawdown.toFixed(2);
+            const detail = s.count > 1
+              ? `${s.count}次 · 最大${max}% · 最近${latest}%`
+              : `${latest}%`;
+            msg += `• ${fmtTime(s.latestTriggeredAt)}  ${sym}  ${detail}\n`;
           }
         }
 
