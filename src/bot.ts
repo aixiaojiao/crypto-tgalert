@@ -2912,6 +2912,14 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
+      const reason = args.slice(1).join(' ').trim();
+      if (result.success && reason) {
+        try {
+          await this.saveCoinNote(String(ctx.from?.id || 'unknown'), args[0], `[黑名单] ${reason}`);
+        } catch (e) {
+          log.error('Auto-save note from /black failed', e);
+        }
+      }
     });
 
     this.bot.command('black_list', async (ctx) => {
@@ -2951,6 +2959,14 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
       }
+      const reason = args.slice(1).join(' ').trim();
+      if (result.success && reason) {
+        try {
+          await this.saveCoinNote(String(ctx.from?.id || 'unknown'), args[0], `[黄名单] ${reason}`);
+        } catch (e) {
+          log.error('Auto-save note from /yellow failed', e);
+        }
+      }
     });
 
     this.bot.command('yellow_list', async (ctx) => {
@@ -2989,6 +3005,15 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
       const result = await this.muteCommandHandler.handle(ctx, args);
       if (result.shouldReply && result.message) {
         await ctx.reply(result.message, { parse_mode: 'Markdown' });
+      }
+      const isSubCommand = ['list', 'ls', 'clear', 'remove', 'rm', 'unmute', 'help'].includes(args[0].toLowerCase());
+      const reason = args.slice(2).join(' ').trim();
+      if (result.success && !isSubCommand && reason) {
+        try {
+          await this.saveCoinNote(String(ctx.from?.id || 'unknown'), args[0], `[屏蔽 ${args[1]}] ${reason}`);
+        } catch (e) {
+          log.error('Auto-save note from /mute failed', e);
+        }
       }
     });
 
@@ -3281,6 +3306,63 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
     if (!originalId || !originalId.startsWith('T')) return null;
     const n = parseInt(originalId.substring(1), 10);
     return isNaN(n) ? null : n;
+  }
+
+  /**
+   * 按 /note 格式保存单币点评（自动附带当前行情快照）
+   * 用于 /black /yellow /mute 带原因时的自动留痕
+   */
+  private async saveCoinNote(userId: string, rawSymbol: string, noteText: string): Promise<number> {
+    const upper = rawSymbol.toUpperCase();
+    const symbol = upper.endsWith('USDT') ? upper : upper + 'USDT';
+
+    let price: number | null = null;
+    let priceChange24h: number | null = null;
+    let fundingRate: number | null = null;
+
+    try {
+      const stats = await tieredDataManager.getTicker24hr(symbol);
+      if (stats) {
+        price = parseFloat(stats.lastPrice);
+        priceChange24h = parseFloat(stats.priceChangePercent);
+      }
+    } catch (_e) { /* ignore price fetch failure */ }
+
+    try {
+      const fr = await tieredDataManager.getFundingRate(symbol);
+      if (fr && fr.fundingRate !== undefined && fr.fundingRate !== null) {
+        fundingRate = parseFloat(String(fr.fundingRate));
+      }
+    } catch (_e) { /* ignore */ }
+
+    let rankType: 'gainers' | 'losers' | null = null;
+    let rankPosition: number | null = null;
+    try {
+      const gainers = realtimeMarketCache.getTopGainers(10, 0) || [];
+      const gi = gainers.findIndex((t: any) => t.symbol === symbol);
+      if (gi >= 0) {
+        rankType = 'gainers';
+        rankPosition = gi + 1;
+      } else {
+        const losers = realtimeMarketCache.getTopLosers(10, 0) || [];
+        const li = losers.findIndex((t: any) => t.symbol === symbol);
+        if (li >= 0) {
+          rankType = 'losers';
+          rankPosition = li + 1;
+        }
+      }
+    } catch (_e) { /* ignore ranking failure */ }
+
+    return CoinNoteModel.add({
+      userId,
+      symbol,
+      note: noteText,
+      price,
+      priceChange24h,
+      fundingRate,
+      rankType,
+      rankPosition,
+    });
   }
 
   /**
