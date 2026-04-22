@@ -125,6 +125,28 @@ export class PotentialAlertModel {
   }
 
   /**
+   * 返回指定时间窗口内的所有告警（升序）
+   */
+  static listSince(sinceMs: number): PotentialAlertRecord[] {
+    const rows = this.db.prepare(`
+      SELECT
+        id, symbol, level,
+        price_change_1h as priceChange1h,
+        oi_change_1h as oiChange1h,
+        funding_rate_8h as fundingRate8h,
+        funding_interval_hours as fundingIntervalHours,
+        funding_max_24h as fundingMax24h,
+        current_price as currentPrice,
+        volume_24h as volume24h,
+        triggered_at as triggeredAt
+      FROM potential_alerts
+      WHERE triggered_at >= ?
+      ORDER BY triggered_at ASC
+    `).all(sinceMs);
+    return rows as PotentialAlertRecord[];
+  }
+
+  /**
    * 获取今日触发统计
    */
   static getTodayStats(): { total: number; byLevel: Record<number, number> } {

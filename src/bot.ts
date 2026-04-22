@@ -8,6 +8,7 @@ import { getVolumeIcon } from './config/volumeConfig';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
 import { CoinNoteModel } from './models/coinNoteModel';
 import { DebugReportModel } from './models/debugReportModel';
+import { RankingAlertModel } from './models/rankingAlertModel';
 import { AlertIdManager, AlertIdType } from './services/alerts/AlertIdManager';
 import { priceAlertService } from './services/priceAlertService';
 import { potentialAlertService } from './services/potentialAlertService';
@@ -98,6 +99,7 @@ export class TelegramBot {
     TimeRangeAlertModel.initDatabase();
     CoinNoteModel.initDatabase();
     DebugReportModel.initDatabase();
+    RankingAlertModel.initDatabase();
 
     // 注意：实时服务初始化已移到 initializeRealtimeServices()，
     // 必须在 app.start() 中显式 await 调用，避免静默失败
@@ -248,7 +250,7 @@ export class TelegramBot {
     const availableCommands = [
       'help', 'start', 'price', 'status', 'rank', 'oi', 'alert', 'signals',
       'debug', 'debug_list', 'debug_remove',
-      'note', 'notes', 'note_remove',
+      'note', 'notes', 'note_remove', 'brief',
       'black', 'yellow', 'mute', 'filter_settings', 'funding', 'cache_status', 'cache_update', 'high', 'potential',
       'funding_alert_on', 'funding_alert_off', 'funding_alert_status',
       'alert_list', 'alert_remove', 'alert_toggle', 'alert_history', 'alert_bt'
@@ -368,6 +370,7 @@ export class TelegramBot {
         { command: 'note', description: '📝 记录币种点评 /note <币> <内容>' },
         { command: 'notes', description: '📝 点评: /notes 全部分页 · /notes <币> 单币' },
         { command: 'note_remove', description: '📝 删除点评 /note_remove <ID>' },
+        { command: 'brief', description: '📰 早报: 过去 24h 重点信号汇总' },
         { command: 'debug', description: '🐛 记录遇到的问题 /debug <描述>' },
         { command: 'debug_list', description: '🐛 查看未处理的 Debug 列表' },
         { command: 'debug_remove', description: '🐛 删除 Debug 记录 /debug_remove <ID>' }
@@ -510,6 +513,7 @@ export class TelegramBot {
 /note btc 突破前高 - 记录点评(自动存价格+排名)
 /notes - 查看全部点评(分页, /notes 2 翻页)
 /notes btc - 查看BTC点评历史
+/brief - 早报: 过去24h重点信号汇总
 /debug <问题> - 记录遇到的问题, 下次会话统一处理
 
 🤖 机器人已准备就绪！
@@ -955,6 +959,87 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
       } catch (error) {
         console.error('Note remove error:', error);
         await ctx.reply('❌ 删除点评失败');
+      }
+    });
+
+    // 早报汇总 - 过去 24h 重点信号（L1 榜首易主 / 突破 / 潜力币 L1 / 费率<-1%）
+    this.bot.command('brief', async (ctx) => {
+      try {
+        const nowMs = Date.now();
+        const sinceMs = nowMs - 24 * 60 * 60 * 1000;
+
+        const rankingAlerts = RankingAlertModel.listSince(sinceMs);
+        const breakoutAlerts = BreakoutAlertModel.listSince(sinceMs);
+        const potentialL1 = PotentialAlertModel.listSince(sinceMs).filter(r => r.level === 1);
+        const fundingLt1 = FundingAlertModel.listSince(sinceMs).filter(r =>
+          r.alertType === 'rate_-1' || r.alertType === 'rate_-1.5'
+        );
+
+        const total = rankingAlerts.length + breakoutAlerts.length + potentialL1.length + fundingLt1.length;
+
+        let msg = `📰 *早报 · ${formatTimeToUTC8(new Date())}*\n`;
+        msg += `过去 24h 重点信号（共 ${total} 条）\n`;
+
+        if (total === 0) {
+          msg += `\n过去 24h 没有触发任何重点信号。`;
+          await ctx.reply(msg, { parse_mode: 'Markdown' });
+          return;
+        }
+
+        const fmtTime = (ms: number) => {
+          const d = new Date(ms);
+          return d.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', hour12: false,
+          });
+        };
+        const dispSym = (s: string) => s.replace(/USDT$/, '');
+
+        if (rankingAlerts.length > 0) {
+          msg += `\n🚨 *L1 榜首易主* (${rankingAlerts.length}):\n`;
+          for (const r of rankingAlerts) {
+            const sym = dispSym(r.symbol);
+            if (r.changeType === 'new_entry') {
+              msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  新进榜首\n`;
+            } else {
+              msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  #${r.previousPosition ?? '?'}→#1\n`;
+            }
+          }
+        }
+
+        if (breakoutAlerts.length > 0) {
+          msg += `\n💥 *突破* (${breakoutAlerts.length}):\n`;
+          for (const r of breakoutAlerts) {
+            const sym = dispSym(r.symbol);
+            const pct = r.breakPct >= 0 ? `+${r.breakPct.toFixed(2)}` : r.breakPct.toFixed(2);
+            msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  ${r.tier} ${r.timeframe} ${pct}%\n`;
+          }
+        }
+
+        if (potentialL1.length > 0) {
+          msg += `\n🎯 *潜力币 L1* (${potentialL1.length}):\n`;
+          for (const r of potentialL1) {
+            const sym = dispSym(r.symbol);
+            const priceChg = r.priceChange1h >= 0 ? `+${r.priceChange1h.toFixed(1)}` : r.priceChange1h.toFixed(1);
+            const oiChg = r.oiChange1h >= 0 ? `+${r.oiChange1h.toFixed(1)}` : r.oiChange1h.toFixed(1);
+            msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  涨 ${priceChg}% / OI ${oiChg}%\n`;
+          }
+        }
+
+        if (fundingLt1.length > 0) {
+          msg += `\n💸 *费率 <-1%* (${fundingLt1.length}):\n`;
+          for (const r of fundingLt1) {
+            const sym = dispSym(r.symbol);
+            const rate = (r.fundingRate8h * 100).toFixed(3);
+            msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  ${rate}% (8h归一)\n`;
+          }
+        }
+
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
+      } catch (error) {
+        log.error('Brief command failed', error);
+        await ctx.reply('❌ 生成早报失败，请稍后重试');
       }
     });
 
@@ -2662,6 +2747,9 @@ ID 前缀: P=价格 B=突破 V=成交量 T=急涨急跌
 /notes - 查看全部点评 (分页, 每页10条; /notes 2 看第2页)
 /notes <币> - 查看该币最近20条点评
 /note_remove <ID> - 删除一条点评
+
+📰 早报汇总:
+/brief - 过去24h重点信号汇总 (L1榜首易主 · 突破 · 潜力币L1 · 费率<-1%)
 
 🐛 Debug 反馈 (随手记问题，下次会话统一处理):
 /debug <问题描述> - 记录遇到的问题

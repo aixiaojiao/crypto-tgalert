@@ -9,6 +9,7 @@ import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
 import { IAdvancedFilterManager } from './filters/AdvancedFilterManager';
 import { esp32NotificationService } from './esp32';
 import { detectL1NewTop } from './realtimeRankingUtils';
+import { RankingAlertModel } from '../models/rankingAlertModel';
 // Utility function for UTC+8 time formatting
 function formatTimeToUTC8(date: Date | number): string {
   const targetDate = typeof date === 'number' ? new Date(date) : date;
@@ -597,6 +598,21 @@ export class RealtimeAlertService {
       // 发送消息
       const userId = this.telegramBot.getAuthorizedUserId();
       if (userId) {
+        // L1 榜首易主留痕（供 /brief 汇总）
+        if (l1NewTop) {
+          try {
+            RankingAlertModel.recordAlert({
+              symbol: l1NewTop.symbol,
+              alertType: 'l1_new_top',
+              changeType: l1NewTop.changeType === 'new_entry' ? 'new_entry' : 'position_change',
+              previousPosition: l1NewTop.changeType === 'new_entry' ? null : (l1NewTop.previousPosition ?? null),
+              triggeredAt: Date.now(),
+            });
+          } catch (e) {
+            log.error('Failed to persist L1 ranking alert', e);
+          }
+        }
+
         await this.telegramBot.sendToAuthorizedUser(message, {
           parse_mode: 'Markdown',
           disable_web_page_preview: true

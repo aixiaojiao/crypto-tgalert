@@ -132,6 +132,24 @@ export class FundingAlertModel {
   }
 
   /**
+   * 返回指定时间窗口内的所有告警（升序）
+   */
+  static listSince(sinceMs: number): FundingAlertRecord[] {
+    const rows = this.db.prepare(`
+      SELECT
+        id, symbol,
+        alert_type as alertType,
+        funding_rate_8h as fundingRate8h,
+        funding_interval_hours as fundingIntervalHours,
+        triggered_at as triggeredAt
+      FROM funding_alerts
+      WHERE triggered_at >= ?
+      ORDER BY triggered_at ASC
+    `).all(sinceMs);
+    return rows as FundingAlertRecord[];
+  }
+
+  /**
    * 获取今日（UTC+8）触发统计
    */
   static getTodayStats(): { total: number; byType: Record<string, number> } {
