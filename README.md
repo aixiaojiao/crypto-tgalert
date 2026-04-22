@@ -78,8 +78,8 @@ NODE_ENV=production
 LOG_LEVEL=info
 ```
 
-### Docker 部署
-见 [DEPLOYMENT_DOCKER.md](DEPLOYMENT_DOCKER.md)。生产机通过 `deploy-vX.Y.Z` tag 触发自动拉取 + 构建 + 热替换。
+### 生产部署
+单机 PM2 运行，人工部署。流程：本地 `git push` 后 SSH 到服务器 `git pull && npm ci && npm run build && pm2 restart crypto-tgalert`。tag（如 `v2.8.0`）仅作里程碑标记，不触发任何自动化。
 
 ---
 
