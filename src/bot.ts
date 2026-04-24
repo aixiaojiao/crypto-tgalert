@@ -981,11 +981,13 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
 
         const total = rankingAlerts.length + breakoutAlerts.length + potentialL1.length + fundingLt1.length + autoObserved.length;
 
-        let msg = `📰 *早报 · ${formatTimeToUTC8(new Date())}*\n`;
+        const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        let msg = `📰 <b>早报 · ${escHtml(formatTimeToUTC8(new Date()))}</b>\n`;
 
         if (total === 0) {
           msg += `过去 24h 重点信号（共 0 条）\n\n过去 24h 没有触发任何重点信号。`;
-          await ctx.reply(msg, { parse_mode: 'Markdown' });
+          await ctx.reply(msg, { parse_mode: 'HTML' });
           return;
         }
 
@@ -997,14 +999,14 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
             hour: '2-digit', minute: '2-digit', hour12: false,
           });
         };
-        const dispSym = (s: string) => s.replace(/USDT$/, '');
+        const dispSym = (s: string) => escHtml(s.replace(/USDT$/, ''));
 
         type SignalKind = 'ranking' | 'breakout' | 'potential' | 'funding' | 'autoObserved';
         const KIND_LABEL: Record<SignalKind, string> = {
           ranking: '🚨 L1榜首易主',
           breakout: '💥 突破',
           potential: '🎯 潜力币L1',
-          funding: '💸 费率<-1%',
+          funding: '💸 费率&lt;-1%',
           autoObserved: '🔎 自动观察(5m回撤≥10%)',
         };
 
@@ -1025,7 +1027,7 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
         }
         for (const r of breakoutAlerts) {
           const pct = r.breakPct >= 0 ? `+${r.breakPct.toFixed(2)}` : r.breakPct.toFixed(2);
-          signals.push({ symbol: r.symbol, kind: 'breakout', triggeredAt: r.triggeredAt, line: `${r.tier} ${r.timeframe} ${pct}%` });
+          signals.push({ symbol: r.symbol, kind: 'breakout', triggeredAt: r.triggeredAt, line: `${escHtml(r.tier)} ${escHtml(r.timeframe)} ${pct}%` });
         }
         for (const r of potentialL1) {
           const priceChg = r.priceChange1h >= 0 ? `+${r.priceChange1h.toFixed(1)}` : r.priceChange1h.toFixed(1);
@@ -1066,7 +1068,7 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
 
         for (const { symbol, sigs } of symbolEntries) {
           const sym = dispSym(symbol);
-          msg += `\n▌*${sym}* (${sigs.length}条)\n`;
+          msg += `\n▌<b>${sym}</b> (${sigs.length}条)\n`;
 
           // 类型分组
           const byKind = new Map<SignalKind, Signal[]>();
@@ -1095,7 +1097,7 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
           }
         }
 
-        await ctx.reply(msg, { parse_mode: 'Markdown' });
+        await ctx.reply(msg, { parse_mode: 'HTML' });
       } catch (error) {
         log.error('Brief command failed', error);
         await ctx.reply('❌ 生成早报失败，请稍后重试');

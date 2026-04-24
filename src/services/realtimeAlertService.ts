@@ -262,8 +262,8 @@ export class RealtimeAlertService {
         return change.priceChangePercent >= this.config.minGainPercent;
 
       case 'position_change':
-        // 排名变化达到阈值
-        return Math.abs(change.changeValue || 0) >= this.config.majorMoveThreshold;
+        // 只推送排名上升（changeValue > 0），下降不推送
+        return (change.changeValue || 0) >= this.config.majorMoveThreshold;
 
       case 'exit':
         // 暂不推送退出前10的消息
