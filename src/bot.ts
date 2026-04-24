@@ -1078,14 +1078,11 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
             else byKind.set(sig.kind, [sig]);
           }
 
-          // 类型按该类型在该币内的最后触发时间倒序
-          const kindEntries = Array.from(byKind.entries())
-            .map(([kind, ks]) => ({
-              kind,
-              ks,
-              lastAt: Math.max(...ks.map(s => s.triggeredAt)),
-            }))
-            .sort((a, b) => b.lastAt - a.lastAt);
+          // 类型按固定优先级排序：突破 > 潜力币L1 > 费率 > L1榜首易主 > 自动观察
+          const KIND_ORDER: SignalKind[] = ['breakout', 'potential', 'funding', 'ranking', 'autoObserved'];
+          const kindEntries = KIND_ORDER
+            .filter(k => byKind.has(k))
+            .map(kind => ({ kind, ks: byKind.get(kind)! }));
 
           for (const { kind, ks } of kindEntries) {
             msg += `${KIND_LABEL[kind]}:\n`;
