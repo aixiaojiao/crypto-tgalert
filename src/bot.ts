@@ -982,10 +982,9 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
         const total = rankingAlerts.length + breakoutAlerts.length + potentialL1.length + fundingLt1.length + autoObserved.length;
 
         let msg = `📰 *早报 · ${formatTimeToUTC8(new Date())}*\n`;
-        msg += `过去 24h 重点信号（共 ${total} 条）\n`;
 
         if (total === 0) {
-          msg += `\n过去 24h 没有触发任何重点信号。`;
+          msg += `过去 24h 重点信号（共 0 条）\n\n过去 24h 没有触发任何重点信号。`;
           await ctx.reply(msg, { parse_mode: 'Markdown' });
           return;
         }
@@ -1000,56 +999,99 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
         };
         const dispSym = (s: string) => s.replace(/USDT$/, '');
 
-        if (rankingAlerts.length > 0) {
-          msg += `\n🚨 *L1 榜首易主* (${rankingAlerts.length}):\n`;
-          for (const r of rankingAlerts) {
-            const sym = dispSym(r.symbol);
-            if (r.changeType === 'new_entry') {
-              msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  新进榜首\n`;
-            } else {
-              msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  #${r.previousPosition ?? '?'}→#1\n`;
+        type SignalKind = 'ranking' | 'breakout' | 'potential' | 'funding' | 'autoObserved';
+        const KIND_LABEL: Record<SignalKind, string> = {
+          ranking: '🚨 L1榜首易主',
+          breakout: '💥 突破',
+          potential: '🎯 潜力币L1',
+          funding: '💸 费率<-1%',
+          autoObserved: '🔎 自动观察(5m回撤≥10%)',
+        };
+
+        interface Signal {
+          symbol: string;
+          kind: SignalKind;
+          triggeredAt: number;
+          line: string; // 时间后面的描述部分
+        }
+
+        const signals: Signal[] = [];
+
+        for (const r of rankingAlerts) {
+          const desc = r.changeType === 'new_entry'
+            ? '新进榜首'
+            : `#${r.previousPosition ?? '?'}→#1`;
+          signals.push({ symbol: r.symbol, kind: 'ranking', triggeredAt: r.triggeredAt, line: desc });
+        }
+        for (const r of breakoutAlerts) {
+          const pct = r.breakPct >= 0 ? `+${r.breakPct.toFixed(2)}` : r.breakPct.toFixed(2);
+          signals.push({ symbol: r.symbol, kind: 'breakout', triggeredAt: r.triggeredAt, line: `${r.tier} ${r.timeframe} ${pct}%` });
+        }
+        for (const r of potentialL1) {
+          const priceChg = r.priceChange1h >= 0 ? `+${r.priceChange1h.toFixed(1)}` : r.priceChange1h.toFixed(1);
+          const oiChg = r.oiChange1h >= 0 ? `+${r.oiChange1h.toFixed(1)}` : r.oiChange1h.toFixed(1);
+          signals.push({ symbol: r.symbol, kind: 'potential', triggeredAt: r.triggeredAt, line: `涨 ${priceChg}% / OI ${oiChg}%` });
+        }
+        for (const r of fundingLt1) {
+          const rate = (r.fundingRate8h * 100).toFixed(3);
+          signals.push({ symbol: r.symbol, kind: 'funding', triggeredAt: r.triggeredAt, line: `${rate}% (8h归一)` });
+        }
+        for (const s of autoObserved) {
+          const max = s.maxDrawdown.toFixed(2);
+          const latest = s.latestDrawdown.toFixed(2);
+          const detail = s.count > 1
+            ? `${s.count}次 · 最大${max}% · 最近${latest}%`
+            : `${latest}%`;
+          signals.push({ symbol: s.symbol, kind: 'autoObserved', triggeredAt: s.latestTriggeredAt, line: detail });
+        }
+
+        // 按 symbol 聚合
+        const bySymbol = new Map<string, Signal[]>();
+        for (const sig of signals) {
+          const arr = bySymbol.get(sig.symbol);
+          if (arr) arr.push(sig);
+          else bySymbol.set(sig.symbol, [sig]);
+        }
+
+        // symbol 按最后触发时间倒序
+        const symbolEntries = Array.from(bySymbol.entries())
+          .map(([symbol, sigs]) => ({
+            symbol,
+            sigs,
+            lastAt: Math.max(...sigs.map(s => s.triggeredAt)),
+          }))
+          .sort((a, b) => b.lastAt - a.lastAt);
+
+        msg += `过去 24h 共 ${total} 条信号 · ${symbolEntries.length} 币\n`;
+
+        for (const { symbol, sigs } of symbolEntries) {
+          const sym = dispSym(symbol);
+          msg += `\n▌*${sym}* (${sigs.length}条)\n`;
+
+          // 类型分组
+          const byKind = new Map<SignalKind, Signal[]>();
+          for (const sig of sigs) {
+            const arr = byKind.get(sig.kind);
+            if (arr) arr.push(sig);
+            else byKind.set(sig.kind, [sig]);
+          }
+
+          // 类型按该类型在该币内的最后触发时间倒序
+          const kindEntries = Array.from(byKind.entries())
+            .map(([kind, ks]) => ({
+              kind,
+              ks,
+              lastAt: Math.max(...ks.map(s => s.triggeredAt)),
+            }))
+            .sort((a, b) => b.lastAt - a.lastAt);
+
+          for (const { kind, ks } of kindEntries) {
+            msg += `${KIND_LABEL[kind]}:\n`;
+            // 同类型内按时间倒序
+            ks.sort((a, b) => b.triggeredAt - a.triggeredAt);
+            for (const sig of ks) {
+              msg += `  • ${fmtTime(sig.triggeredAt)}  ${sig.line}\n`;
             }
-          }
-        }
-
-        if (breakoutAlerts.length > 0) {
-          msg += `\n💥 *突破* (${breakoutAlerts.length}):\n`;
-          for (const r of breakoutAlerts) {
-            const sym = dispSym(r.symbol);
-            const pct = r.breakPct >= 0 ? `+${r.breakPct.toFixed(2)}` : r.breakPct.toFixed(2);
-            msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  ${r.tier} ${r.timeframe} ${pct}%\n`;
-          }
-        }
-
-        if (potentialL1.length > 0) {
-          msg += `\n🎯 *潜力币 L1* (${potentialL1.length}):\n`;
-          for (const r of potentialL1) {
-            const sym = dispSym(r.symbol);
-            const priceChg = r.priceChange1h >= 0 ? `+${r.priceChange1h.toFixed(1)}` : r.priceChange1h.toFixed(1);
-            const oiChg = r.oiChange1h >= 0 ? `+${r.oiChange1h.toFixed(1)}` : r.oiChange1h.toFixed(1);
-            msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  涨 ${priceChg}% / OI ${oiChg}%\n`;
-          }
-        }
-
-        if (fundingLt1.length > 0) {
-          msg += `\n💸 *费率 <-1%* (${fundingLt1.length}):\n`;
-          for (const r of fundingLt1) {
-            const sym = dispSym(r.symbol);
-            const rate = (r.fundingRate8h * 100).toFixed(3);
-            msg += `• ${fmtTime(r.triggeredAt)}  ${sym}  ${rate}% (8h归一)\n`;
-          }
-        }
-
-        if (autoObserved.length > 0) {
-          msg += `\n🔎 *自动观察* (${autoObserved.length} 币 · 5m回撤≥10%):\n`;
-          for (const s of autoObserved) {
-            const sym = dispSym(s.symbol);
-            const max = s.maxDrawdown.toFixed(2);
-            const latest = s.latestDrawdown.toFixed(2);
-            const detail = s.count > 1
-              ? `${s.count}次 · 最大${max}% · 最近${latest}%`
-              : `${latest}%`;
-            msg += `• ${fmtTime(s.latestTriggeredAt)}  ${sym}  ${detail}\n`;
           }
         }
 
