@@ -1068,7 +1068,7 @@ ${fundingRateIcon} 资金费率: ${fundingRatePercent}%
 
         for (const { symbol, sigs } of symbolEntries) {
           const sym = dispSym(symbol);
-          msg += `\n▌<b>${sym}</b> (${sigs.length}条)\n`;
+          msg += `\n<code>${sym}</code> (${sigs.length}条)\n`;
 
           // 类型分组
           const byKind = new Map<SignalKind, Signal[]>();
