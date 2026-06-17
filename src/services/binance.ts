@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { createHmac } from 'crypto';
 import { config } from '../config';
+import { isSymbolInMode } from '../config/alertMode';
 import { log } from '../utils/logger';
 import { binanceRateLimit, BinanceRateLimiter } from '../utils/ratelimit';
 import { oiCache, marketDataCache, CacheManager, OICacheService, MarketDataCacheService } from '../utils/cache';
@@ -629,11 +630,21 @@ export class BinanceClient {
       const response = await this.futuresClient.get('/fapi/v1/ticker/24hr');
       log.debug(`Fetched futures 24hr stats for all symbols`);
 
-      return response.data;
+      // 全量请求时只返回当前 ALERT_MODE 的标的(避免 tradfi 模式漏进加密符号,反之亦然)
+      return this.filterToModeSymbols(response.data as FuturesTicker24hr[]);
     } catch (error) {
       log.error('Failed to get futures 24hr stats', error);
       throw error;
     }
+  }
+
+  /**
+   * 把"全市场"返回的列表收口到当前 ALERT_MODE 的标的集合。
+   * 复用 getFuturesTradingSymbols()(已按模式过滤 + 24h 缓存)作为允许集。
+   */
+  private async filterToModeSymbols<T extends { symbol: string }>(items: T[]): Promise<T[]> {
+    const allowed = new Set(await this.getFuturesTradingSymbols());
+    return items.filter(item => allowed.has(item.symbol));
   }
 
   /**
@@ -877,7 +888,7 @@ export class BinanceClient {
       }
       
       // Convert premium index data to funding rate format with 8h normalization
-      return premiumResponse.data.map((item: any) => {
+      const rates: FundingRate[] = premiumResponse.data.map((item: any) => {
         const currentInterval = fundingIntervalMap.get(item.symbol) || 8;
         const currentRate = parseFloat(item.lastFundingRate);
 
@@ -892,6 +903,9 @@ export class BinanceClient {
           fundingIntervalHours: currentInterval
         };
       });
+
+      // 只返回当前 ALERT_MODE 的标的(premiumIndex 是全市场,需收口)
+      return this.filterToModeSymbols(rates);
     } catch (error) {
       log.error('Failed to get all funding rates', error);
       throw error;
@@ -906,7 +920,7 @@ export class BinanceClient {
       // Get all futures symbols first
       const symbolResponse = await this.futuresClient.get('/fapi/v1/exchangeInfo');
       const symbols = symbolResponse.data.symbols
-        .filter((s: any) => s.status === 'TRADING' && s.contractType === 'PERPETUAL')
+        .filter((s: any) => s.status === 'TRADING' && isSymbolInMode(s))
         .map((s: any) => s.symbol);
       
       log.debug(`Fetching OI stats for ${symbols.length} symbols with period ${period}`);
@@ -1019,8 +1033,9 @@ export class BinanceClient {
    * Get futures symbols that are actively trading
    */
   async getFuturesTradingSymbols(): Promise<string[]> {
-    const cacheKey = 'futures:trading_symbols';
-    
+    // cacheKey 按模式区分,避免切换 ALERT_MODE 后读到另一模式的缓存符号宇宙
+    const cacheKey = `futures:trading_symbols:${config.app.alertMode}`;
+
     // Try to get from cache first
     const cached = await this.marketDataCacheService.get(cacheKey);
     if (cached) {
@@ -1031,7 +1046,7 @@ export class BinanceClient {
     try {
       const exchangeInfo = await this.getFuturesExchangeInfo();
       const symbols = exchangeInfo.symbols
-        .filter(symbol => symbol.status === 'TRADING')
+        .filter(symbol => symbol.status === 'TRADING' && isSymbolInMode(symbol))
         .map(symbol => symbol.symbol);
       
       // Cache with 24-hour TTL since trading symbols change rarely

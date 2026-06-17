@@ -4,6 +4,7 @@ import { authMiddleware } from './middleware/auth';
 import { BotContext, BotStatus } from './types';
 import { BinanceClient, binanceClient } from './services/binance';
 import { filterTradingPairs, getTokenRiskLevel, getRiskIcon } from './config/tokenLists';
+import { alertModeLabel } from './config/alertMode';
 import { getVolumeIcon } from './config/volumeConfig';
 import { PriceAlertModel as TimeRangeAlertModel } from './models/priceAlertModel';
 import { CoinNoteModel } from './models/coinNoteModel';
@@ -482,7 +483,8 @@ export class TelegramBot {
     this.bot.start(this.commandWithMonitoring('start', async (ctx) => {
       const user = ctx.from;
       const welcomeMessage = `
-🚀 *欢迎使用 Crypto Alert Bot!*
+🚀 *欢迎使用 ${alertModeLabel().title} Bot!*
+📐 当前模式: ${alertModeLabel().desc}
 
 👤 用户: ${user?.first_name} ${user?.username ? `(@${user.username})` : ''}
 🆔 用户ID: ${user?.id}
@@ -2704,7 +2706,7 @@ ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB / ${Math.round(pro
    * 生成帮助内容（统一的help文档）
    */
   public generateHelpContent(): string {
-    return `📖 Crypto Alert Bot 完整功能指南
+    return `📖 ${alertModeLabel().title} Bot 完整功能指南 (模式: ${alertModeLabel().desc})
 
 💰 价格查询:
 /price btc - 查看BTC价格+资金费率+持仓量

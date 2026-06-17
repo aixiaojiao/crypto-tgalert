@@ -18,6 +18,8 @@ import { stopBusinessMonitor } from './utils/businessMonitor';
 import { getServiceRegistry } from './core/container';
 import { startHealthMonitoring as startHealthMonitoringUtil } from './utils/health';
 import { refreshVolumeThreshold } from './config/volumeConfig';
+import { config } from './config';
+import { alertModeLabel } from './config/alertMode';
 
 /**
  * 完整的应用程序类 - 集成所有组件
@@ -39,7 +41,7 @@ export class CryptoTgAlertApp {
    */
   async start(): Promise<void> {
     try {
-      console.log('🚀 Starting Crypto TG Alert Application...');
+      console.log(`🚀 Starting TG Alert Application... [mode: ${config.app.alertMode}]`);
       
       // 1. 初始化数据库
       console.log('📊 Initializing database...');
@@ -135,11 +137,12 @@ export class CryptoTgAlertApp {
       console.log('📤 准备发送启动通知消息...');
 
       // 系统启动状态信息
-      const startupHeader = `👋 Hello! 欢迎使用 Crypto Alert Bot 🤖\n\n` +
+      const { title: botTitle, desc: modeDesc } = alertModeLabel();
+      const startupHeader = `👋 Hello! 欢迎使用 ${botTitle} Bot 🤖\n\n` +
         `🎉 系统已成功启动并准备就绪！\n` +
         `⏰ 启动时间: ${new Date().toLocaleString('zh-CN')}\n` +
-        `💰 当前 BTC 价格: $${btcPrice.toLocaleString()}\n` +
-        `✅ 所有系统运行正常\n\n`;
+        `📐 当前模式: ${modeDesc}\n` +
+        `✅ Binance 连通正常 (探针 BTC: $${btcPrice.toLocaleString()})\n\n`;
 
       // 获取统一的帮助内容（纯文本模式，与/help命令一致）
       const helpContent = this.telegramBot.generateHelpContent();

@@ -17,6 +17,7 @@ export interface Config {
     logLevel: string;
     databasePath: string;
     port: number;
+    alertMode: 'crypto' | 'tradfi';
   };
 }
 
@@ -43,6 +44,8 @@ export const config: Config = {
     logLevel: process.env.LOG_LEVEL || 'info',
     databasePath: process.env.DATABASE_PATH || './data/crypto-tgalert.db',
     port: parseInt(process.env.PORT || '3000', 10),
+    // 标的模式:tradfi=币安TradFi永续(美股/商品/指数等),crypto=加密永续。默认 tradfi,非法值回落 tradfi。
+    alertMode: process.env.ALERT_MODE === 'crypto' ? 'crypto' : 'tradfi',
   },
 };
 
@@ -51,3 +54,4 @@ console.log('✅ Configuration loaded successfully');
 console.log(`🤖 Bot for user: ${config.telegram.userId}`);
 console.log(`📊 Environment: ${config.app.nodeEnv}`);
 console.log(`📝 Log level: ${config.app.logLevel}`);
+console.log(`📐 Alert mode: ${config.app.alertMode}`);

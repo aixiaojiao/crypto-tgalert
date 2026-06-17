@@ -3,6 +3,7 @@ import { PotentialAlertModel, PotentialAlertRecord } from '../models/potentialAl
 import { TelegramBot } from '../bot';
 import { log } from '../utils/logger';
 import { isRiskyToken, filterTradingPairs } from '../config/tokenLists';
+import { config } from '../config';
 import { formatPriceWithSeparators } from '../utils/priceFormatter';
 import { resolve } from '../core/container';
 import { SERVICE_IDENTIFIERS } from '../core/container/decorators';
@@ -331,14 +332,20 @@ export class PotentialAlertService {
         }
       }
 
-      // Funding 三选一条件
+      // Funding 条件
+      // crypto: 负 / 下降 / 松动 三选一
+      // tradfi: 资金费率只要为负即可(配合 价↑ + OI↑ 两条件)
       const cond_negative = fundingRate8h <= 0;
       const cond_dropped = fundingRateWindowAgo8h !== null && (fundingRateWindowAgo8h - fundingRate8h) >= CONFIG.FUNDING_DROP_BP;
       const cond_softened = fundingMax24h > 0 && currentFundingRaw < fundingMax24h;
 
-      if (!cond_negative && !cond_dropped && !cond_softened) {
+      const fundingConditionMet = config.app.alertMode === 'tradfi'
+        ? cond_negative
+        : (cond_negative || cond_dropped || cond_softened);
+
+      if (!fundingConditionMet) {
         log.debug(`${symbol}: funding condition not met`, {
-          fundingRate8h, fundingMax24h, currentFundingRaw, fundingRateWindowAgo8h
+          mode: config.app.alertMode, fundingRate8h, fundingMax24h, currentFundingRaw, fundingRateWindowAgo8h
         });
         return null;
       }

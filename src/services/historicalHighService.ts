@@ -1,6 +1,7 @@
 import { log } from '../utils/logger';
 import { binanceClient } from './binance';
 import { filterTradingPairs, isRiskyToken } from '../config/tokenLists';
+import { isSymbolInMode } from '../config/alertMode';
 import {
   HistoricalHighModel,
   HistoricalHighRecord,
@@ -453,9 +454,9 @@ export class HistoricalHighService {
       amplitude24hMap.set(t.symbol, amp);
     }
 
-    // 由 FuturesSymbolInfo 收集 TRADING + 永续 symbol，再走 tokenLists 过滤（去 USDC/季度/下架）
+    // 由 FuturesSymbolInfo 收集当前 ALERT_MODE 的 TRADING 符号，再走 tokenLists 过滤（去 USDC/季度/下架）
     const tradingPerps = exchangeInfo.symbols
-      .filter((s: FuturesSymbolInfo) => s.status === 'TRADING' && s.contractType === 'PERPETUAL')
+      .filter((s: FuturesSymbolInfo) => s.status === 'TRADING' && isSymbolInMode(s))
       .map(s => s.symbol);
 
     const base = filterTradingPairs(tradingPerps);

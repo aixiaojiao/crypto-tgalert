@@ -125,7 +125,7 @@ export interface RateLimit {
 export interface FuturesSymbolInfo {
   symbol: string;
   pair: string;
-  contractType: 'PERPETUAL' | 'CURRENT_MONTH' | 'NEXT_MONTH' | 'CURRENT_QUARTER' | 'NEXT_QUARTER';
+  contractType: 'PERPETUAL' | 'TRADIFI_PERPETUAL' | 'CURRENT_MONTH' | 'NEXT_MONTH' | 'CURRENT_QUARTER' | 'NEXT_QUARTER';
   deliveryDate: number;
   onboardDate: number;
   status: 'TRADING' | 'PRE_TRADING' | 'DELIVERING' | 'DELIVERED' | 'PRE_SETTLE' | 'SETTLING' | 'CLOSE';
